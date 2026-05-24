@@ -1,0 +1,130 @@
+// PracticeNear — Phase 0 schema
+// HHE-students-first practitioner directory (post-5/15 clean restart)
+// See STRATEGIC_RECONCILIATION_2026-05-18 + decisions-JSON Phase 1 YES rows
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ----- NextAuth v5 tables (Prisma adapter contract) -----
+
+model User {
+  id            String    @id @default(cuid())
+  name          String?
+  email         String    @unique
+  emailVerified DateTime?
+  image         String?
+  role          Role      @default(CLIENT)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  accounts      Account[]
+  sessions      Session[]
+  practitioner  Practitioner?
+}
+
+enum Role {
+  CLIENT
+  PRACTITIONER
+  ADMIN
+}
+
+model Account {
+  userId            String
+  type              String
+  provider          String
+  providerAccountId String
+  refresh_token     String? @db.Text
+  access_token      String? @db.Text
+  expires_at        Int?
+  token_type        String?
+  scope             String?
+  id_token          String? @db.Text
+  session_state     String?
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([provider, providerAccountId])
+}
+
+model Session {
+  sessionToken String   @unique
+  userId       String
+  expires      DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+}
+
+model VerificationToken {
+  identifier String
+  token      String
+  expires    DateTime
+
+  @@id([identifier, token])
+}
+
+// ----- PracticeNear Phase 0 domain -----
+
+model Practitioner {
+  id          String   @id @default(cuid())
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  slug        String   @unique
+  displayName String
+  bio         String?  @db.Text
+
+  cityId      String?
+  city        City?    @relation(fields: [cityId], references: [id])
+  specialties PractitionerSpecialty[]
+
+  latitude    Float?
+  longitude   Float?
+
+  // Denormalized for pg_trgm typo tolerance (Decisions-JSON Phase 1)
+  searchText  String?  @db.Text
+
+  // Invite-only model (5/15 Amy reframe)
+  invitedBy   String?
+  invitedAt   DateTime?
+  acceptedAt  DateTime?
+
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@index([latitude, longitude])  // haversine "near me"
+}
+
+model Specialty {
+  id           String                  @id @default(cuid())
+  slug         String                  @unique
+  name         String
+  parentId     String?                 // hierarchical taxonomy
+  parent       Specialty?              @relation("SpecialtyTree", fields: [parentId], references: [id])
+  children     Specialty[]             @relation("SpecialtyTree")
+  practitioners PractitionerSpecialty[]
+}
+
+model PractitionerSpecialty {
+  practitionerId String
+  specialtyId    String
+  practitioner   Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
+  specialty      Specialty    @relation(fields: [specialtyId], references: [id], onDelete: Cascade)
+
+  @@id([practitionerId, specialtyId])
+}
+
+model City {
+  id            String         @id @default(cuid())
+  slug          String
+  name          String
+  state         String
+  practitioners Practitioner[]
+
+  @@unique([slug, state])
+}
