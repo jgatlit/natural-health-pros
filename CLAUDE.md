@@ -1,0 +1,98 @@
+# Claude Context — HHE Directory
+
+> Read first. This file is the directive entry-point for AI agents working in this repo. Read in full before any task here.
+
+## What this project is
+
+**HHE Directory** — HHE-students-first practitioner directory + marketplace for Holistic Health Educators (HHE). Phase 0 stack live as of 2026-05-24. Currently building toward Phase 1 demo for in-person meeting with Amy (HHE budget authority) on 2026-05-28.
+
+**Brand note**: This project was formerly called "PracticeNear" — that name was discontinued 2026-05-24 along with all legacy codebases. "HHE Directory" is the canonical go-forward brand. Historical artifacts (joint-call meeting note, decisions JSON, reconciliation doc, vault project entity filename) retain the "PracticeNear" name as point-in-time references; do not rename them.
+
+## Stack (Phase 0 — live)
+
+- Next.js 14.2.35 (App Router, src/, Tailwind, TS strict)
+- Prisma 6.19 + PostgreSQL (Neon via Vercel Marketplace)
+- NextAuth v5 (Auth.js) + Prisma adapter (no providers wired yet — Phase 0.5)
+- Vercel Blob (file storage) + Vercel KV / Upstash Ratelimit
+- Sentry (errors) · Resend (email)
+- Typesense + react-instantsearch (deps prefetched; Phase 1 to wire)
+
+## Where things are
+
+| | |
+|---|---|
+| **Local cwd** | `~/projects/HHE/HHE-directory/` |
+| **GitHub** | https://github.com/jgatlit/HHE-directory (public) |
+| **Vercel project** | `ai-chemist/hhe-directory` — Vercel inspector: https://vercel.com/ai-chemist/hhe-directory |
+| **Production URL** | https://hhe-directory.vercel.app |
+| **Neon DB** | `neondb` @ `ep-plain-bird-ap6zr7b3.c-7.us-east-1.aws.neon.tech` (Marketplace-connected; branching per env) |
+
+## DO NOT touch (legacy / orphaned, per 5/24 operator directive)
+
+These exist as historical reference. **Never modify, deploy to, or rename:**
+
+- `jgatlit/holistic-health-marketplace` (fork) — withAuth wrapper donor; lifted into `src/lib/action-utils.ts`
+- `tovesblake-max/holistic-health-marketplace` — Blake's upstream
+- `jgatlit/practitionerDirectory` — Typesense search-arch donor; lifted into `src/lib/typesense.ts` + `deployment/typesense-collection-schema.json`
+- `tovesblake-maxs-projects/practicenear` (Vercel project) — original marketing site. If `vercel link --project practicenear` is ever run, it WILL auto-link to this project across team scopes — caught us once during bootstrap. Always verify `.vercel/project.json` after link.
+- `practicenear.vercel.app` (domain)
+- `~/projects/HHE/PracticeNear/` (working folder — planning artifacts only, including the reconciliation doc)
+- "PracticeNear" name itself
+
+## Critical config gotchas
+
+### Neon env-var prefix
+
+Neon Marketplace integration prefixes all env vars with `hhe_directory_` (e.g., `hhe_directory_DATABASE_URL`). The Prisma schema references the prefixed names directly:
+
+```prisma
+datasource db {
+  url       = env("hhe_directory_DATABASE_URL")           // pooled, runtime
+  directUrl = env("hhe_directory_DATABASE_URL_UNPOOLED")  // unpooled, migrate
+}
+```
+
+If the prefix is later removed in Vercel/Neon settings, schema needs a parallel edit. See `~/.claude/projects/-home-jgatlit-vault/memory/reference_neon_vercel_prisma_integration.md` for the broader pattern.
+
+### Prisma reads `.env` not `.env.local`
+
+After `vercel env pull .env.local`, also `cp .env.local .env` for Prisma CLI to find creds. `.env` is gitignored (added explicitly — `.env*.local` pattern doesn't match plain `.env`). Never commit `.env`.
+
+### Phase 3 helpers stripped from action-utils.ts
+
+`src/lib/action-utils.ts` was lifted from the fork. `requireConversationAccess()` was stripped because it depends on the `Conversation` model not in the Phase 0 schema. Reintroduce alongside `Conversation` schema when Phase 3 direct-messaging lands. There's a clearly-marked TODO block in the file.
+
+## Build + deploy
+
+- `git push origin main` → auto-deploys via Vercel GitHub App (verified 2026-05-24)
+- Migration flow: `vercel env pull .env.local && cp .env.local .env && npm run db:migrate:dev --name <name>` → commit `prisma/migrations/` → push
+- Migrations do NOT auto-apply on deploy (build runs `prisma generate && next build` only). Consider adding `prisma migrate deploy &&` to build script when Phase 1 starts adding regular migrations — safe given Neon branching per env.
+
+## What's next (full plan)
+
+See `docs/PHASE-1-PLAN.md` for the concrete punch list for the 2026-05-28 Amy demo. TL;DR: Linktree-style `/practitioners/[slug]` + Typesense `/search` + seed 10–20 fake HHE-graduate practitioners.
+
+## Reference artifacts (outside repo)
+
+Authoritative source documents kept in the operator's vault / Downloads (vault is at `~/vault/`):
+
+- **Joint-call meeting note**: `~/vault/300 Entities/Meetings/2026-05-15 HHE Amy Blake Jonathan - PracticeNear Joint Planning + New Repo Decision.md` — 53 feature decisions adjudicated live with Amy + Blake
+- **53-feature decisions JSON**: `~/Downloads/practicenear-decisions-2026-05-15.json` — canonical scope lock
+- **Strategic reconciliation v2**: `~/projects/HHE/PracticeNear/STRATEGIC_RECONCILIATION_2026-05-18.md` — operator-authored sequencing plan; v2 doubles down on clean restart (do not read as a walk-back)
+- **Project entity (vault)**: `~/vault/300 Entities/Projects/PracticeNear.md` — vault file name retained for wiki-link continuity; content reflects the rename and tracks Progress Log + Phase 1 queue
+- **Operator's `Amy (HHE)` person entity**: `~/vault/300 Entities/People/Amy (HHE).md` — engagement-strategy synopsis (decision style, what frames land, what loses her)
+- **Holistic Health Educators company entity**: `~/vault/300 Entities/Companies/Holistic Health Educators.md`
+- **Memory pointers** (for AI agents working on the project): `reference_practicenear_repo_topology` (broad context) + `reference_neon_vercel_prisma_integration` (deployment gotchas)
+
+## Working agreements with the operator
+
+- Don't add features beyond scope. Phase boundaries from decisions-JSON are load-bearing.
+- Never deploy to or modify legacy artifacts (see DO NOT list above).
+- Surface operator-decision points clearly when they arise (e.g., Vercel project name collisions, scope choices). Don't silently default to a guess that locks something in.
+- Before recommending any work, check whether the meta-decision has been resolved (lock-honor was made 2026-05-24; future scope-shifts require new operator decision).
+
+## House style for this project
+
+- Match the fork's TypeScript conventions: `withAuth(...)`-shaped server actions, centralized `extractError()` with `USER:` prefix convention, IDOR-fix discipline (merge "not found" and "unauthorized" into a single response).
+- Lift from donor (`practitionerDirectory`) for Phase 1 search architecture; lift from fork (`holistic-health-marketplace`) for general patterns. Never lift business logic — only patterns. The new repo's domain is HHE-students-first; the fork's domain is nationwide-NPI-scrape and is not a model.
+- Prefer no comments unless they explain non-obvious WHY. Phase plan and reasoning belong in `docs/`, not in code comments.
