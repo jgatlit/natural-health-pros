@@ -1,137 +1,16 @@
 {
   "name": "practitioners",
+  "default_sorting_field": "acceptedAt",
   "fields": [
-    {
-      "name": "id",
-      "type": "string",
-      "facet": false,
-      "index": true,
-      "optional": false
-    },
-    {
-      "name": "name",
-      "type": "string",
-      "facet": false,
-      "index": true,
-      "sort": true,
-      "optional": false
-    },
-    {
-      "name": "email",
-      "type": "string",
-      "facet": false,
-      "index": true,
-      "optional": false
-    },
-    {
-      "name": "bio",
-      "type": "string",
-      "facet": false,
-      "index": true,
-      "optional": true
-    },
-    {
-      "name": "specialty",
-      "type": "string",
-      "facet": true,
-      "index": true,
-      "optional": true
-    },
-    {
-      "name": "location_city",
-      "type": "string",
-      "facet": true,
-      "index": true,
-      "optional": true
-    },
-    {
-      "name": "location_state",
-      "type": "string",
-      "facet": true,
-      "index": true,
-      "optional": false
-    },
-    {
-      "name": "location",
-      "type": "geopoint",
-      "facet": false,
-      "index": true,
-      "optional": true
-    },
-    {
-      "name": "zip_code",
-      "type": "string",
-      "facet": false,
-      "index": true,
-      "optional": true
-    },
-    {
-      "name": "price_range",
-      "type": "string",
-      "facet": true,
-      "index": true,
-      "optional": true
-    },
-    {
-      "name": "insurance_accepted",
-      "type": "string[]",
-      "facet": true,
-      "index": true,
-      "optional": true
-    },
-    {
-      "name": "rating",
-      "type": "float",
-      "facet": false,
-      "index": true,
-      "sort": true,
-      "optional": true
-    },
-    {
-      "name": "review_count",
-      "type": "int32",
-      "facet": false,
-      "index": true,
-      "sort": true,
-      "optional": true
-    },
-    {
-      "name": "is_verified",
-      "type": "bool",
-      "facet": true,
-      "index": true,
-      "optional": false
-    },
-    {
-      "name": "hhe_graduate",
-      "type": "bool",
-      "facet": true,
-      "index": true,
-      "optional": false
-    },
-    {
-      "name": "profile_image_url",
-      "type": "string",
-      "facet": false,
-      "index": false,
-      "optional": true
-    },
-    {
-      "name": "created_at",
-      "type": "int64",
-      "facet": false,
-      "index": true,
-      "sort": true,
-      "optional": false
-    },
-    {
-      "name": "updated_at",
-      "type": "int64",
-      "facet": false,
-      "index": true,
-      "sort": true,
-      "optional": false
-    }
-  ],
-  "default_sorting_field": "rating"
+    { "name": "slug", "type": "string", "index": true },
+    { "name": "displayName", "type": "string", "index": true, "sort": true, "infix": true },
+    { "name": "bio", "type": "string", "index": true, "optional": true },
+    { "name": "cityName", "type": "string", "facet": true, "index": true },
+    { "name": "cityState", "type": "string", "facet": true, "index": true },
+    { "name": "location", "type": "geopoint", "optional": true },
+    { "name": "specialtyNames", "type": "string[]", "facet": true, "index": true },
+    { "name": "specialtySlugs", "type": "string[]", "facet": true, "index": true, "optional": true },
+    { "name": "acceptedAt", "type": "int64", "sort": true },
+    { "name": "searchText", "type": "string", "index": true, "optional": true }
+  ]
 }
