@@ -46,7 +46,6 @@ Amy must be able to:
 |---|---|---|
 | **Vercel hosts the Next.js app** | Phase 0 stack lock | App talks to search engine over HTTPS |
 | **Neon is the source of truth** | All practitioner data lives in Postgres | Search engine is a denormalized index, never authoritative |
-| **Demo-ready by 2026-05-28** | Amy meeting is the Phase 1 deadline | Engine must be operational within 4 working days |
 | **HHE-curated trust signal preserved** | Strategic wedge against legacy NPI-scrape codebase | Engine choice cannot leak through to "feels like a phonebook" |
 | **Re-index from Neon must always work** | If the index dies, we restore from source-of-truth | Engine ops burden is bounded — worst-case is re-run the indexer |
 
@@ -98,6 +97,7 @@ Either the engine's hierarchical-facet primitive handles this natively, OR we fl
 - **Specialty facet** — single or multi-select, hierarchical (parent selection includes children)
 - **City facet** — single or multi-select, single-level (state inferred from city)
 - **Combined facet + query** — Amy types "hormone" AND filters to Atlanta — both narrow the result set
+- **Parametric / adaptive facets** — Amazon-style. Only facet values present in the current result set appear; counts live-update as filters apply; selecting one facet immediately re-narrows the other facets' available values. A facet category with zero matching values hides entirely until the result set widens to include them again. Required for the search to feel "intelligent" rather than "static checkbox tree." See §7 for concrete UX behavior.
 - **Pagination** — at minimum page-of-N, ideally infinite scroll
 - **Empty state** — "No practitioners match" with suggestion (clear filters, broaden query)
 
@@ -107,6 +107,10 @@ Either the engine's hierarchical-facet primitive handles this natively, OR we fl
 - **Geolocation prompt** — browser API for lat/lng acquisition; fallback to city select
 - **Result count display** — "18 practitioners · 11 in Georgia"
 - **Saved filter URL state** — search query + facets in the URL so /search?q=hormone&city=atlanta is shareable
+- **Range facets** — sliders or min/max inputs for numeric attributes (years of practice, intro-consult fee, distance from "me"). Live-update result count as the slider moves. Phase 1.5 candidates: years-of-practice + distance-from-me.
+- **Boolean facets** — toggles for binary attributes (`acceptsNewPatients`, `telehealthAvailable`, `inNetworkWithMajorInsurance`). Schema-add candidates for Phase 1.5/2.
+- **Faceted autocomplete** — typing "atl" surfaces "Atlanta, GA" as a clickable facet-selection chip (NOT just keyword text). Amazon's "did you mean this category?" pattern. Disambiguates between query intent (free-text) and filter intent (facet pick).
+- **Sort selector** — relevance (default), distance from me, alphabetical, newest practitioners first. Sort persists across pagination.
 
 ### COULD (Phase 2)
 
@@ -118,8 +122,6 @@ Either the engine's hierarchical-facet primitive handles this natively, OR we fl
 ### WON'T (out of scope)
 
 - LLM-generated answers about practitioners (privacy + trust hazard)
-- Cross-practitioner recommendations ("people who viewed X also viewed Y")
-- Booking inside the search UI (lives on the profile + Phase 2 calendar)
 
 ---
 
@@ -128,14 +130,14 @@ Either the engine's hierarchical-facet primitive handles this natively, OR we fl
 ### Phase 1 (today through 5/28)
 
 - **Corpus size**: 18 practitioners (current seed). Realistic demo: stays at 18–20.
-- **Query volume**: Single-user demo. ≤10 searches during the Amy meeting.
+- **Query volume**: Single-user demo. ≤10 searches during the Amy meeting. PRODUCTION: hundreds per day.
 - **Latency target**: p95 search response < 200ms over US-East mobile network. Below 200ms is the threshold for "feels instant."
 - **Indexing latency**: app-layer reindex on practitioner upsert, completion within 60s tolerable.
 
 ### Phase 1.5 (post-demo through Phase 2 ramp)
 
-- **Corpus**: 100–500 practitioners
-- **Query volume**: low — operator + a handful of early HHE-graduate signups
+- **Corpus**: 500-2,000 practitioners
+- **Query volume**: low — operator + a handful of early HHE-graduate signups. 
 - **Latency**: same target, p95 < 200ms
 
 ### Phase 2 (12–24 month projection)
@@ -147,8 +149,8 @@ Either the engine's hierarchical-facet primitive handles this natively, OR we fl
 
 ### Phase 3 (speculative, 36+ months)
 
-- **Corpus**: 2K–10K practitioners (HHE national footprint)
-- **Query volume**: 100K+ searches/day
+- **Corpus**: 2K–10K practitioners (HHE national footprint).  Performance and capability must scale.
+- **Query volume**: 100K+ searches/day.  Performance and capability must scale.
 - The engine should not require a complete migration at this scale — but a tier-upgrade or instance-size bump is acceptable.
 
 ---
@@ -245,6 +247,27 @@ This Phase 2 flow shapes the **reindex-mark-dirty** decisions-JSON row — Phase
   - Whole card is the click target → `/practitioners/[slug]`
 - Mobile: single column, full-width cards
 - Desktop: 2- or 3-column grid
+
+### Parametric / adaptive facet behavior (Amazon-style reference)
+
+The /search page must behave like a parametric retail-style faceted search, NOT a static filter sidebar. Concrete behaviors required:
+
+| Behavior | Spec |
+|---|---|
+| **Adaptive facet visibility** | A facet category appears only if 2+ distinct values exist in the current result set. If filtering to "Atlanta" leaves only practitioners with one specialty, the specialty facet collapses. |
+| **Live facet counts** | Every facet value shows the count of matching results IN THE CURRENT FILTERED SET (e.g., "Functional Medicine (4)"). Counts update on every facet selection without a full page reload. |
+| **Zero-value facet pruning** | Facet values with 0 matching results in the current set are hidden (not just disabled). When the user clears a filter, hidden values reappear. |
+| **Multi-value selection within a category** | "Specialty: Functional Medicine OR Gut Health" — selecting two values in the same category is OR; selecting values across categories is AND. Match Amazon's checkbox-within-category convention. |
+| **Cross-facet AND semantics** | "Specialty: Functional Medicine AND City: Atlanta" narrows the result set to the intersection. Standard faceted-search convention. |
+| **Selected-facet breadcrumb** | All active filters appear as removable chips at the top of results: `[× Functional Medicine] [× Atlanta] · 4 results`. Tapping the × clears that filter. |
+| **Range facets** (Phase 1.5+) | Slider or min/max input. Result count + listing update on slider release (debounced). Range values that produce zero results visibly compressed (slider shows "no data here"). |
+| **Faceted autocomplete** (Phase 1.5+) | Typing "atl" surfaces a dropdown with both keyword matches ("Atlanta in 4 bios") AND facet matches ("📍 Atlanta, GA — select as filter"). Clicking the facet match applies the filter instead of running a keyword search. |
+| **Sort + filter coexistence** | Sort selector (relevance / distance / newest / alphabetical) lives next to the results header; changing sort does NOT reset filters. |
+| **Filter state in URL** | Every filter + sort + query reflected in `/search?q=...&specialty=...&city=...&sort=...`. Back/forward navigation restores prior state. Shareable URL is a Phase 2 referral primitive. |
+
+### Why this matters strategically
+
+Parametric search is the difference between "I'm browsing a database" (feels like a phonebook — fails the HHE wedge) and "the directory is helping me find the right practitioner" (feels like a curated tool — confirms the wedge). For Amy's audience — patients navigating a wellness journey, not a SaaS dashboard — Amazon-style adaptive facets are the established mental model. They reduce cognitive load: the system shows what's possible from where you currently are, instead of forcing the user to read a static filter tree and guess which combinations have results.
 
 ### States
 
@@ -357,6 +380,11 @@ The operator should be able to answer the following for each of the three option
 | Typo tolerance | Yes (built-in) | Yes (built-in) | Verify |
 | Hierarchical facets | Yes (via `nested` fields or flatten) | Yes (same) | Verify |
 | Geo / haversine sort | Yes (`geopoint` field type) | Yes (same) | Verify |
+| **Adaptive facet counts (Amazon-style)** | Yes (facets API returns counts per filter context) | Yes (same) | **Critical to verify** — table-stakes for the parametric UX |
+| **Zero-value facet pruning** | Yes (engine returns only non-zero facet values when scoped) | Yes (same) | Verify |
+| **Range facets** | Yes (numeric field + InstantSearch `RangeInput`/`RangeSlider`) | Yes (same) | Verify |
+| **Faceted autocomplete** | Yes (combination of `query_by` + facet search endpoint) | Yes (same) | Verify |
+| **Multi-sort orders** (relevance / geo / alphabetical / date) | Yes (per-query `sort_by`) | Yes (same) | Verify |
 | Faceted filtering UX | InstantSearch adapter exists | Same | Verify — adapter? |
 | React InstantSearch adapter | Yes (`typesense-instantsearch-adapter`) | Yes (same) | Verify |
 | Schema additive changes | Yes (collection alter) | Yes (same) | Verify |
@@ -403,16 +431,19 @@ The operator should be able to answer the following for each of the three option
 1. **API surface** — does it have first-class support for hierarchical facets + geo sort + typo tolerance?
 2. **Pricing model** — request-based, doc-count-based, or hybrid? Free tier coverage?
 3. **Client library** — is there a React InstantSearch adapter? If not, what's the search-client shape?
-4. **Maturity** — when did Upstash Search go GA? Production-grade for our 5/28 deadline?
+4. **Maturity** — when did Upstash Search go GA? Production-grade for our timeline?
 5. **Hierarchical specialty handling** — manual flatten + OR semantics, or native nested support?
 6. **Vendor pricing transparency** — Upstash is generally known for clear pricing; verify their search pricing page.
+7. **Parametric facet primitives** — does the API return live counts per facet value scoped to the current filter context? Does it prune zero-value facets? These are table stakes for the Amazon-style UX described in §7 — if Upstash returns "all facet values regardless of current filters," the parametric UX has to be hand-built on top of the engine, which raises the development cost significantly.
+8. **Range facets + numeric range queries** — Phase 1.5/2 schema additions (years of practice, fee, distance) need range filter primitives. Verify supported.
 
 ### Cross-cutting
 
-1. Which option gives the **fastest path to 5/28 demo readiness**? Cloud and Upstash both win on this dimension over self-hosted.
-2. Which option gives the **lowest total cost of ownership** at Phase 2 scale (500 practitioners, modest query volume)?
+1. Which option gives the **fastest path to production-ready search**? Managed options (Cloud, Upstash) win on this dimension over self-hosted.
+2. Which option gives the **lowest total cost of ownership** at Phase 1.5/2 scale (500–2,000 practitioners, hundreds-to-tens-of-thousands of searches/day)?
 3. Which option **most reduces ops burden** for an operator who explicitly does not want to babysit infrastructure?
 4. Which option **preserves optionality** if the engine choice turns out to be wrong?
+5. Which option **best supports the Amazon-style parametric facet UX (§7)** out of the box? Building parametric search manually on a less-capable engine triples the client-side complexity and risks visual jank as filters update.
 
 ---
 
