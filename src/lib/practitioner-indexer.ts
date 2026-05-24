@@ -19,6 +19,7 @@ export type PractitionerDoc = {
   specialtyNames: string[];
   specialtySlugs: string[];
   acceptedAt: number;
+  yearsInPractice?: number;
   searchText?: string;
 };
 
@@ -48,6 +49,7 @@ export function toTypesenseDoc(p: PractitionerForIndex): PractitionerDoc {
     specialtyNames: Array.from(specialtyNames),
     specialtySlugs: Array.from(specialtySlugs),
     acceptedAt: p.acceptedAt ? Math.floor(p.acceptedAt.getTime() / 1000) : 0,
+    yearsInPractice: p.yearsInPractice ?? undefined,
     searchText: p.searchText ?? undefined,
   };
 }

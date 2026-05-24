@@ -21,7 +21,7 @@ export function createSearchAdapter() {
       prefix: true,
       infix: 'fallback,off,off,off,off',
       highlight_full_fields: 'displayName,cityName,specialtyNames',
-      facet_by: 'specialtyNames,cityName,cityState',
+      facet_by: 'specialtyNames,cityName,cityState,yearsInPractice',
       max_facet_values: 50,
     },
   });

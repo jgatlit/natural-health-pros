@@ -93,6 +93,9 @@ model Practitioner {
   // Denormalized for pg_trgm typo tolerance (Decisions-JSON Phase 1)
   searchText  String?  @db.Text
 
+  // Range-facetable attribute (Phase 1 stretch)
+  yearsInPractice Int?
+
   // Invite-only model (5/15 Amy reframe)
   invitedBy   String?
   invitedAt   DateTime?
