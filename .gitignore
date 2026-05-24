@@ -34,3 +34,6 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# secrets — defense in depth (copied from .env.local for prisma migrate to pick up)
+.env

@@ -8,8 +8,11 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
-  url      = env("DATABASE_URL")
+  provider  = "postgresql"
+  // Neon Marketplace integration prefixes all env vars with `hhe_directory_` by default.
+  // If the prefix is later removed in Vercel/Neon settings, rename to standard names.
+  url       = env("hhe_directory_DATABASE_URL")           // pooled (pgbouncer) — runtime queries
+  directUrl = env("hhe_directory_DATABASE_URL_UNPOOLED")  // unpooled — Prisma Migrate (DDL needs direct connection)
 }
 
 // ----- NextAuth v5 tables (Prisma adapter contract) -----
