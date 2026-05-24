@@ -17,22 +17,22 @@ Phase 1 YES rows from decisions-JSON (in scope this week):
 
 1. **`AUTH_SECRET` env var added to Vercel** — NextAuth requires it before any provider lands. `openssl rand -base64 32` → `vercel env add AUTH_SECRET production`, `preview`, `development`.
 2. **Typesense provisioned** — either Typesense Cloud account (https://cloud.typesense.org) OR self-host on Railway/Fly. Donor doc: `~/projects/HHE/practitionerDirectory/research/typesense-v30-implementation-guide-2025-11-07.md`. After provision: add `TYPESENSE_HOST`, `TYPESENSE_API_KEY`, `NEXT_PUBLIC_TYPESENSE_SEARCH_KEY` to Vercel envs (no prefix needed; not Marketplace-injected).
-3. **`pg_trgm` extension enabled in Neon** — `CREATE EXTENSION IF NOT EXISTS pg_trgm;` via Neon SQL editor OR via a Prisma migration step. Required for `searchText` typo-tolerance.
+3. ~~`pg_trgm` extension enabled in Neon~~ — **DONE 2026-05-24**: migration `20260524141519_pg_trgm_search` applied, GIN trigram index on `Practitioner.searchText` live.
 
 ## Work blocks
 
-### Block A — Practitioner profile (Mon, ~3 hr)
+### Block A — Practitioner profile (Mon, ~3 hr) — **DONE 2026-05-24**
 
-**Files to create:**
-- `src/app/practitioners/[slug]/page.tsx` — server component, queries `prisma.practitioner.findUnique({ where: { slug } })` with `include: { city: true, specialties: { include: { specialty: true } } }`. Returns 404 via `notFound()` if missing.
-- `src/app/practitioners/[slug]/loading.tsx` — minimal skeleton
-- `src/components/practitioners/PractitionerHeader.tsx` — name + city + primary specialty
-- `src/components/practitioners/PractitionerLinks.tsx` — Linktree-style list of "elements they could be moving around" per Blake's framing (intro-consult booking CTA, deeper-SKU CTA placeholder, custom-invoice request placeholder, social links)
-- `src/components/practitioners/PractitionerBio.tsx` — long-form bio block
+Shipped:
+- `src/app/practitioners/[slug]/{page,loading}.tsx` — server-rendered profile, returns 404 via `notFound()` for unknown slugs
+- `src/components/practitioners/{PractitionerHeader,PractitionerLinks,PractitionerBio}.tsx` — built on shadcn/ui primitives (Card, Avatar, Badge, Separator)
+- Visual layer: Tailwind 4.3 + shadcn/ui (`new-york`, zinc). Mobile-first Linktree-style card.
+- Seed data: 18 practitioners across 13 cities, 61% GA per operator directive (`prisma/seed.ts`)
+- `pg_trgm` migration applied to Neon
 
-**Test by**: visiting `/practitioners/<slug>` for a seeded practitioner. Should render server-side, no client JS required.
+Verified end-to-end via Playwright at 440×900 against real Neon-backed data.
 
-**Out of scope this block**: edit flows, claim flows, invitation acceptance. Show-only.
+**Out of scope this block (deferred to Phase 2+)**: edit flows, claim flows, invitation acceptance. Linktree CTAs render as `Coming soon` placeholders until booking + payments wedges land.
 
 ### Block B — Search infrastructure (Tue, ~4 hr)
 
@@ -90,7 +90,7 @@ These are decisions-JSON YES rows that are Phase 1 but are second-week work, NOT
 
 - [ ] Add `AUTH_SECRET` to Vercel envs (~30 sec)
 - [ ] Provision Typesense (~10 min for Cloud signup, ~30 min for self-host)
-- [ ] Enable `pg_trgm` in Neon (~1 min)
+- [x] ~~Enable `pg_trgm` in Neon~~ — done 2026-05-24 via migration
 - [ ] Authorize Blake's GitHub collab invitation (Blake-side, pending since 2026-05-24)
 - [ ] (Optional but recommended) Update `package.json` build script to `prisma migrate deploy && prisma generate && next build` — safer per-env migration via Neon branching
 

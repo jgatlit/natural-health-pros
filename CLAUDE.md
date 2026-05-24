@@ -8,14 +8,17 @@
 
 **Brand note**: This project was formerly called "PracticeNear" — that name was discontinued 2026-05-24 along with all legacy codebases. "HHE Directory" is the canonical go-forward brand. Historical artifacts (joint-call meeting note, decisions JSON, reconciliation doc, vault project entity filename) retain the "PracticeNear" name as point-in-time references; do not rename them.
 
-## Stack (Phase 0 — live)
+## Stack (Phase 0 + Block A — live)
 
-- Next.js 14.2.35 (App Router, src/, Tailwind, TS strict)
-- Prisma 6.19 + PostgreSQL (Neon via Vercel Marketplace)
+- Next.js 14.2.35 (App Router, `src/`, TS strict)
+- **Tailwind 4.3 + shadcn/ui (`new-york` style, zinc base)** — primitives installed: Avatar, Badge, Button, Card, Separator, Skeleton. Config lives in `src/app/globals.css` via `@theme` (no `tailwind.config.ts`).
+- Prisma 6.19 + PostgreSQL (Neon via Vercel Marketplace) — **`pg_trgm` extension live** + GIN trigram index on `Practitioner.searchText`
 - NextAuth v5 (Auth.js) + Prisma adapter (no providers wired yet — Phase 0.5)
-- Vercel Blob (file storage) + Vercel KV / Upstash Ratelimit
-- Sentry (errors) · Resend (email)
-- Typesense + react-instantsearch (deps prefetched; Phase 1 to wire)
+- Vercel Blob + Vercel KV / Upstash Ratelimit
+- Sentry · Resend
+- Typesense + react-instantsearch (deps prefetched; Block B to wire)
+
+**Block A shipped**: `/practitioners/[slug]` Linktree-style profile, server-rendered, mobile-first. Seed data: 18 practitioners across 13 cities (61% GA per operator directive).
 
 ## Where things are
 
