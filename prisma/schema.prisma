@@ -1,5 +1,6 @@
-// PracticeNear — Phase 0 schema
+// HHE Directory — Phase 0 schema
 // HHE-students-first practitioner directory (post-5/15 clean restart)
+// Brand: HHE Directory (supersedes "PracticeNear" name discontinued 2026-05-24)
 // See STRATEGIC_RECONCILIATION_2026-05-18 + decisions-JSON Phase 1 YES rows
 
 generator client {
@@ -68,7 +69,7 @@ model VerificationToken {
   @@id([identifier, token])
 }
 
-// ----- PracticeNear Phase 0 domain -----
+// ----- HHE Directory Phase 0 domain -----
 
 model Practitioner {
   id          String   @id @default(cuid())
