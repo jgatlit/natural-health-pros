@@ -16,9 +16,13 @@
 - NextAuth v5 (Auth.js) + Prisma adapter (no providers wired yet — Phase 0.5)
 - Vercel Blob + Vercel KV / Upstash Ratelimit
 - Sentry · Resend
-- Typesense + react-instantsearch (deps prefetched; Block B to wire)
+- **Typesense Cloud** (cluster `1rt8fj5i9epv2s6mp`) + `react-instantsearch` + `react-instantsearch-nextjs` — live, env vars provisioned on Vercel for all 3 scopes
 
-**Block A shipped**: `/practitioners/[slug]` Linktree-style profile, server-rendered, mobile-first. Seed data: 18 practitioners across 13 cities (61% GA per operator directive).
+**Block A + B + C shipped**:
+- `/practitioners/[slug]` — Linktree-style profile, server-rendered (Block A)
+- `/search` — InstantSearchNext + parametric/adaptive facets: keyword + typo tolerance, specialty (multi-select), city/state (single-select scoped), range facet (yearsInPractice), faceted autocomplete, mobile Sheet, URL state, sort
+- Seed data: 18 practitioners across 13 cities (61% GA per operator directive)
+- Typesense schema + indexer + bootstrap/reset/reindex scripts wired
 
 ## Where things are
 
@@ -29,6 +33,7 @@
 | **Vercel project** | `ai-chemist/hhe-directory` — Vercel inspector: https://vercel.com/ai-chemist/hhe-directory |
 | **Production URL** | https://hhe-directory.vercel.app |
 | **Neon DB** | `neondb` @ `ep-plain-bird-ap6zr7b3.c-7.us-east-1.aws.neon.tech` (Marketplace-connected; branching per env) |
+| **Typesense Cloud** | cluster `1rt8fj5i9epv2s6mp`, host `1rt8fj5i9epv2s6mp-1.a1.typesense.net`, collection `practitioners`, dashboard https://cloud.typesense.org |
 
 ## DO NOT touch (legacy / orphaned, per 5/24 operator directive)
 

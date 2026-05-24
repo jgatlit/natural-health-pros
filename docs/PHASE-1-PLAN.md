@@ -13,10 +13,10 @@ Phase 1 YES rows from decisions-JSON (in scope this week):
 - Practitioner profile + Linktree-style landing page model (Blake's framing)
 - Practitioner invitation flow scaffolding (net-new build — full flow is Phase 1+, this week shows the data model + admin-create surface)
 
-## Hard prerequisites (must land before any UI work)
+## Hard prerequisites (all resolved)
 
-1. **`AUTH_SECRET` env var added to Vercel** — NextAuth requires it before any provider lands. `openssl rand -base64 32` → `vercel env add AUTH_SECRET production`, `preview`, `development`.
-2. **Typesense provisioned** — either Typesense Cloud account (https://cloud.typesense.org) OR self-host on Railway/Fly. Donor doc: `~/projects/HHE/practitionerDirectory/research/typesense-v30-implementation-guide-2025-11-07.md`. After provision: add `TYPESENSE_HOST`, `TYPESENSE_API_KEY`, `NEXT_PUBLIC_TYPESENSE_SEARCH_KEY` to Vercel envs (no prefix needed; not Marketplace-injected).
+1. **`AUTH_SECRET` env var added to Vercel** — NextAuth requires it before any provider lands. `openssl rand -base64 32` → `vercel env add AUTH_SECRET production`, `preview`, `development`. (Still operator-side TODO; not yet provisioned. Not gating Block B/C since no auth providers wired yet.)
+2. ~~Typesense provisioned~~ — **DONE 2026-05-24**: Typesense Cloud cluster `1rt8fj5i9epv2s6mp` live. All 5 env vars (`TYPESENSE_HOST`, `TYPESENSE_PORT`, `TYPESENSE_PROTOCOL`, `TYPESENSE_ADMIN_API_KEY`, `NEXT_PUBLIC_TYPESENSE_HOST`, `NEXT_PUBLIC_TYPESENSE_SEARCH_API_KEY`) provisioned to production, preview, and development scopes. See `docs/SEARCH-SETUP.md`.
 3. ~~`pg_trgm` extension enabled in Neon~~ — **DONE 2026-05-24**: migration `20260524141519_pg_trgm_search` applied, GIN trigram index on `Practitioner.searchText` live.
 
 ## Work blocks
@@ -34,43 +34,35 @@ Verified end-to-end via Playwright at 440×900 against real Neon-backed data.
 
 **Out of scope this block (deferred to Phase 2+)**: edit flows, claim flows, invitation acceptance. Linktree CTAs render as `Coming soon` placeholders until booking + payments wedges land.
 
-### Block B — Search infrastructure (Tue, ~4 hr)
+### Block B — Search infrastructure (Tue, ~4 hr) — **DONE 2026-05-24**
 
-**Files to create:**
-- `src/lib/typesense-server.ts` — server-side client (existing `src/lib/typesense.ts` is the donor; refine if needed)
-- `src/lib/typesense-search.ts` — client-side InstantSearch adapter config (using `NEXT_PUBLIC_TYPESENSE_SEARCH_KEY`)
-- `prisma/seed.ts` — seed script (see Block C)
-- `scripts/typesense-index.ts` — one-shot script that reads all practitioners from Neon, transforms to Typesense docs (flattening specialty, denormalizing city + state + coordinates for haversine), bulk-inserts into Typesense collection
-- `deployment/typesense-collection-schema.json` — already lifted from donor; may need field adjustments to match the new `Practitioner` schema (don't blindly use as-is)
+Shipped:
+- `src/lib/typesense-server.ts` — admin client (lazy-init, server-only)
+- `src/lib/typesense-search.ts` — InstantSearch adapter w/ query_by weights + `additionalSearchParameters`
+- `src/lib/typesense-client.ts` — search-only SearchClient for client-side facet queries (autocomplete)
+- `src/lib/practitioner-indexer.ts` — `toTypesenseDoc` (hierarchical-flatten parent+child specialties), `indexPractitioner`, `indexAllPractitioners`, `deleteFromIndex` — all no-op if envs missing
+- `scripts/typesense-bootstrap.ts` / `typesense-reset.ts` / `typesense-index.ts` — wired as `npm run typesense:bootstrap` / `reset` / `reindex`
+- `deployment/typesense-collection-schema.json` — refined to match SEARCH-REQUIREMENTS §3 (slug, displayName, bio, cityName, cityState, location/geopoint, specialtyNames[], specialtySlugs[], acceptedAt, yearsInPractice, searchText)
+- Migration `20260524141519_pg_trgm_search` applied
+- `prisma/seed.ts` — 18 practitioners, includes `yearsInPractice` Phase 1.5 stretch field
 
-**Schema work**:
-- Add to `prisma/schema.prisma`: `searchText` column denormalization trigger? Or just compute in app-layer on practitioner upsert. Simpler: app-layer for Phase 1, trigger when we have time.
-- Add migration: `CREATE EXTENSION IF NOT EXISTS pg_trgm;` + index on `Practitioner.searchText` using `gin_trgm_ops`
+### Block C — Search UI + seed data (Wed, ~4 hr) — **DONE 2026-05-24** (includes all parking-lot items)
 
-**Test by**: `npm run db:seed` then `npm run typesense:index` then visit search page (Block C below).
+Shipped:
+- `src/app/search/{page,loading}.tsx` — InstantSearchNext root, mobile-first, parametric/adaptive UX per §7
+- `src/components/search/SearchExperience.tsx` — main composition (search box + facets + results + sort + mobile sheet)
+- `src/components/search/SearchBox.tsx` — debounced shadcn-styled input + suggestions dropdown
+- `src/components/search/SearchSuggestions.tsx` — faceted autocomplete via Typesense `facet_query`
+- `src/components/search/RefinementGroup.tsx` — adaptive facets w/ zero-value pruning, configurable `operator`
+- `src/components/search/RangeFacet.tsx` — useRange-driven min/max for `yearsInPractice`
+- `src/components/search/MobileFiltersSheet.tsx` — shadcn Sheet trigger w/ active-count badge (hidden md:up)
+- `src/components/search/CurrentRefinements.tsx` — removable breadcrumb chips + Clear all
+- `src/components/search/SortBy.tsx` — relevance / newest / alphabetical
+- `src/components/search/SearchResults.tsx` + `PractitionerHit.tsx` — Hits + cards reusing Block A shadcn primitives
 
-### Block C — Search UI + seed data (Wed, ~4 hr)
+**Live**: https://hhe-directory.vercel.app/search
 
-**Files to create:**
-- `src/app/search/page.tsx` — Client component (`'use client'`) with InstantSearch root, mounted to Typesense via the search-only key
-- `src/components/search/SearchFilters.tsx` — `RefinementList` for specialty (hierarchical), `RangeInput` for price, `Pagination`. Airbnb-style facets per Amy's 5/15 framing.
-- `src/components/search/SearchResults.tsx` — `Hits` component with per-card `PractitionerCard` (display name, city, primary specialty, intro-consult price)
-- `src/components/search/SearchBox.tsx` — `SearchBox` (Typesense handles `pgtrgm`-style typo tolerance via fuzzy match)
-- `prisma/seed.ts` — seed 15–20 HHE-graduate-style practitioners with realistic specialties (per Amy's framing — graduates of Lamonte's program, Kieran's gut-health program, etc.) and US cities. Use `faker` for names/bios; keep specialties fixed and realistic.
-
-**Specialties to seed** (from Amy's 5/15 + 5/13 voice note framing):
-- Functional Medicine
-- Holistic Nutrition
-- Gut Health
-- Hormone Balance
-- Stress / Sleep Optimization
-- Herbal Medicine
-- Mind-Body Coaching
-- Children's Holistic Health
-
-**Geographic seeding**: pick ~8–10 US cities Amy's students would recognize (Asheville, Boulder, Sedona, Austin, Portland OR, Nashville, Charleston, Burlington VT, plus a couple of major metros — Atlanta, NYC area).
-
-**Test by**: visit `/search`, search "gut", filter by Specialty + City, click into a profile, verify `/practitioners/[slug]` renders.
+**Out of scope (locked-in trade-offs)**: city/state facets are single-select (`operator='and'`) to preserve cross-facet conjunctive scoping. Specialty stays multi-select (`operator='or'`). Phase 2 reconsider if multi-city is needed.
 
 ### Block D — Polish + demo dry-run (Thu morning)
 
@@ -89,8 +81,9 @@ These are decisions-JSON YES rows that are Phase 1 but are second-week work, NOT
 ## Operator-side TODO before demo
 
 - [ ] Add `AUTH_SECRET` to Vercel envs (~30 sec)
-- [ ] Provision Typesense (~10 min for Cloud signup, ~30 min for self-host)
+- [x] ~~Provision Typesense~~ — done 2026-05-24 via Typesense Cloud cluster `1rt8fj5i9epv2s6mp`
 - [x] ~~Enable `pg_trgm` in Neon~~ — done 2026-05-24 via migration
+- [ ] **Rotate Typesense Cloud admin API key** (was pasted in chat during initial setup)
 - [ ] Authorize Blake's GitHub collab invitation (Blake-side, pending since 2026-05-24)
 - [ ] (Optional but recommended) Update `package.json` build script to `prisma migrate deploy && prisma generate && next build` — safer per-env migration via Neon branching
 
