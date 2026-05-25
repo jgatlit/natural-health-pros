@@ -86,6 +86,17 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
             <p className="text-xs text-destructive">Display name is required.</p>
           </Card>
         )}
+        {searchParams.error === 'invalid-booking-url' && (
+          <Card className="border-destructive/30 bg-destructive/5 p-3">
+            <p className="text-xs text-destructive">
+              Booking URL doesn&apos;t look like a valid scheduling link. Use a full URL like
+              <code className="mx-1 rounded bg-background px-1 py-0.5 text-foreground">
+                https://cal.com/your-username
+              </code>
+              or a Calendly / SavvyCal / Acuity link.
+            </p>
+          </Card>
+        )}
 
         <Card className="p-6 sm:p-8">
           <form action={action} className="space-y-5">
@@ -147,6 +158,19 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
                 />
               </Field>
             </div>
+
+            <Field
+              label="Booking link"
+              hint="Your scheduling link (Cal.com, Calendly, SavvyCal, Acuity, etc.). Patients clicking 'Book intro consult' will land here. Leave empty if you're not taking new bookings."
+            >
+              <input
+                type="url"
+                name="bookingUrl"
+                defaultValue={practitioner.bookingUrl ?? ''}
+                placeholder="https://cal.com/your-username/intro-consult"
+                className="h-10 w-full rounded-md border bg-card px-3 text-sm outline-none ring-ring/30 focus-visible:ring-2"
+              />
+            </Field>
 
             <Field
               label="Specialties"

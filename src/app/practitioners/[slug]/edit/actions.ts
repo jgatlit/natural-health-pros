@@ -36,6 +36,39 @@ function buildSearchText(
   return [displayName, bio, cityName, cityState, ...specialtyNames].join(' ');
 }
 
+function normalizeBookingUrl(raw: string): string | null {
+  if (!raw) return null;
+  let candidate = raw.trim();
+  if (!/^https?:\/\//i.test(candidate)) {
+    candidate = `https://${candidate}`;
+  }
+  try {
+    const url = new URL(candidate);
+    if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
+    // Light allowlist of known scheduling providers (forward-compat).
+    const knownHosts = [
+      'cal.com',
+      'app.cal.com',
+      'calendly.com',
+      'savvycal.com',
+      'tidycal.com',
+      'koalendar.com',
+      'youcanbookme.com',
+      'acuityscheduling.com',
+    ];
+    const host = url.hostname.toLowerCase().replace(/^www\./, '');
+    const knownish = knownHosts.some((h) => host === h || host.endsWith(`.${h}`));
+    if (!knownish) {
+      // Allow custom domains too — operator can flag abuse manually.
+      // But require at least a TLD.
+      if (!host.includes('.')) return null;
+    }
+    return url.toString();
+  } catch {
+    return null;
+  }
+}
+
 export async function updatePractitioner(slug: string, formData: FormData): Promise<void> {
   const target = await authorizeForSlug(slug);
 
@@ -45,9 +78,14 @@ export async function updatePractitioner(slug: string, formData: FormData): Prom
   const yearsRaw = String(formData.get('yearsInPractice') ?? '').trim();
   const yearsInPractice = yearsRaw === '' ? null : Math.max(0, parseInt(yearsRaw, 10) || 0);
   const specialtyIds = formData.getAll('specialtyIds').map((s) => String(s));
+  const bookingUrlRaw = String(formData.get('bookingUrl') ?? '').trim();
+  const bookingUrl = normalizeBookingUrl(bookingUrlRaw);
 
   if (!displayName) {
     redirect(`/practitioners/${slug}/edit?error=name-required`);
+  }
+  if (bookingUrlRaw && !bookingUrl) {
+    redirect(`/practitioners/${slug}/edit?error=invalid-booking-url`);
   }
 
   // City coords for haversine
@@ -95,6 +133,7 @@ export async function updatePractitioner(slug: string, formData: FormData): Prom
         latitude: coords?.[0] ?? null,
         longitude: coords?.[1] ?? null,
         yearsInPractice,
+        bookingUrl,
         searchText: buildSearchText(
           displayName,
           bio,

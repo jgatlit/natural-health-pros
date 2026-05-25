@@ -48,18 +48,27 @@ Shipped end-to-end + verified on prod:
 - Per-practitioner lat/lng override (currently city centroid)
 - Verified Resend domain (currently sandbox `onboarding@resend.dev` — only delivers to your Resend account email until you verify a domain)
 
-### 2B. Booking / intro-consult integration
+### 2B. Booking / intro-consult integration — **DONE 2026-05-25**
 
-**Effort**: ~1-2 weeks depending on path
-**Dependencies**: 2A (practitioners need to be logged in to manage availability). External: Cal.com OR Calendly OR built-in scheduler.
-**Impact**: MEDIUM — this is the "Book an intro consult" button on `/practitioners/[slug]` becoming real. Significant trust signal for Amy's audience.
+Final architecture: **practitioner-owned booking URLs (provider-agnostic)**. Each practitioner brings their own scheduling tool (Cal.com, Calendly, SavvyCal, Acuity, etc.), HHE Directory stores the URL and renders it as a click-through "Book intro consult" link.
 
-**Three implementation paths**:
-1. **Cal.com embed** — each practitioner gets a Cal.com account, embed widget on profile. Cheapest, fastest, gives them a real calendar tool. ~3-5 days.
-2. **Calendly redirect** — link out to practitioner's Calendly. Even faster, less polished. ~1-2 days.
-3. **Built-in scheduler** — Prisma model + custom UI. Most flexible, most expensive. ~2 weeks.
+**Why this path** (over Cal.com Platform API or single-account Path B):
+- Cal.com Platform is officially deprecated (Cal.com docs, Dec 2025 — no new Platform signups)
+- Cal.com Organizations + sub-teams require $37/seat/month — at 100 practitioners, $3,700/mo (cost-prohibitive for HHE-borne costs)
+- Operator-locked: practitioners pay their own subscription seat cost → simplest architecture wins
 
-**Open questions**: Who pays for Cal.com Pro per practitioner? Does HHE Directory subsidize? Or practitioner-side cost?
+Shipped:
+- `prisma/schema.prisma`: new `Practitioner.bookingUrl String?` field
+- Migration `20260525014427_practitioner_booking_url`
+- `src/app/practitioners/[slug]/edit/actions.ts`: `normalizeBookingUrl()` with allowlist (cal.com, calendly, savvycal, tidycal, koalendar, acuityscheduling, etc. + light TLD check for custom domains)
+- Edit form: "Booking link" field with hint copy + URL validation error state
+- `src/components/practitioners/PractitionerLinks.tsx`: renders real `<a target="_blank">` link when `bookingUrl` is set, "Coming soon" placeholder otherwise. Helper text shows the booking provider's hostname (e.g., "cal.com") for transparency.
+
+**Out of scope (Phase 2.5+)**:
+- Verify the booking URL actually resolves (could add a periodic crawl/healthcheck)
+- Embedded iframe widget (vs link-out) for hosted-on-HHE experience
+- Booking event webhooks (to track which practitioners are getting bookings — needs cooperation from each scheduling provider)
+- Provider-specific UX hints (e.g., "Pre-fill your name from URL" for Cal.com)
 
 ### 2C. Payments (Whop / WAP)
 
@@ -113,13 +122,13 @@ Shipped end-to-end + verified on prod:
 
 ```
 ✅ 2A   DONE 2026-05-25 — auth + invite + claim
-⏳ 2B   IN PROGRESS — Cal.com booking integration (next)
-□  2C   Whop payments (after 2B, gated on Blake's WAP/Whop work)
+✅ 2B   DONE 2026-05-25 — practitioner-owned booking URLs
+□  2C   Whop payments (next)
 □  2D   Real practitioners onboarded via 2A (operator + Amy's curated list)
 □  2E   Search hardening + extended facets (interleaved)
 ```
 
-Original "Week 1-2" estimate for 2A → actual: one focused-session day. Pace is accelerated; revisit timeline after 2B lands.
+Original "Week 4" estimate for 2B → actual: ~30 min once architecture pivoted from Cal.com Platform/Org to practitioner-owned URLs. Pivot was triggered by Cal.com Platform deprecation + operator confirming practitioners pay their own seat costs.
 
 ## Hard prerequisites (operator-side, before any Phase 2 work)
 

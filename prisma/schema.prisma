@@ -97,6 +97,10 @@ model Practitioner {
   // Range-facetable attribute (Phase 1 stretch)
   yearsInPractice Int?
 
+  // Wedge 2B — practitioner-owned booking URL (Cal.com / Calendly / etc.)
+  // Multi-tenant by construction: each practitioner brings their own scheduling provider.
+  bookingUrl String?
+
   // Invite-only model (5/15 Amy reframe)
   invitedBy   String?
   invitedAt   DateTime?
