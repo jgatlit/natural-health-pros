@@ -36,7 +36,7 @@ function buildSearchText(
   return [displayName, bio, cityName, cityState, ...specialtyNames].join(' ');
 }
 
-function normalizeBookingUrl(raw: string): string | null {
+function normalizeUrl(raw: string, allowlist: string[]): string | null {
   if (!raw) return null;
   let candidate = raw.trim();
   if (!/^https?:\/\//i.test(candidate)) {
@@ -45,28 +45,45 @@ function normalizeBookingUrl(raw: string): string | null {
   try {
     const url = new URL(candidate);
     if (url.protocol !== 'https:' && url.protocol !== 'http:') return null;
-    // Light allowlist of known scheduling providers (forward-compat).
-    const knownHosts = [
-      'cal.com',
-      'app.cal.com',
-      'calendly.com',
-      'savvycal.com',
-      'tidycal.com',
-      'koalendar.com',
-      'youcanbookme.com',
-      'acuityscheduling.com',
-    ];
     const host = url.hostname.toLowerCase().replace(/^www\./, '');
-    const knownish = knownHosts.some((h) => host === h || host.endsWith(`.${h}`));
-    if (!knownish) {
-      // Allow custom domains too — operator can flag abuse manually.
-      // But require at least a TLD.
-      if (!host.includes('.')) return null;
-    }
+    const knownish = allowlist.some((h) => host === h || host.endsWith(`.${h}`));
+    if (!knownish && !host.includes('.')) return null;
     return url.toString();
   } catch {
     return null;
   }
+}
+
+const BOOKING_HOSTS = [
+  'cal.com',
+  'app.cal.com',
+  'calendly.com',
+  'savvycal.com',
+  'tidycal.com',
+  'koalendar.com',
+  'youcanbookme.com',
+  'acuityscheduling.com',
+];
+
+const PAYMENT_HOSTS = [
+  'whop.com',
+  'stripe.com',
+  'buy.stripe.com',
+  'paypal.me',
+  'paypal.com',
+  'square.link',
+  'squareup.com',
+  'venmo.com',
+  'gumroad.com',
+  'lemonsqueezy.com',
+];
+
+function normalizeBookingUrl(raw: string): string | null {
+  return normalizeUrl(raw, BOOKING_HOSTS);
+}
+
+function normalizePaymentUrl(raw: string): string | null {
+  return normalizeUrl(raw, PAYMENT_HOSTS);
 }
 
 export async function updatePractitioner(slug: string, formData: FormData): Promise<void> {
@@ -80,12 +97,17 @@ export async function updatePractitioner(slug: string, formData: FormData): Prom
   const specialtyIds = formData.getAll('specialtyIds').map((s) => String(s));
   const bookingUrlRaw = String(formData.get('bookingUrl') ?? '').trim();
   const bookingUrl = normalizeBookingUrl(bookingUrlRaw);
+  const paymentUrlRaw = String(formData.get('paymentUrl') ?? '').trim();
+  const paymentUrl = normalizePaymentUrl(paymentUrlRaw);
 
   if (!displayName) {
     redirect(`/practitioners/${slug}/edit?error=name-required`);
   }
   if (bookingUrlRaw && !bookingUrl) {
     redirect(`/practitioners/${slug}/edit?error=invalid-booking-url`);
+  }
+  if (paymentUrlRaw && !paymentUrl) {
+    redirect(`/practitioners/${slug}/edit?error=invalid-payment-url`);
   }
 
   // City coords for haversine
@@ -134,6 +156,7 @@ export async function updatePractitioner(slug: string, formData: FormData): Prom
         longitude: coords?.[1] ?? null,
         yearsInPractice,
         bookingUrl,
+        paymentUrl,
         searchText: buildSearchText(
           displayName,
           bio,

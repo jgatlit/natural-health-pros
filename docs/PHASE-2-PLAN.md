@@ -70,19 +70,28 @@ Shipped:
 - Booking event webhooks (to track which practitioners are getting bookings — needs cooperation from each scheduling provider)
 - Provider-specific UX hints (e.g., "Pre-fill your name from URL" for Cal.com)
 
-### 2C. Payments (Whop / WAP)
+### 2C. Practitioner-owned payment URLs — **DONE 2026-05-25**
 
-**Effort**: ~2 weeks once Blake's integration lands
-**Dependencies**: Blake's WAP/Whop work (NOT controlled by this repo). 2A for practitioner-side payment-link management.
-**Impact**: HIGH for revenue capture, MEDIUM for demo wow-factor (not visible at first click).
+Same architecture as 2B (provider-agnostic, practitioner-owned URLs). Practitioner pastes their Whop, Stripe Payment Link, Gumroad, Lemon Squeezy, PayPal.me, or Square URL. Public profile "Browse offerings" link becomes a real click-through.
 
-**Implementation tree**:
-- Whop product per practitioner SKU (intro consult, package, custom invoice)
-- Webhook → Neon database (payment status, receipt URL)
-- Profile UI: "Book + Pay" buttons replace placeholder "Coming soon"
-- Custom invoice request flow → email Amy/Jonathan → manual issue OR Stripe link generation
+Why this path (over Whop-centralized via HHE account):
+- HHE doesn't take a cut → no 1099/payout compliance burden
+- Practitioner sets their own pricing + provider
+- No webhook integration needed (each provider handles their own receipts)
+- Operator-locked: practitioner-pays-own-costs philosophy applies to payments same as scheduling
 
-**Open questions**: Does Amy want HHE to take a platform fee? What revenue split with practitioners? Tax handling per state?
+Shipped:
+- `prisma/schema.prisma`: new `Practitioner.paymentUrl String?` field
+- Migration `20260525015018_practitioner_payment_url`
+- `normalizePaymentUrl()` with allowlist (whop.com, stripe.com, buy.stripe.com, paypal.me, paypal.com, square.link, squareup.com, venmo.com, gumroad.com, lemonsqueezy.com + light TLD check)
+- Edit form: "Payment / offerings link" field with hint copy + error state
+- `PractitionerLinks`: "Browse offerings" renders real `<a target="_blank">` when set, "Coming soon" otherwise
+
+Out of scope (Phase 2.5+):
+- HHE-platform-fee model (operator chose pass-through; revisit if revenue model needs to capture)
+- Webhook integration for purchase analytics
+- Multi-product display ("Browse offerings" → expand to a list of N SKUs)
+- "Request custom invoice" wired to a real flow (currently placeholder)
 
 ### 2D. Real practitioner data (replace seed)
 
@@ -123,7 +132,7 @@ Shipped:
 ```
 ✅ 2A   DONE 2026-05-25 — auth + invite + claim
 ✅ 2B   DONE 2026-05-25 — practitioner-owned booking URLs
-□  2C   Whop payments (next)
+✅ 2C   DONE 2026-05-25 — practitioner-owned payment URLs
 □  2D   Real practitioners onboarded via 2A (operator + Amy's curated list)
 □  2E   Search hardening + extended facets (interleaved)
 ```

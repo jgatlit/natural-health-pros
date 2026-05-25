@@ -50,7 +50,7 @@ export default async function PractitionerPage({ params }: PageProps) {
 
           <Separator />
 
-          <PractitionerLinks bookingUrl={p.bookingUrl} />
+          <PractitionerLinks bookingUrl={p.bookingUrl} paymentUrl={p.paymentUrl} />
 
           {p.bio && (
             <>
