@@ -70,28 +70,38 @@ Shipped:
 - Booking event webhooks (to track which practitioners are getting bookings — needs cooperation from each scheduling provider)
 - Provider-specific UX hints (e.g., "Pre-fill your name from URL" for Cal.com)
 
-### 2C. Practitioner-owned payment URLs — **DONE 2026-05-25**
+### 2C. Whop for Platforms — multi-tenant payment routing — **GATED on Whop Platforms API access**
 
-Same architecture as 2B (provider-agnostic, practitioner-owned URLs). Practitioner pastes their Whop, Stripe Payment Link, Gumroad, Lemon Squeezy, PayPal.me, or Square URL. Public profile "Browse offerings" link becomes a real click-through.
+**Operator-confirmed architecture** (2026-05-25): centralized multi-tenant routing via Whop, NOT practitioner-owned payment URLs. HHE = platform; each practitioner = a Whop **Connected Account**; patient pays via Whop checkout → funds route to the practitioner's connected account. Whop handles each practitioner's KYC + tax + compliance. HHE optionally takes a platform fee.
 
-Why this path (over Whop-centralized via HHE account):
-- HHE doesn't take a cut → no 1099/payout compliance burden
-- Practitioner sets their own pricing + provider
-- No webhook integration needed (each provider handles their own receipts)
-- Operator-locked: practitioner-pays-own-costs philosophy applies to payments same as scheduling
+**Critical blocker** — access to Whop's Platforms API is **invite-only**:
+> *"Access to the platforms API is currently invite only. Please contact sales@whop.com to see if your use case is eligible."* — Whop docs
 
-Shipped:
-- `prisma/schema.prisma`: new `Practitioner.paymentUrl String?` field
-- Migration `20260525015018_practitioner_payment_url`
-- `normalizePaymentUrl()` with allowlist (whop.com, stripe.com, buy.stripe.com, paypal.me, paypal.com, square.link, squareup.com, venmo.com, gumroad.com, lemonsqueezy.com + light TLD check)
-- Edit form: "Payment / offerings link" field with hint copy + error state
-- `PractitionerLinks`: "Browse offerings" renders real `<a target="_blank">` when set, "Coming soon" otherwise
+**Confirmed empirically** (2026-05-25): the current Whop API key on file
+(`apik_r09aRuWqXq1Iv_...`) returns **401 Unauthorized** on `/connected_accounts`, `/users/me`,
+`/me`. It IS a standard single-creator account key with access to `/memberships`, `/products`,
+`/company`, `/checkout_sessions`, `/experiences` — NOT a Platforms key.
 
-Out of scope (Phase 2.5+):
-- HHE-platform-fee model (operator chose pass-through; revisit if revenue model needs to capture)
-- Webhook integration for purchase analytics
-- Multi-product display ("Browse offerings" → expand to a list of N SKUs)
-- "Request custom invoice" wired to a real flow (currently placeholder)
+**Operator-side action required** (Blake/Amy alignment first):
+1. Confirm with Blake + Amy that Whop is the intended payments primitive (vs Stripe Connect, vs another marketplace solution)
+2. Email `sales@whop.com` requesting Whop for Platforms access. Include: HHE Directory use case, practitioner volume target, expected GMV, compliance requirements (HIPAA? SOC2?)
+3. Complete Whop's underwriting / onboarding (typically days to weeks)
+4. Receive a new API key with Connected Accounts scope
+5. Add the new key to Vercel envs (rotate the old one)
+
+**Architecture (to build once access is granted)**:
+- `Practitioner.whopConnectedAccountId String?` — Whop's ID for this practitioner's account
+- `Practitioner.whopProductId String?` — primary offering (e.g., intro consult)
+- Practitioner onboarding adds a "Set up payments" step that bridges to Whop's Connect-style onboarding flow (HHE creates the connected account, Whop handles KYC, redirects back)
+- Webhooks from Whop → Neon (payment events, payout status, refunds)
+- Public profile "Browse offerings" + "Request custom invoice" buttons resolve against Whop products owned by the practitioner's connected account
+- Optional platform-fee config per product (or zero — pass-through)
+
+**Why the practitioner-owned payment URL approach was rejected** (briefly shipped + rolled back 2026-05-25):
+- Diverges from "multi-tenant payment routing" intent — each practitioner-owned URL is an external link-out with zero HHE visibility into bookings/revenue
+- HHE can't aggregate data, can't optionally take platform fee, can't enforce refund policy consistency
+- Whop Connected Accounts gives all of these for free
+- Practitioner-owned URLs reverted via migration `20260525015721_drop_payment_url`
 
 ### 2D. Real practitioner data (replace seed)
 
@@ -132,10 +142,16 @@ Out of scope (Phase 2.5+):
 ```
 ✅ 2A   DONE 2026-05-25 — auth + invite + claim
 ✅ 2B   DONE 2026-05-25 — practitioner-owned booking URLs
-✅ 2C   DONE 2026-05-25 — practitioner-owned payment URLs
+⛔ 2C   BLOCKED — Whop for Platforms access required (invite-only, email sales@whop.com)
 □  2D   Real practitioners onboarded via 2A (operator + Amy's curated list)
 □  2E   Search hardening + extended facets (interleaved)
 ```
+
+**Critical follow-up for Blake/Amy alignment** (capture at the 2026-05-28 meeting):
+- Is Whop the intended payments primitive, or is there a Plan B (Stripe Connect, custom marketplace)?
+- Who emails sales@whop.com? What HHE Directory positioning to include in the application?
+- Expected timeline for Whop underwriting/onboarding?
+- Until 2C lands, public profiles show "Coming soon" on Browse offerings + Request invoice. The Linktree shape is correct; the payment plumbing is missing.
 
 Original "Week 4" estimate for 2B → actual: ~30 min once architecture pivoted from Cal.com Platform/Org to practitioner-owned URLs. Pivot was triggered by Cal.com Platform deprecation + operator confirming practitioners pay their own seat costs.
 

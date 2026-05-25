@@ -1,12 +1,13 @@
 import { Calendar, FileText, Layers, ChevronRight } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 
-type Props = { bookingUrl?: string | null; paymentUrl?: string | null };
+type Props = { bookingUrl?: string | null };
 
 // Blake's framing (5/15 meeting): Linktree-style "elements practitioners can move around"
-// on their landing page. Booking + payment are wired (Wedges 2B + 2C — practitioner-owned
-// URLs). Custom-invoice flow stays placeholder (Phase 2.5 server-action that emails admin).
-export function PractitionerLinks({ bookingUrl, paymentUrl }: Props) {
+// on their landing page. Booking is wired (Wedge 2B — practitioner-owned URLs).
+// Offerings + invoice flows are gated on Wedge 2C (Whop for Platforms / Connected Accounts —
+// invite-only API access pending operator outreach to sales@whop.com).
+export function PractitionerLinks({ bookingUrl }: Props) {
   const items: Array<{
     icon: React.ComponentType<{ className?: string }>;
     label: string;
@@ -19,12 +20,7 @@ export function PractitionerLinks({ bookingUrl, paymentUrl }: Props) {
       helper: bookingUrl ? hostHint(bookingUrl) : '30-minute fit call',
       href: bookingUrl ?? undefined,
     },
-    {
-      icon: Layers,
-      label: 'Browse offerings',
-      helper: paymentUrl ? hostHint(paymentUrl) : 'Programs, memberships, packages',
-      href: paymentUrl ?? undefined,
-    },
+    { icon: Layers, label: 'Browse offerings', helper: 'Programs, memberships, packages' },
     {
       icon: FileText,
       label: 'Request custom invoice',

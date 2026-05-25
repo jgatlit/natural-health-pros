@@ -101,10 +101,6 @@ model Practitioner {
   // Multi-tenant by construction: each practitioner brings their own scheduling provider.
   bookingUrl String?
 
-  // Wedge 2C — practitioner-owned payment URL (Whop / Stripe / etc.)
-  // Practitioner sets pricing + handles their own payout; HHE Directory just routes traffic.
-  paymentUrl String?
-
   // Invite-only model (5/15 Amy reframe)
   invitedBy   String?
   invitedAt   DateTime?

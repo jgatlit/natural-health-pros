@@ -68,7 +68,7 @@
 | **"Can someone search by insurance / fee / availability?"** | Schema supports range facets — already demonstrated with "years in practice" (4-22yr slider). Adding fee range or insurance accepted is a schema field + UI line. Phase 2 ready. |
 | **"What happens when we hit 500 practitioners? 2,000?"** | Stack tested for that scale. Typesense Cloud (current tier) handles it; if RAM pressure shows up at 2K, one-click tier-up in their dashboard. Cost ceiling: ~$50/mo until revenue justifies more. |
 | **"Is this competing with holistichealthhq.com?"** | No. Landing page links to it. HHE Directory is the *practitioner-finding* surface; holistichealthhq is the *program-marketing* surface. They feed each other. |
-| **"What about payments / booking?"** | Phase 2 wedge. Blake owes the WAP/Whop integration before that ships. Today the placeholders ("Book an intro consult", "Browse offerings", "Request custom invoice") set the surface area so practitioners + you can react to the shape before code lands. |
+| **"What about payments / booking?"** | Phase 2A + 2B shipped 5/25: practitioner-side onboarding + booking is real (any scheduling provider — Cal.com, Calendly, etc.). Phase 2C (payments) is the open item. Operator-confirmed direction: Whop for Platforms / Connected Accounts (centralized multi-tenant routing — HHE platform, practitioners as connected sellers, optional platform fee). **Blocker**: Whop Platforms API is invite-only — need Blake/Amy alignment on (1) Whop as the right primitive vs alternatives, and (2) who emails sales@whop.com to apply. Worth raising in the meeting if Amy asks. |
 | **"Who do I show this to next?"** | Anyone HHE-trained you'd want listed. Cost to add: 1 invite email, 5-minute profile completion. Phase 2 makes that real; Phase 1 today just needs your approval to proceed. |
 
 ## Failure modes + recovery paths
@@ -80,6 +80,18 @@
 | **Amy asks about a practitioner that doesn't exist** | "These are seed practitioners showing what the data shape feels like. Phase 2's invitation system adds real people — the demo today is about the *experience*, not the inventory." |
 | **Mobile Safari has a layout bug we missed** | Open desktop view on a laptop screen. The desktop UI is identical product, just wider. |
 | **A facet count looks off** | Adaptive facets use disjunctive semantics within a category (specialty multi-select) and conjunctive across (city/state single-select). Counts reflect those rules. If pressed: "the system shows you 'what's possible if I add this' within the same filter, and 'narrowed counts' across filters — same as Amazon." |
+
+## Critical Blake/Amy follow-up — raise this at the meeting
+
+**Phase 2C (payments) is the one substantive open item from the Phase 2 sequencing.** Operator-locked target architecture: **Whop for Platforms** (Whop's Stripe-Connect-equivalent — multi-tenant payment routing where HHE is the platform and practitioners are connected accounts receiving direct payouts).
+
+**Blocker**: Whop Platforms API is **invite-only**. The current Whop API key on file is standard creator-account scope (validated empirically 5/25 — returns 401 on `/connected_accounts`).
+
+**What needs Blake/Amy alignment** (capture during the meeting or in 24-48hr follow-up):
+1. **Confirm Whop is the right primitive** vs Stripe Connect / custom marketplace / pass-through paymentURLs. Blake had Whop work in scope from the 5/15 call — does that scope cover Whop for Platforms specifically, or just standard Whop creator integration?
+2. **Application logistics**: who emails `sales@whop.com`? What HHE Directory positioning to include in the request (practitioner volume target, expected GMV, compliance needs)?
+3. **Timeline**: Whop's underwriting can take days to weeks. If 2C is on critical path, plan accordingly.
+4. **Interim?**: Until 2C lands, public profiles show "Coming soon" on Browse offerings + Request custom invoice. Acceptable for the 5/28 demo (the wedge story is search→filter→book, not search→filter→pay), but Amy should know payments lands in a follow-up phase.
 
 ## Day-of operations
 

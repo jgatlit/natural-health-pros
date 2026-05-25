@@ -65,25 +65,8 @@ const BOOKING_HOSTS = [
   'acuityscheduling.com',
 ];
 
-const PAYMENT_HOSTS = [
-  'whop.com',
-  'stripe.com',
-  'buy.stripe.com',
-  'paypal.me',
-  'paypal.com',
-  'square.link',
-  'squareup.com',
-  'venmo.com',
-  'gumroad.com',
-  'lemonsqueezy.com',
-];
-
 function normalizeBookingUrl(raw: string): string | null {
   return normalizeUrl(raw, BOOKING_HOSTS);
-}
-
-function normalizePaymentUrl(raw: string): string | null {
-  return normalizeUrl(raw, PAYMENT_HOSTS);
 }
 
 export async function updatePractitioner(slug: string, formData: FormData): Promise<void> {
@@ -97,17 +80,12 @@ export async function updatePractitioner(slug: string, formData: FormData): Prom
   const specialtyIds = formData.getAll('specialtyIds').map((s) => String(s));
   const bookingUrlRaw = String(formData.get('bookingUrl') ?? '').trim();
   const bookingUrl = normalizeBookingUrl(bookingUrlRaw);
-  const paymentUrlRaw = String(formData.get('paymentUrl') ?? '').trim();
-  const paymentUrl = normalizePaymentUrl(paymentUrlRaw);
 
   if (!displayName) {
     redirect(`/practitioners/${slug}/edit?error=name-required`);
   }
   if (bookingUrlRaw && !bookingUrl) {
     redirect(`/practitioners/${slug}/edit?error=invalid-booking-url`);
-  }
-  if (paymentUrlRaw && !paymentUrl) {
-    redirect(`/practitioners/${slug}/edit?error=invalid-payment-url`);
   }
 
   // City coords for haversine
@@ -156,7 +134,6 @@ export async function updatePractitioner(slug: string, formData: FormData): Prom
         longitude: coords?.[1] ?? null,
         yearsInPractice,
         bookingUrl,
-        paymentUrl,
         searchText: buildSearchText(
           displayName,
           bio,

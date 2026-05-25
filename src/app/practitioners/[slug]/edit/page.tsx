@@ -97,14 +97,6 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
             </p>
           </Card>
         )}
-        {searchParams.error === 'invalid-payment-url' && (
-          <Card className="border-destructive/30 bg-destructive/5 p-3">
-            <p className="text-xs text-destructive">
-              Payment URL doesn&apos;t look like a valid checkout link. Try a Whop / Stripe Payment
-              Link / PayPal.me / Square / Gumroad / Lemon Squeezy URL.
-            </p>
-          </Card>
-        )}
 
         <Card className="p-6 sm:p-8">
           <form action={action} className="space-y-5">
@@ -176,19 +168,6 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
                 name="bookingUrl"
                 defaultValue={practitioner.bookingUrl ?? ''}
                 placeholder="https://cal.com/your-username/intro-consult"
-                className="h-10 w-full rounded-md border bg-card px-3 text-sm outline-none ring-ring/30 focus-visible:ring-2"
-              />
-            </Field>
-
-            <Field
-              label="Payment / offerings link"
-              hint="Your checkout link (Whop, Stripe Payment Link, Gumroad, Lemon Squeezy, etc.). Patients clicking 'Browse offerings' will land here. Leave empty if you only do free intro consults."
-            >
-              <input
-                type="url"
-                name="paymentUrl"
-                defaultValue={practitioner.paymentUrl ?? ''}
-                placeholder="https://whop.com/your-storefront"
                 className="h-10 w-full rounded-md border bg-card px-3 text-sm outline-none ring-ring/30 focus-visible:ring-2"
               />
             </Field>

@@ -20,6 +20,10 @@
 
 **Phase 2A also shipped** (2026-05-25): practitioner authentication via NextAuth + Resend magic-link, invitation system at `/admin/invites`, accept-invite flow → `/onboarding` → `/practitioners/[slug]/edit`. Middleware gates `/admin/*` + `/practitioners/[slug]/edit` + `/onboarding`. `ADMIN_EMAILS` env auto-promotes operator (jgatlit@gmail.com) on first sign-in.
 
+**Phase 2B also shipped** (2026-05-25): practitioner-owned booking URLs (Cal.com / Calendly / SavvyCal / Acuity / etc.). Edit form has booking-link field with provider allowlist; public profile renders real `<a target="_blank">` link.
+
+**Phase 2C BLOCKED** (2026-05-25): operator-locked architecture is Whop for Platforms (Connected Accounts — multi-tenant payment routing). Whop Platforms API is **invite-only**; current API key is standard creator-account scope. **Blake/Amy follow-up**: align on Whop as payments primitive + email sales@whop.com to request Platforms access.
+
 **Phase 1 (Block A + B + C) shipped**:
 - `/practitioners/[slug]` — Linktree-style profile, server-rendered (Block A)
 - `/search` — InstantSearchNext + parametric/adaptive facets: keyword + typo tolerance, specialty (multi-select), city/state (single-select scoped), range facet (yearsInPractice), faceted autocomplete, mobile Sheet, URL state, sort
