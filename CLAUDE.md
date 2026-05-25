@@ -76,21 +76,28 @@ After `vercel env pull .env.local`, also `cp .env.local .env` for Prisma CLI to 
 - Migration flow: `vercel env pull .env.local && cp .env.local .env && npm run db:migrate:dev --name <name>` → commit `prisma/migrations/` → push
 - Migrations do NOT auto-apply on deploy (build runs `prisma generate && next build` only). Consider adding `prisma migrate deploy &&` to build script when Phase 1 starts adding regular migrations — safe given Neon branching per env.
 
-## What's next (full plan)
+## What's next
 
-See `docs/PHASE-1-PLAN.md` for the concrete punch list for the 2026-05-28 Amy demo. TL;DR: Linktree-style `/practitioners/[slug]` + Typesense `/search` + seed 10–20 fake HHE-graduate practitioners.
+Phase 1 shipped + verified at https://hhe-directory.vercel.app (commits through `562d1af` + leave-behind `fb58286`). Amy meeting 2026-05-28.
+
+**For Phase 2**: see `docs/PHASE-2-PLAN.md` — option space across 5 candidate wedges (auth+invite+claim, booking, payments, real practitioners, search hardening). Default sequence: 2A unlocks everything → 2D real practitioners → 2B booking → 2C payments (gated on Blake) → 2E hardening. Operator-overridable post-Amy meeting.
+
+**For demo prep**: `docs/DEMO-PREP-5-28.md` — 3-act story + Q&A bank + recovery paths. Leave-behind for Amy: `docs/demo-prep/2026-05-28-amy-leave-behind.md`.
+
+Phase 1 retrospective lives in `docs/PHASE-1-PLAN.md` (Blocks A/B/C/D all marked done).
 
 ## Reference artifacts (outside repo)
 
 Authoritative source documents kept in the operator's vault / Downloads (vault is at `~/vault/`):
 
 - **Joint-call meeting note**: `~/vault/300 Entities/Meetings/2026-05-15 HHE Amy Blake Jonathan - PracticeNear Joint Planning + New Repo Decision.md` — 53 feature decisions adjudicated live with Amy + Blake
-- **53-feature decisions JSON**: `~/Downloads/practicenear-decisions-2026-05-15.json` — canonical scope lock
+- **53-feature decisions JSON**: `~/Downloads/practicenear-decisions-2026-05-15.json` — canonical scope lock (still authoritative for Phase 2 YES/MAYBE/NO rows)
 - **Strategic reconciliation v2**: `~/projects/HHE/PracticeNear/STRATEGIC_RECONCILIATION_2026-05-18.md` — operator-authored sequencing plan; v2 doubles down on clean restart (do not read as a walk-back)
-- **Project entity (vault)**: `~/vault/300 Entities/Projects/PracticeNear.md` — vault file name retained for wiki-link continuity; content reflects the rename and tracks Progress Log + Phase 1 queue
+- **Project entity (vault)**: `~/vault/300 Entities/Projects/PracticeNear.md` — vault file name retained for wiki-link continuity; content reflects the rename and tracks Progress Log + Phase 2 queue
 - **Operator's `Amy (HHE)` person entity**: `~/vault/300 Entities/People/Amy (HHE).md` — engagement-strategy synopsis (decision style, what frames land, what loses her)
 - **Holistic Health Educators company entity**: `~/vault/300 Entities/Companies/Holistic Health Educators.md`
-- **Memory pointers** (for AI agents working on the project): `reference_practicenear_repo_topology` (broad context) + `reference_neon_vercel_prisma_integration` (deployment gotchas)
+- **Project-side memory** (auto-loaded by Claude at this cwd): `~/.claude/projects/-home-jgatlit-projects-HHE-HHE-directory/memory/MEMORY.md` indexes 4 topic files — CSS bootstrap, seed strategy, Typesense/InstantSearch gotchas, Vercel env provisioning
+- **Vault-side memory pointers**: `reference_practicenear_repo_topology` (broad context) + `reference_neon_vercel_prisma_integration` (deployment gotchas)
 
 ## Working agreements with the operator
 
