@@ -27,9 +27,10 @@ model User {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  accounts      Account[]
-  sessions      Session[]
-  practitioner  Practitioner?
+  accounts        Account[]
+  sessions        Session[]
+  practitioner    Practitioner?
+  invitationsSent Invitation[] @relation("InvitedBy")
 }
 
 enum Role {
@@ -124,6 +125,22 @@ model PractitionerSpecialty {
   specialty      Specialty    @relation(fields: [specialtyId], references: [id], onDelete: Cascade)
 
   @@id([practitionerId, specialtyId])
+}
+
+// Wedge 2A — practitioner invitation system
+model Invitation {
+  id               String    @id @default(cuid())
+  token            String    @unique
+  email            String
+  invitedById      String?
+  invitedBy        User?     @relation("InvitedBy", fields: [invitedById], references: [id])
+  expiresAt        DateTime
+  acceptedAt       DateTime?
+  acceptedByUserId String?
+  createdAt        DateTime  @default(now())
+
+  @@index([email])
+  @@index([acceptedAt])
 }
 
 model City {

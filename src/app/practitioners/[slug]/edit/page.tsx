@@ -1,0 +1,225 @@
+import { notFound, redirect } from 'next/navigation';
+import Link from 'next/link';
+import { ArrowLeft, Check } from 'lucide-react';
+import { auth } from '@/auth';
+import { prisma } from '@/lib/prisma';
+import { Card } from '@/components/ui/card';
+import { Separator } from '@/components/ui/separator';
+import { updatePractitioner } from './actions';
+
+type Props = {
+  params: { slug: string };
+  searchParams: { welcome?: string; saved?: string; error?: string };
+};
+
+export const dynamic = 'force-dynamic';
+
+export default async function EditPractitionerPage({ params, searchParams }: Props) {
+  const session = await auth();
+  if (!session?.user?.id) {
+    redirect(`/auth/signin?callbackUrl=/practitioners/${params.slug}/edit`);
+  }
+
+  const practitioner = await prisma.practitioner.findUnique({
+    where: { slug: params.slug },
+    include: {
+      specialties: { include: { specialty: true } },
+    },
+  });
+  if (!practitioner) notFound();
+
+  const isOwner = practitioner.userId === session.user.id;
+  const isAdmin = session.user.role === 'ADMIN';
+  if (!isOwner && !isAdmin) {
+    redirect('/auth/error?error=AccessDenied');
+  }
+
+  const [cities, specialties] = await Promise.all([
+    prisma.city.findMany({ orderBy: [{ state: 'asc' }, { name: 'asc' }] }),
+    prisma.specialty.findMany({ orderBy: { name: 'asc' } }),
+  ]);
+
+  const selectedSpecialtyIds = new Set(
+    practitioner.specialties.map((ps) => ps.specialtyId),
+  );
+
+  // Bind the slug for the form action
+  const action = updatePractitioner.bind(null, params.slug);
+
+  return (
+    <main className="min-h-screen bg-muted/30 px-4 py-10 sm:py-14">
+      <div className="mx-auto max-w-2xl space-y-4">
+        <Link
+          href={`/practitioners/${params.slug}`}
+          className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
+        >
+          <ArrowLeft className="h-3.5 w-3.5" />
+          Back to profile
+        </Link>
+
+        {searchParams.welcome && (
+          <Card className="border-primary/30 bg-primary/5 p-4">
+            <p className="text-sm">
+              <strong>Welcome to HHE Directory.</strong> Fill in your profile below to make it
+              public.
+            </p>
+          </Card>
+        )}
+
+        {searchParams.saved && (
+          <Card className="border-green-500/30 bg-green-500/5 p-3">
+            <p className="flex items-center gap-1.5 text-xs">
+              <Check className="h-3.5 w-3.5 text-green-600" />
+              Profile saved.{' '}
+              <Link
+                href={`/practitioners/${params.slug}`}
+                className="font-medium underline underline-offset-2"
+              >
+                View public page
+              </Link>
+            </p>
+          </Card>
+        )}
+
+        {searchParams.error === 'name-required' && (
+          <Card className="border-destructive/30 bg-destructive/5 p-3">
+            <p className="text-xs text-destructive">Display name is required.</p>
+          </Card>
+        )}
+
+        <Card className="p-6 sm:p-8">
+          <form action={action} className="space-y-5">
+            <div className="space-y-1.5">
+              <h1 className="text-xl font-semibold tracking-tight">Edit profile</h1>
+              <p className="text-xs text-muted-foreground">
+                Your slug: <code className="rounded bg-muted px-1.5 py-0.5">/{params.slug}</code>
+              </p>
+            </div>
+
+            <Separator />
+
+            <Field label="Display name" required>
+              <input
+                type="text"
+                name="displayName"
+                required
+                defaultValue={practitioner.displayName}
+                className="h-10 w-full rounded-md border bg-card px-3 text-sm outline-none ring-ring/30 focus-visible:ring-2"
+              />
+            </Field>
+
+            <Field
+              label="Bio"
+              hint="Short, plain-English description. What you do, who you work with, what makes you HHE-style."
+            >
+              <textarea
+                name="bio"
+                rows={5}
+                defaultValue={practitioner.bio ?? ''}
+                className="w-full rounded-md border bg-card px-3 py-2 text-sm outline-none ring-ring/30 focus-visible:ring-2"
+              />
+            </Field>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <Field label="City">
+                <select
+                  name="cityId"
+                  defaultValue={practitioner.cityId ?? ''}
+                  className="h-10 w-full rounded-md border bg-card px-2 text-sm outline-none ring-ring/30 focus-visible:ring-2"
+                >
+                  <option value="">— select a city —</option>
+                  {cities.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}, {c.state}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+
+              <Field label="Years in practice">
+                <input
+                  type="number"
+                  name="yearsInPractice"
+                  min={0}
+                  max={70}
+                  defaultValue={practitioner.yearsInPractice ?? ''}
+                  className="h-10 w-full rounded-md border bg-card px-3 text-sm outline-none ring-ring/30 focus-visible:ring-2"
+                />
+              </Field>
+            </div>
+
+            <Field
+              label="Specialties"
+              hint="Select all that apply. Parent + child specialties supported (e.g., Functional Medicine includes Hormone Balance)."
+            >
+              <ul className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
+                {specialties.map((s) => {
+                  const checked = selectedSpecialtyIds.has(s.id);
+                  return (
+                    <li key={s.id}>
+                      <label className="flex cursor-pointer items-center gap-2 rounded-md border bg-card px-3 py-2 text-sm hover:bg-accent/40">
+                        <input
+                          type="checkbox"
+                          name="specialtyIds"
+                          value={s.id}
+                          defaultChecked={checked}
+                          className="h-4 w-4 rounded border-input"
+                        />
+                        <span>{s.name}</span>
+                      </label>
+                    </li>
+                  );
+                })}
+              </ul>
+            </Field>
+
+            <Separator />
+
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-end">
+              <Link
+                href={`/practitioners/${params.slug}`}
+                className="inline-flex h-10 items-center justify-center rounded-md border bg-card px-4 text-sm font-medium hover:bg-accent"
+              >
+                Cancel
+              </Link>
+              <button
+                type="submit"
+                className="inline-flex h-10 items-center justify-center rounded-md bg-primary px-5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+              >
+                Save profile
+              </button>
+            </div>
+          </form>
+        </Card>
+
+        <p className="text-center text-xs text-muted-foreground">
+          Signed in as {session.user.email}
+          {isAdmin && ' · Admin'}
+        </p>
+      </div>
+    </main>
+  );
+}
+
+function Field({
+  label,
+  required,
+  hint,
+  children,
+}: {
+  label: string;
+  required?: boolean;
+  hint?: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <label className="block text-xs font-medium">
+        {label}
+        {required && <span className="ml-0.5 text-destructive">*</span>}
+      </label>
+      {children}
+      {hint && <p className="text-[11px] leading-relaxed text-muted-foreground">{hint}</p>}
+    </div>
+  );
+}

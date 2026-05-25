@@ -1,4 +1,33 @@
-export { auth as middleware } from '@/auth';
+import { NextResponse } from 'next/server';
+import { auth } from '@/auth';
+
+export default auth((req) => {
+  const { pathname } = req.nextUrl;
+  const session = req.auth;
+
+  // Admin routes require Role.ADMIN
+  if (pathname.startsWith('/admin')) {
+    if (!session?.user) {
+      const signinUrl = new URL('/auth/signin', req.nextUrl);
+      signinUrl.searchParams.set('callbackUrl', pathname);
+      return NextResponse.redirect(signinUrl);
+    }
+    if (session.user.role !== 'ADMIN') {
+      return NextResponse.redirect(new URL('/auth/error?error=AccessDenied', req.nextUrl));
+    }
+  }
+
+  // Practitioner edit + onboarding require authenticated session (in-page ownership check)
+  if (pathname.match(/^\/practitioners\/[^/]+\/edit/) || pathname.startsWith('/onboarding')) {
+    if (!session?.user) {
+      const signinUrl = new URL('/auth/signin', req.nextUrl);
+      signinUrl.searchParams.set('callbackUrl', pathname);
+      return NextResponse.redirect(signinUrl);
+    }
+  }
+
+  return NextResponse.next();
+});
 
 export const config = {
   // Avoid running middleware on static assets + Next internals
