@@ -23,24 +23,30 @@
 
 Each is a self-contained Phase 2.x sub-block. Effort + dependency + impact tagged for operator sequencing decisions.
 
-### 2A. Practitioner onboarding (auth + invite + claim)
+### 2A. Practitioner onboarding (auth + invite + claim) — **DONE 2026-05-25**
 
-**Effort**: ~2 weeks
-**Dependencies**: `AUTH_SECRET` ✅ already set. NextAuth Email provider (Resend already installed) + invitation token model.
-**Impact**: HIGH — unlocks every other Phase 2 wedge. Without this, no real practitioner can edit their own profile.
+Shipped end-to-end + verified on prod:
+- NextAuth v5 + Resend magic-link sign-in (`/auth/signin`)
+- `Invitation` Prisma model + migration `20260525010841_invitation_model`
+- Admin-only invite send page (`/admin/invites`, Role.ADMIN gated via `ADMIN_EMAILS` env auto-promotion)
+- Invitation accept flow (`/auth/invite-accept/[token]` → magic link → `/onboarding?invitation=TOKEN` → Practitioner record created + slug derived from email + Role.PRACTITIONER set + Typesense reindex)
+- Profile edit form (`/practitioners/[slug]/edit`, ownership-gated, reindex on save)
+- Middleware gates `/admin/*` + `/practitioners/[slug]/edit` + `/onboarding`
+- Resend email send with graceful-degrade (console.log when key missing — dev-friendly)
 
-**Files this would touch**:
-- `src/auth.ts` — wire Email provider via Resend
-- `prisma/schema.prisma` — add `Invitation` model (token, expiresAt, invitedEmail, status)
-- `src/app/api/auth/[...nextauth]/route.ts` — wire the route handler
-- `src/app/auth/invite-accept/[token]/page.tsx` — claim landing
-- `src/app/practitioners/[slug]/edit/page.tsx` — auth-gated edit form
-- `src/lib/action-utils.ts` — restore Phase 3 helpers (Conversation gate stripped during Phase 0, see CLAUDE.md gotcha)
-- Email templates: invitation, profile-claim-confirmation
+**Operator test recipe** (5 minutes):
+1. Visit https://hhe-directory.vercel.app/admin/invites
+2. Sign in with `jgatlit@gmail.com` (auto-promoted to ADMIN via env)
+3. Send an invitation to your own email
+4. Click the invitation link in email → "Send sign-in link"
+5. Click the magic link → land on profile edit form
+6. Fill in details → save → public profile updates + search re-indexes
 
-**Open questions for operator**:
-- Are practitioners invited 1-by-1 by Amy/Jonathan, or self-applied via a public "request an invite" form?
-- Should the claim flow include identity verification (license number? HHE program enrollment lookup)?
+**Out of scope (Phase 2.5+)**:
+- Practitioner-set custom slug (currently fixed at email-derived)
+- Photo upload (placeholders use shadcn AvatarFallback initials)
+- Per-practitioner lat/lng override (currently city centroid)
+- Verified Resend domain (currently sandbox `onboarding@resend.dev` — only delivers to your Resend account email until you verify a domain)
 
 ### 2B. Booking / intro-consult integration
 
@@ -103,19 +109,17 @@ Each is a self-contained Phase 2.x sub-block. Effort + dependency + impact tagge
 
 **Open questions**: Which facets are operator-visible vs practitioner-self-editable?
 
-## Recommended sequencing
-
-This is **opinionated and operator-overridable**. Default sequence:
+## Sequencing (operator-locked 2026-05-25)
 
 ```
-Week 1-2:   2A (auth + invite + claim)  ← unblocks everything else
-Week 3:     2D (real practitioners onboarded via 2A)
-Week 4:     2B (booking — Cal.com embed path, fastest credible UX)
-Week 5-6:   2C (payments) iff Blake's WAP/Whop work has landed
-Week 7:     2E (search hardening + extended facets) — interleaved with above
+✅ 2A   DONE 2026-05-25 — auth + invite + claim
+⏳ 2B   IN PROGRESS — Cal.com booking integration (next)
+□  2C   Whop payments (after 2B, gated on Blake's WAP/Whop work)
+□  2D   Real practitioners onboarded via 2A (operator + Amy's curated list)
+□  2E   Search hardening + extended facets (interleaved)
 ```
 
-Total: ~7 weeks to Phase 2 complete. Adjust based on Amy + Blake input post-5/28.
+Original "Week 1-2" estimate for 2A → actual: one focused-session day. Pace is accelerated; revisit timeline after 2B lands.
 
 ## Hard prerequisites (operator-side, before any Phase 2 work)
 

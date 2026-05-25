@@ -18,7 +18,9 @@
 - Sentry · Resend
 - **Typesense Cloud** (cluster `1rt8fj5i9epv2s6mp`) + `react-instantsearch` + `react-instantsearch-nextjs` — live, env vars provisioned on Vercel for all 3 scopes
 
-**Block A + B + C shipped**:
+**Phase 2A also shipped** (2026-05-25): practitioner authentication via NextAuth + Resend magic-link, invitation system at `/admin/invites`, accept-invite flow → `/onboarding` → `/practitioners/[slug]/edit`. Middleware gates `/admin/*` + `/practitioners/[slug]/edit` + `/onboarding`. `ADMIN_EMAILS` env auto-promotes operator (jgatlit@gmail.com) on first sign-in.
+
+**Phase 1 (Block A + B + C) shipped**:
 - `/practitioners/[slug]` — Linktree-style profile, server-rendered (Block A)
 - `/search` — InstantSearchNext + parametric/adaptive facets: keyword + typo tolerance, specialty (multi-select), city/state (single-select scoped), range facet (yearsInPractice), faceted autocomplete, mobile Sheet, URL state, sort
 - Seed data: 18 practitioners across 13 cities (61% GA per operator directive)
