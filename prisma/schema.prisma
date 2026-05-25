@@ -39,6 +39,21 @@ enum Role {
   ADMIN
 }
 
+// Wedge 2C — Whop Platforms KYC lifecycle (sub-merchant company verification)
+enum WhopKycStatus {
+  NOT_STARTED
+  PENDING
+  VERIFIED
+  REJECTED
+}
+
+// Wedge 2C — WhopProduct interval semantics
+enum ProductInterval {
+  ONE_TIME
+  MONTHLY
+  ANNUAL
+}
+
 model Account {
   userId            String
   type              String
@@ -101,6 +116,14 @@ model Practitioner {
   // Multi-tenant by construction: each practitioner brings their own scheduling provider.
   bookingUrl String?
 
+  // Wedge 2C — Whop Platforms sub-merchant (Connected Account)
+  // whopCompanyId is the practitioner's sub-merchant company on HHE's Whop platform parent.
+  // KYC + payouts handled by Whop; HHE collects an application_fee per checkout (see WhopProduct).
+  whopCompanyId      String?       @unique
+  whopKycStatus      WhopKycStatus @default(NOT_STARTED)
+  whopKycCompletedAt DateTime?
+  whopProducts       WhopProduct[]
+
   // Invite-only model (5/15 Amy reframe)
   invitedBy   String?
   invitedAt   DateTime?
@@ -129,6 +152,44 @@ model PractitionerSpecialty {
   specialty      Specialty    @relation(fields: [specialtyId], references: [id], onDelete: Cascade)
 
   @@id([practitionerId, specialtyId])
+}
+
+// Wedge 2C — Whop product (offering) attached to a practitioner's sub-merchant company
+model WhopProduct {
+  id                   String          @id @default(cuid())
+  practitionerId       String
+  practitioner         Practitioner    @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
+
+  whopProductId        String          @unique  // products.create response
+  whopPlanId           String?                  // plans.create response
+  whopCheckoutConfigId String?                  // checkoutConfigurations.create response
+  purchaseUrl          String?                  // Whop-hosted checkout URL
+
+  title                String
+  description          String?
+  priceUsdCents        Int             // always in cents; render as $X.XX
+  applicationFeeCents  Int             @default(0)  // HHE platform fee per transaction
+  interval             ProductInterval @default(ONE_TIME)
+
+  active               Boolean         @default(true)
+  archived             Boolean         @default(false)
+  createdAt            DateTime        @default(now())
+  updatedAt            DateTime        @updatedAt
+
+  @@index([practitionerId, active])
+}
+
+// Wedge 2C — webhook event log (dedup + audit + retry surface)
+model WhopWebhookEvent {
+  id          String    @id @default(cuid())
+  whopEventId String    @unique
+  eventType   String
+  payload     Json
+  receivedAt  DateTime  @default(now())
+  processedAt DateTime?
+  error       String?
+
+  @@index([eventType, processedAt])
 }
 
 // Wedge 2A — practitioner invitation system
