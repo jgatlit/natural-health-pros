@@ -1,7 +1,8 @@
 'use client';
 
 import { InstantSearchNext } from 'react-instantsearch-nextjs';
-import { useMemo } from 'react';
+import { useEffect, useMemo } from 'react';
+import { useInstantSearch } from 'react-instantsearch';
 import { createSearchAdapter, TYPESENSE_COLLECTION } from '@/lib/typesense-search';
 import { SearchBox } from './SearchBox';
 import { RefinementGroup } from './RefinementGroup';
@@ -10,6 +11,22 @@ import { CurrentRefinements } from './CurrentRefinements';
 import { SortBy } from './SortBy';
 import { SearchResults, ResultStats } from './SearchResults';
 import { MobileFiltersSheet } from './MobileFiltersSheet';
+
+/**
+ * react-instantsearch-nextjs doesn't always fire the initial search on
+ * client-side route transitions (e.g. clicking a <Link> from / to /search).
+ * Direct nav works because SSR pre-renders state; client-side mounts can
+ * arrive with empty UI state + no auto-search. Force a refresh on mount.
+ */
+function EnsureInitialSearch() {
+  const { refresh } = useInstantSearch();
+  useEffect(() => {
+    refresh();
+    // run-once on mount; we want exactly one extra search to kick off data
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+  return null;
+}
 
 export function SearchExperience() {
   const searchClient = useMemo(() => createSearchAdapter().searchClient, []);
@@ -21,6 +38,7 @@ export function SearchExperience() {
       routing={true}
       future={{ preserveSharedStateOnUnmount: true }}
     >
+      <EnsureInitialSearch />
       <div className="space-y-4">
         <SearchBox />
 

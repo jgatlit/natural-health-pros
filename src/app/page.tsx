@@ -66,13 +66,20 @@ export default async function Home() {
             practitioners trained through Holistic Health Educators.
           </p>
           <div className="mt-7 flex flex-col items-center justify-center gap-3 sm:flex-row">
-            <Link
+            {/*
+              Native <a> instead of next/link <Link>: client-side nav into
+              /search can fail to trigger InstantSearchNext's initial search
+              request. Full page load guarantees SSR boot. See
+              src/components/search/SearchExperience.tsx EnsureInitialSearch
+              for the in-component defense.
+            */}
+            <a
               href="/search"
               className="inline-flex h-11 items-center gap-2 rounded-lg bg-primary px-5 text-sm font-medium text-primary-foreground shadow-sm transition-colors hover:bg-primary/90"
             >
               <Search className="h-4 w-4" />
               Browse the directory
-            </Link>
+            </a>
             <p className="text-xs text-muted-foreground">
               {totalCount} HHE-trained practitioners
             </p>
@@ -86,13 +93,13 @@ export default async function Home() {
             <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
               Recently joined
             </h2>
-            <Link
+            <a
               href="/search"
               className="inline-flex items-center gap-1 text-xs font-medium text-foreground/80 underline-offset-2 hover:underline"
             >
               See all
               <ArrowRight className="h-3 w-3" aria-hidden />
-            </Link>
+            </a>
           </div>
           <ul className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             {featured.map((p) => {
