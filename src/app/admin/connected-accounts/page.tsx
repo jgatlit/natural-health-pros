@@ -1,9 +1,10 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { ArrowLeft, Check, Clock, X, MinusCircle } from 'lucide-react';
+import { ArrowLeft, Check, Clock, X, MinusCircle, AlertCircle } from 'lucide-react';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
 import { isWhopPlatformsReady } from '@/lib/whop';
+import { isProfileComplete } from '@/lib/practitioner-indexer';
 import type { WhopKycStatus } from '@prisma/client';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
@@ -20,6 +21,7 @@ export default async function ConnectedAccountsPage() {
     include: {
       user: { select: { email: true } },
       whopProducts: { where: { archived: false } },
+      specialties: { select: { specialtyId: true } },
     },
     orderBy: [{ whopKycStatus: 'asc' }, { displayName: 'asc' }],
   });
@@ -84,31 +86,43 @@ export default async function ConnectedAccountsPage() {
             </p>
           ) : (
             <ul className="divide-y">
-              {practitioners.map((p) => (
-                <li key={p.id} className="flex items-center gap-3 px-5 py-3">
-                  <div className="min-w-0 flex-1">
-                    <Link
-                      href={`/practitioners/${p.slug}`}
-                      className="truncate text-sm font-medium underline-offset-2 hover:underline"
-                    >
-                      {p.displayName}
-                    </Link>
-                    <p className="truncate text-xs text-muted-foreground">
-                      {p.user.email}
-                      {p.whopCompanyId && ` · ${p.whopCompanyId}`}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-2 text-xs text-muted-foreground">
-                    {p.whopProducts.length > 0 && (
-                      <span className="tabular-nums">
-                        {p.whopProducts.length} offering
-                        {p.whopProducts.length === 1 ? '' : 's'}
-                      </span>
-                    )}
-                    <KycStatusBadge status={p.whopKycStatus} />
-                  </div>
-                </li>
-              ))}
+              {practitioners.map((p) => {
+                const complete = isProfileComplete(p);
+                return (
+                  <li key={p.id} className="flex items-center gap-3 px-5 py-3">
+                    <div className="min-w-0 flex-1">
+                      <Link
+                        href={`/practitioners/${p.slug}`}
+                        className="truncate text-sm font-medium underline-offset-2 hover:underline"
+                      >
+                        {p.displayName || <span className="italic text-muted-foreground">(no name)</span>}
+                      </Link>
+                      <p className="truncate text-xs text-muted-foreground">
+                        {p.user.email}
+                        {p.whopCompanyId && ` · ${p.whopCompanyId}`}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                      {!complete && (
+                        <Badge
+                          variant="outline"
+                          className="gap-1 border-amber-500/40 bg-amber-500/10 text-[10px] uppercase tracking-wider text-amber-700 dark:text-amber-400"
+                        >
+                          <AlertCircle className="h-3 w-3" />
+                          Profile incomplete
+                        </Badge>
+                      )}
+                      {p.whopProducts.length > 0 && (
+                        <span className="tabular-nums">
+                          {p.whopProducts.length} offering
+                          {p.whopProducts.length === 1 ? '' : 's'}
+                        </span>
+                      )}
+                      <KycStatusBadge status={p.whopKycStatus} />
+                    </div>
+                  </li>
+                );
+              })}
             </ul>
           )}
         </Card>

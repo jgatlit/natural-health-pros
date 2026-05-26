@@ -1,9 +1,10 @@
 import { notFound, redirect } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Check, CreditCard, Clock } from 'lucide-react';
+import { ArrowLeft, Check, CreditCard, Clock, AlertCircle, X } from 'lucide-react';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
 import { isWhopPlatformsReady } from '@/lib/whop';
+import { profileCompletenessSignals } from '@/lib/practitioner-indexer';
 import { Card } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
@@ -30,6 +31,16 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
     },
   });
   if (!practitioner) notFound();
+
+  const completeness = profileCompletenessSignals(practitioner);
+  type MissingField = { key: keyof typeof completeness; label: string };
+  const allFields: MissingField[] = [
+    { key: 'hasDisplayName', label: 'Display name' },
+    { key: 'hasCity', label: 'City' },
+    { key: 'hasBio', label: 'Bio (20+ characters)' },
+    { key: 'hasSpecialty', label: 'At least one specialty' },
+  ];
+  const missing = allFields.filter((f) => !completeness[f.key]);
 
   const isOwner = practitioner.userId === session.user.id;
   const isAdmin = session.user.role === 'ADMIN';
@@ -65,6 +76,42 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
             <p className="text-sm">
               <strong>Welcome to HHE Directory.</strong> Fill in your profile below to make it
               public.
+            </p>
+          </Card>
+        )}
+
+        {missing.length > 0 && (
+          <Card className="border-amber-500/30 bg-amber-500/5 p-4">
+            <div className="flex items-start gap-3">
+              <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-amber-500/15">
+                <AlertCircle className="h-4 w-4 text-amber-700 dark:text-amber-400" aria-hidden />
+              </span>
+              <div className="flex-1 space-y-2">
+                <div>
+                  <p className="text-sm font-semibold">Profile in progress</p>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    Your profile is hidden from search + the landing page until these fields are
+                    filled. Direct profile links still work.
+                  </p>
+                </div>
+                <ul className="space-y-0.5 text-xs">
+                  {missing.map((f) => (
+                    <li key={f.key} className="flex items-center gap-1.5">
+                      <X className="h-3 w-3 shrink-0 text-destructive" aria-hidden />
+                      <span>{f.label}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            </div>
+          </Card>
+        )}
+
+        {missing.length === 0 && (
+          <Card className="border-green-500/30 bg-green-500/5 p-3">
+            <p className="flex items-center gap-1.5 text-xs">
+              <Check className="h-3.5 w-3.5 text-green-600" />
+              Profile complete — visible on /search and the landing page.
             </p>
           </Card>
         )}

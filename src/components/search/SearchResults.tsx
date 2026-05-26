@@ -1,21 +1,59 @@
 'use client';
 
+import { useEffect, useRef, useState } from 'react';
 import { useHits, useInstantSearch, useStats } from 'react-instantsearch';
 import { Skeleton } from '@/components/ui/skeleton';
 import { PractitionerHitCard, type PractitionerHit } from './PractitionerHit';
 
-// Algolia's standard NoResultsBoundary pattern: InstantSearch sets
-// `results.__isArtificial` to true on the first synchronous render BEFORE the
-// initial request returns. Without checking it, the page shows
-// "0 practitioners / No results match" for a beat before the actual data arrives.
-function hasFirstResponse(results: { __isArtificial?: boolean } | undefined): boolean {
-  return !!results && !results.__isArtificial;
+/**
+ * Track whether at least one real search response has landed.
+ *
+ * Previous attempt used results.__isArtificial — that flag never cleared in
+ * react-instantsearch@7 + react-instantsearch-nextjs, leaving the skeleton on
+ * forever. This implementation watches useInstantSearch().status: the moment
+ * it transitions to 'loading' OR back to 'idle' with nbHits > 0, we know a
+ * search ran. A 250 ms timeout fallback ensures we never gate the empty
+ * state forever even if the search engine is silent for some reason.
+ */
+function useFirstResponseSeen(): boolean {
+  const [seen, setSeen] = useState(false);
+  const seenRef = useRef(false);
+  const { status, results } = useInstantSearch();
+  const { nbHits } = useStats();
+
+  useEffect(() => {
+    if (seenRef.current) return;
+    // Any of these signals means InstantSearch is actively fetching or has data.
+    const responded =
+      status === 'loading' ||
+      status === 'stalled' ||
+      nbHits > 0 ||
+      (results && (results as { processingTimeMS?: number }).processingTimeMS !== undefined);
+    if (responded) {
+      seenRef.current = true;
+      setSeen(true);
+    }
+  }, [status, nbHits, results]);
+
+  // Safety net: regardless of what InstantSearch reports, lift the gate after
+  // 250 ms so we never trap users in the loading state.
+  useEffect(() => {
+    const t = setTimeout(() => {
+      if (!seenRef.current) {
+        seenRef.current = true;
+        setSeen(true);
+      }
+    }, 250);
+    return () => clearTimeout(t);
+  }, []);
+
+  return seen;
 }
 
 export function ResultStats() {
   const { nbHits } = useStats();
-  const { results } = useInstantSearch();
-  if (!hasFirstResponse(results)) {
+  const seen = useFirstResponseSeen();
+  if (!seen) {
     return <Skeleton className="h-4 w-24" />;
   }
   return (
@@ -27,12 +65,11 @@ export function ResultStats() {
 
 export function SearchResults() {
   const { items } = useHits<PractitionerHit>();
-  const { results, status } = useInstantSearch();
-
-  const initialLoad = !hasFirstResponse(results);
+  const { status } = useInstantSearch();
+  const seen = useFirstResponseSeen();
   const refreshing = status === 'loading' || status === 'stalled';
 
-  if (initialLoad) {
+  if (!seen) {
     return <SearchResultsSkeleton />;
   }
 
@@ -65,7 +102,11 @@ export function SearchResults() {
 
 function SearchResultsSkeleton() {
   return (
-    <ul className="grid grid-cols-1 gap-3 md:grid-cols-2" aria-busy aria-label="Loading practitioners">
+    <ul
+      className="grid grid-cols-1 gap-3 md:grid-cols-2"
+      aria-busy
+      aria-label="Loading practitioners"
+    >
       {Array.from({ length: 6 }).map((_, i) => (
         <li key={i}>
           <Skeleton className="h-28 w-full rounded-lg" />

@@ -17,8 +17,16 @@ function initials(name: string) {
 }
 
 async function getFeaturedPractitioners() {
+  // Completeness gate (Phase 2.5): only feature practitioners with name + city +
+  // bio + ≥1 specialty. Mirrors the Typesense filter used on /search.
   return prisma.practitioner.findMany({
     take: 4,
+    where: {
+      displayName: { not: '' },
+      cityId: { not: null },
+      bio: { not: null },
+      specialties: { some: {} },
+    },
     orderBy: { acceptedAt: 'desc' },
     include: {
       city: true,
@@ -27,9 +35,20 @@ async function getFeaturedPractitioners() {
   });
 }
 
+async function getCompletePractitionerCount() {
+  return prisma.practitioner.count({
+    where: {
+      displayName: { not: '' },
+      cityId: { not: null },
+      bio: { not: null },
+      specialties: { some: {} },
+    },
+  });
+}
+
 export default async function Home() {
   const featured = await getFeaturedPractitioners();
-  const totalCount = await prisma.practitioner.count();
+  const totalCount = await getCompletePractitionerCount();
 
   return (
     <main className="min-h-screen bg-muted/30">

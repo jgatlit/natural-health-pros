@@ -21,7 +21,43 @@ export type PractitionerDoc = {
   acceptedAt: number;
   yearsInPractice?: number;
   searchText?: string;
+  isComplete: boolean;
 };
+
+const MIN_BIO_LENGTH = 20;
+
+/**
+ * Completeness gate (Phase 2.5): the four signals that make a profile
+ * worth showing on public discovery surfaces. Direct profile URLs still
+ * work for incomplete practitioners (shareability preserved) — they're
+ * just hidden from /search + / recently-joined until the practitioner
+ * fills these in.
+ */
+export type CompletenessSignals = {
+  hasDisplayName: boolean;
+  hasCity: boolean;
+  hasBio: boolean;
+  hasSpecialty: boolean;
+};
+
+export function profileCompletenessSignals(p: {
+  displayName: string | null;
+  cityId: string | null;
+  bio: string | null;
+  specialties: { specialtyId: string }[];
+}): CompletenessSignals {
+  return {
+    hasDisplayName: !!p.displayName && p.displayName.trim().length > 0,
+    hasCity: !!p.cityId,
+    hasBio: !!p.bio && p.bio.trim().length >= MIN_BIO_LENGTH,
+    hasSpecialty: p.specialties.length >= 1,
+  };
+}
+
+export function isProfileComplete(p: Parameters<typeof profileCompletenessSignals>[0]): boolean {
+  const s = profileCompletenessSignals(p);
+  return s.hasDisplayName && s.hasCity && s.hasBio && s.hasSpecialty;
+}
 
 export function toTypesenseDoc(p: PractitionerForIndex): PractitionerDoc {
   const specialtyNames = new Set<string>();
@@ -51,6 +87,7 @@ export function toTypesenseDoc(p: PractitionerForIndex): PractitionerDoc {
     acceptedAt: p.acceptedAt ? Math.floor(p.acceptedAt.getTime() / 1000) : 0,
     yearsInPractice: p.yearsInPractice ?? undefined,
     searchText: p.searchText ?? undefined,
+    isComplete: isProfileComplete(p),
   };
 }
 

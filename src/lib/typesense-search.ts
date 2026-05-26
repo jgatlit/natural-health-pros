@@ -23,6 +23,10 @@ export function createSearchAdapter() {
       highlight_full_fields: 'displayName,cityName,specialtyNames',
       facet_by: 'specialtyNames,cityName,cityState,yearsInPractice',
       max_facet_values: 50,
+      // Phase 2.5 completeness gate: only show practitioners with name + city +
+      // bio (≥20 chars) + ≥1 specialty in public discovery. Direct profile URLs
+      // still work for incomplete profiles — they're just hidden from search.
+      filter_by: 'isComplete:=true',
     },
   });
 }

@@ -12,6 +12,7 @@
     { "name": "specialtySlugs", "type": "string[]", "facet": true, "index": true, "optional": true },
     { "name": "acceptedAt", "type": "int64", "sort": true },
     { "name": "yearsInPractice", "type": "int32", "facet": true, "sort": true, "optional": true },
-    { "name": "searchText", "type": "string", "index": true, "optional": true }
+    { "name": "searchText", "type": "string", "index": true, "optional": true },
+    { "name": "isComplete", "type": "bool", "facet": false, "index": true }
   ]
 }
