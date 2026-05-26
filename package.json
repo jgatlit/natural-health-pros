@@ -7,6 +7,9 @@
   },
   "scripts": {
     "dev": "next dev",
+    "docs:routes": "tsx scripts/generate-routes-index.ts",
+    "docs:routes:check": "tsx scripts/generate-routes-index.ts --check",
+    "prebuild": "tsx scripts/generate-routes-index.ts",
     "build": "prisma migrate deploy && prisma generate && next build",
     "start": "next start",
     "lint": "next lint",

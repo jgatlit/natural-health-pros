@@ -14,9 +14,6 @@
         --accent: oklch(0.97 0 0);
         --primary: oklch(0.205 0 0);
         --primary-fg: oklch(0.985 0 0);
-        --success: oklch(0.6 0.13 145);
-        --warning: oklch(0.7 0.13 70);
-        --destructive: oklch(0.577 0.245 27.325);
       }
       * { box-sizing: border-box; }
       body {
@@ -27,113 +24,44 @@
         padding: 0;
         line-height: 1.5;
       }
-      main {
-        max-width: 960px;
-        margin: 0 auto;
-        padding: 40px 20px 80px;
-      }
+      main { max-width: 960px; margin: 0 auto; padding: 40px 20px 80px; }
       header { margin-bottom: 32px; }
-      h1 {
-        font-size: 28px;
-        font-weight: 600;
-        letter-spacing: -0.02em;
-        margin: 0 0 6px;
-      }
+      h1 { font-size: 28px; font-weight: 600; letter-spacing: -0.02em; margin: 0 0 6px; }
       header p { color: var(--muted); font-size: 14px; margin: 0; }
       .toggle {
-        display: inline-flex;
-        background: var(--card);
-        border: 1px solid var(--border);
-        border-radius: 8px;
-        padding: 2px;
-        margin: 20px 0;
-        gap: 2px;
+        display: inline-flex; background: var(--card); border: 1px solid var(--border);
+        border-radius: 8px; padding: 2px; margin: 20px 0; gap: 2px;
       }
       .toggle button {
-        background: transparent;
-        border: 0;
-        padding: 7px 14px;
-        font-size: 13px;
-        font-weight: 500;
-        color: var(--muted);
-        cursor: pointer;
-        border-radius: 6px;
+        background: transparent; border: 0; padding: 7px 14px; font-size: 13px;
+        font-weight: 500; color: var(--muted); cursor: pointer; border-radius: 6px;
       }
-      .toggle button.active {
-        background: var(--primary);
-        color: var(--primary-fg);
-      }
-      .toggle button:not(.active):hover {
-        background: var(--accent);
-        color: var(--fg);
-      }
+      .toggle button.active { background: var(--primary); color: var(--primary-fg); }
+      .toggle button:not(.active):hover { background: var(--accent); color: var(--fg); }
       .group { margin-bottom: 36px; }
       .group h2 {
-        font-size: 11px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.08em;
-        color: var(--muted);
-        margin: 0 0 12px;
+        font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.08em;
+        color: var(--muted); margin: 0 0 12px;
       }
-      .group p.intro {
-        font-size: 14px;
-        color: var(--muted);
-        margin: 0 0 14px;
-      }
+      .group p.intro { font-size: 14px; color: var(--muted); margin: 0 0 14px; }
       .route {
-        background: var(--card);
-        border: 1px solid var(--border);
-        border-radius: 10px;
-        padding: 14px 16px;
-        margin-bottom: 8px;
-        display: grid;
-        grid-template-columns: 1fr auto;
-        gap: 12px;
-        align-items: start;
+        background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+        padding: 14px 16px; margin-bottom: 8px;
+        display: grid; grid-template-columns: 1fr auto; gap: 12px; align-items: start;
       }
-      .route .path {
-        font-family: 'SF Mono', Menlo, monospace;
-        font-size: 13px;
-        font-weight: 600;
-      }
+      .route .path { font-family: 'SF Mono', Menlo, monospace; font-size: 13px; font-weight: 600; }
       .route .path a {
-        color: var(--fg);
-        text-decoration: none;
-        background: var(--accent);
-        padding: 2px 8px;
-        border-radius: 5px;
-        display: inline-block;
+        color: var(--fg); text-decoration: none; background: var(--accent);
+        padding: 2px 8px; border-radius: 5px; display: inline-block;
       }
-      .route .path a:hover {
-        background: var(--border);
-      }
-      .route .desc {
-        font-size: 13px;
-        color: var(--muted);
-        margin: 4px 0 0;
-      }
-      .route .desc strong {
-        color: var(--fg);
-        font-weight: 500;
-      }
-      .badges {
-        display: flex;
-        gap: 4px;
-        flex-wrap: wrap;
-        justify-content: flex-end;
-        align-items: center;
-      }
+      .route .path a:hover { background: var(--border); }
+      .route .desc { font-size: 13px; color: var(--muted); margin: 4px 0 0; }
+      .route .desc strong { color: var(--fg); font-weight: 500; }
+      .badges { display: flex; gap: 4px; flex-wrap: wrap; justify-content: flex-end; align-items: center; }
       .badge {
-        font-size: 10px;
-        font-weight: 600;
-        text-transform: uppercase;
-        letter-spacing: 0.04em;
-        padding: 3px 8px;
-        border-radius: 999px;
-        border: 1px solid var(--border);
-        background: var(--card);
-        white-space: nowrap;
+        font-size: 10px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em;
+        padding: 3px 8px; border-radius: 999px; border: 1px solid var(--border);
+        background: var(--card); white-space: nowrap;
       }
       .badge.public { background: var(--card); color: var(--muted); }
       .badge.auth { background: oklch(0.95 0.05 230); color: oklch(0.4 0.1 230); border-color: oklch(0.85 0.05 230); }
@@ -141,33 +69,18 @@
       .badge.api { background: var(--accent); color: var(--muted); }
       .badge.scaffold { background: oklch(0.95 0.05 70); color: oklch(0.4 0.1 70); border-color: oklch(0.85 0.05 70); }
       .badge.live { background: oklch(0.95 0.05 145); color: oklch(0.4 0.1 145); border-color: oklch(0.85 0.05 145); }
-      footer {
-        margin-top: 40px;
-        padding-top: 24px;
-        border-top: 1px solid var(--border);
-        font-size: 12px;
-        color: var(--muted);
-      }
+      footer { margin-top: 40px; padding-top: 24px; border-top: 1px solid var(--border); font-size: 12px; color: var(--muted); }
       footer a { color: var(--muted); }
-      code {
-        font-family: 'SF Mono', Menlo, monospace;
-        font-size: 11px;
-        background: var(--accent);
-        padding: 1px 5px;
-        border-radius: 3px;
-      }
-      .sample-slugs {
-        font-size: 12px;
-        color: var(--muted);
-        margin-top: 6px;
-      }
+      code { font-family: 'SF Mono', Menlo, monospace; font-size: 11px; background: var(--accent); padding: 1px 5px; border-radius: 3px; }
+      .sample-slugs { font-size: 12px; color: var(--muted); margin-top: 6px; }
       .sample-slugs a {
-        color: var(--muted);
-        text-decoration: underline;
-        text-underline-offset: 2px;
-        margin-right: 8px;
+        color: var(--muted); text-decoration: underline; text-underline-offset: 2px; margin-right: 8px;
       }
       .sample-slugs a:hover { color: var(--fg); }
+      .meta-note {
+        font-size: 11px; color: var(--muted); margin-top: 8px;
+        font-family: 'SF Mono', Menlo, monospace;
+      }
     </style>
   </head>
   <body>
@@ -175,145 +88,91 @@
       <header>
         <h1>HHE Directory · Route Index</h1>
         <p>
-          Every public, practitioner-facing, and admin-facing route in the app.
-          Toggle between production and local dev URLs.
+          Auto-generated from src/app/ + scripts/routes-meta.ts. Re-runs on every
+          <code>npm run build</code>.
         </p>
         <div class="toggle" role="tablist" aria-label="Environment">
           <button id="env-prod" class="active" type="button">Production</button>
           <button id="env-local" type="button">Local (localhost:3000)</button>
         </div>
+        <p class="meta-note">Generated 2026-05-26T14:57:10.659Z</p>
       </header>
 
-      <!-- PUBLIC -->
       <section class="group">
         <h2>Public — no auth required</h2>
-        <p class="intro">
-          Anyone with the URL can reach these. Most of the user-discovery journey lives here.
-        </p>
-
+        <p class="intro">Anyone with the URL can reach these. Most of the user-discovery journey lives here.</p>
+        
         <div class="route">
           <div>
             <div class="path"><a href="" data-route="/" target="_blank">/</a></div>
-            <p class="desc">
-              <strong>Landing.</strong> Hero, "Find a practitioner you can trust",
-              "Browse the directory" CTA → /search, recently-joined practitioner cards (4),
-              invite-only directory note, link to holistichealthhq.com.
-            </p>
+            <p class="desc"><strong>Landing.</strong> Hero, "Find a practitioner you can trust", "Browse the directory" CTA → /search, recently-joined practitioner cards (4), invite-only directory note, link to holistichealthhq.com.</p>
+            
           </div>
           <div class="badges">
             <span class="badge public">Public</span>
             <span class="badge live">Live</span>
           </div>
         </div>
-
         <div class="route">
           <div>
             <div class="path"><a href="" data-route="/search" target="_blank">/search</a></div>
-            <p class="desc">
-              <strong>Faceted search.</strong> InstantSearchNext + Typesense Cloud. Specialty
-              (multi-select), city + state (single-select), years-in-practice range, faceted
-              autocomplete, mobile Sheet, URL state, typo tolerance.
-            </p>
+            <p class="desc"><strong>Faceted search.</strong> InstantSearchNext + Typesense Cloud. Specialty (multi-select), city + state (single-select), years-in-practice range, faceted autocomplete, mobile Sheet, URL state, typo tolerance.</p>
+            
           </div>
           <div class="badges">
             <span class="badge public">Public</span>
             <span class="badge live">Live</span>
           </div>
         </div>
-
-        <div class="route">
-          <div>
-            <div class="path">
-              <a href="" data-route="/practitioners/maya-sullivan" target="_blank">/practitioners/[slug]</a>
-            </div>
-            <p class="desc">
-              <strong>Practitioner profile.</strong> Linktree-style — avatar, name + city,
-              specialty badges, "Book intro consult" (real if bookingUrl set), "Browse
-              offerings" + "Request invoice" (placeholders pending Wedge 2C), bio.
-            </p>
-            <div class="sample-slugs">
-              Sample slugs:
-              <a href="" data-route="/practitioners/maya-sullivan" target="_blank">maya-sullivan</a>
-              <a href="" data-route="/practitioners/cameron-liddell" target="_blank">cameron-liddell</a>
-              <a href="" data-route="/practitioners/indira-ashland" target="_blank">indira-ashland</a>
-              <a href="" data-route="/practitioners/jordan-beaumont" target="_blank">jordan-beaumont</a>
-              <a href="" data-route="/practitioners/solene-marchetti" target="_blank">solene-marchetti</a>
-            </div>
-          </div>
-          <div class="badges">
-            <span class="badge public">Public</span>
-            <span class="badge live">Live</span>
-          </div>
-        </div>
-      </section>
-
-      <!-- AUTH ENTRY POINTS -->
-      <section class="group">
-        <h2>Auth entry points — public but unhelpful without an invite</h2>
-        <p class="intro">
-          Wedge 2A surfaces. Practitioners typically reach these via the invitation email link.
-          Anyone can visit /auth/signin, but without an invitation acceptance behind it, the
-          magic link only authenticates an empty CLIENT-role account.
-        </p>
-
-        <div class="route">
-          <div>
-            <div class="path"><a href="" data-route="/auth/signin" target="_blank">/auth/signin</a></div>
-            <p class="desc">
-              <strong>Sign-in form.</strong> Magic-link request via Resend. Email field +
-              "Send magic link" button. Redirects to /auth/verify-request on submit.
-            </p>
-          </div>
-          <div class="badges">
-            <span class="badge public">Public</span>
-            <span class="badge live">Live</span>
-          </div>
-        </div>
-
-        <div class="route">
-          <div>
-            <div class="path">
-              <a href="" data-route="/auth/verify-request" target="_blank">/auth/verify-request</a>
-            </div>
-            <p class="desc">
-              <strong>"Check your inbox" page.</strong> Shown after magic-link request. Link
-              expires in 24h.
-            </p>
-          </div>
-          <div class="badges">
-            <span class="badge public">Public</span>
-            <span class="badge live">Live</span>
-          </div>
-        </div>
-
         <div class="route">
           <div>
             <div class="path"><a href="" data-route="/auth/error" target="_blank">/auth/error</a></div>
-            <p class="desc">
-              <strong>Auth error page.</strong> Shown on verification failure, access denied,
-              or configuration errors. Has "Back to sign-in" link.
-            </p>
+            <p class="desc"><strong>Auth error page.</strong> Shown on verification failure, access denied, or configuration errors. Has "Back to sign-in" link.</p>
+            
           </div>
           <div class="badges">
             <span class="badge public">Public</span>
             <span class="badge live">Live</span>
           </div>
         </div>
-
         <div class="route">
           <div>
-            <div class="path">
-              <a href="" data-route="/auth/invite-accept/EXAMPLE_TOKEN" target="_blank">/auth/invite-accept/[token]</a>
-            </div>
-            <p class="desc">
-              <strong>Invitation acceptance landing.</strong> Validates the token, shows
-              "You're invited" with the inviter's name, "Send sign-in link" button. On click,
-              calls signIn('resend') with redirectTo=/onboarding?invitation=TOKEN.
-            </p>
-            <div class="sample-slugs">
-              Sample requires a real invitation token. Generate one via
-              <a href="" data-route="/admin/invites">/admin/invites</a>.
-            </div>
+            <div class="path"><a href="" data-route="/auth/signin" target="_blank">/auth/signin</a></div>
+            <p class="desc"><strong>Sign-in form.</strong> Magic-link request via Resend. Email field + "Send magic link" button. Redirects to /auth/verify-request on submit.</p>
+            
+          </div>
+          <div class="badges">
+            <span class="badge public">Public</span>
+            <span class="badge live">Live</span>
+          </div>
+        </div>
+        <div class="route">
+          <div>
+            <div class="path"><a href="" data-route="/auth/verify-request" target="_blank">/auth/verify-request</a></div>
+            <p class="desc"><strong>"Check your inbox" page.</strong> Shown after magic-link request. Link expires in 24h.</p>
+            
+          </div>
+          <div class="badges">
+            <span class="badge public">Public</span>
+            <span class="badge live">Live</span>
+          </div>
+        </div>
+        <div class="route">
+          <div>
+            <div class="path"><a href="" data-route="/practitioners/maya-sullivan" target="_blank">/practitioners/[slug]</a></div>
+            <p class="desc"><strong>Practitioner profile.</strong> Linktree-style — avatar, name + city, specialty badges, "Book intro consult" (real if bookingUrl set), "Browse offerings" + "Request invoice" (placeholders pending Wedge 2C), bio.</p>
+            <div class="sample-slugs">Sample slugs: <a href="" data-route="/practitioners/cameron-liddell" target="_blank">cameron-liddell</a><a href="" data-route="/practitioners/indira-ashland" target="_blank">indira-ashland</a><a href="" data-route="/practitioners/jordan-beaumont" target="_blank">jordan-beaumont</a><a href="" data-route="/practitioners/solene-marchetti" target="_blank">solene-marchetti</a></div>
+          </div>
+          <div class="badges">
+            <span class="badge public">Public</span>
+            <span class="badge live">Live</span>
+          </div>
+        </div>
+        <div class="route">
+          <div>
+            <div class="path"><a href="" data-route="/auth/invite-accept/EXAMPLE_TOKEN" target="_blank">/auth/invite-accept/[token]</a></div>
+            <p class="desc"><strong>Invitation acceptance landing.</strong> Validates the token, shows "You're invited" with the inviter's name, "Send sign-in link" button. On click, calls signIn('resend') with redirectTo=/onboarding?invitation=TOKEN.</p>
+            
           </div>
           <div class="badges">
             <span class="badge public">Public</span>
@@ -322,46 +181,26 @@
         </div>
       </section>
 
-      <!-- PRACTITIONER-FACING -->
       <section class="group">
         <h2>Practitioner-facing — auth required</h2>
-        <p class="intro">
-          Wedge 2A self-service. Middleware-gated to require a session; in-page ownership check
-          ensures only the practitioner themselves (or an admin) can edit their profile.
-        </p>
-
+        <p class="intro">Wedge 2A self-service. Middleware-gated to require a session; in-page ownership check ensures only the practitioner themselves (or an admin) can edit their profile.</p>
+        
         <div class="route">
           <div>
-            <div class="path">
-              <a href="" data-route="/onboarding?invitation=EXAMPLE_TOKEN" target="_blank">/onboarding?invitation=TOKEN</a>
-            </div>
-            <p class="desc">
-              <strong>Post-invite onboarding.</strong> Validates signed-in email matches the
-              invitation, creates a Practitioner record with a slug derived from email, sets
-              Role to PRACTITIONER, indexes Typesense, marks invitation accepted, redirects
-              to /practitioners/[slug]/edit?welcome=1.
-            </p>
+            <div class="path"><a href="" data-route="/onboarding?invitation=EXAMPLE_TOKEN" target="_blank">/onboarding</a></div>
+            <p class="desc"><strong>Post-invite onboarding.</strong> Validates signed-in email matches the invitation, creates a Practitioner record with a slug derived from email, sets Role to PRACTITIONER, indexes Typesense, marks invitation accepted, redirects to /practitioners/[slug]/edit?welcome=1.</p>
+            
           </div>
           <div class="badges">
             <span class="badge auth">Auth required</span>
             <span class="badge live">Live</span>
           </div>
         </div>
-
         <div class="route">
           <div>
-            <div class="path">
-              <a href="" data-route="/practitioners/maya-sullivan/edit" target="_blank">/practitioners/[slug]/edit</a>
-            </div>
-            <p class="desc">
-              <strong>Profile edit form.</strong> displayName, bio, city, yearsInPractice,
-              specialties (multi-select), bookingUrl (Cal.com / Calendly / etc.). Plus a
-              "Payments" section showing Whop sub-merchant status (currently "Pending access").
-              Reindexes Typesense on save.
-            </p>
-            <div class="sample-slugs">
-              Requires sign-in as the slug's owner OR as an admin.
-            </div>
+            <div class="path"><a href="" data-route="/practitioners/maya-sullivan/edit" target="_blank">/practitioners/[slug]/edit</a></div>
+            <p class="desc"><strong>Profile edit form.</strong> displayName, bio, city, yearsInPractice, specialties (multi-select), bookingUrl (Cal.com / Calendly / etc.). Plus a "Payments" section showing Whop sub-merchant status (currently "Pending access"). Reindexes Typesense on save.</p>
+            
           </div>
           <div class="badges">
             <span class="badge auth">Ownership required</span>
@@ -370,75 +209,48 @@
         </div>
       </section>
 
-      <!-- ADMIN -->
       <section class="group">
         <h2>Admin-facing — Role.ADMIN required</h2>
-        <p class="intro">
-          Operator surfaces. Middleware redirects non-admins to /auth/error?error=AccessDenied.
-          Admin auto-promoted from ADMIN_EMAILS env (currently jgatlit@gmail.com) on first
-          sign-in.
-        </p>
-
+        <p class="intro">Operator surfaces. Middleware redirects non-admins to /auth/error?error=AccessDenied. Admin auto-promoted from ADMIN_EMAILS env (currently jgatlit@gmail.com) on first sign-in.</p>
+        
         <div class="route">
           <div>
             <div class="path"><a href="" data-route="/admin" target="_blank">/admin</a></div>
-            <p class="desc">
-              <strong>Admin tools index.</strong> Three Linktree-style cards: Invitations,
-              Connected accounts (Whop), Whop webhooks. Live counts on each card.
-            </p>
+            <p class="desc"><strong>Admin tools index.</strong> Three Linktree-style cards: Invitations, Connected accounts (Whop), Whop webhooks. Live counts on each card.</p>
+            
           </div>
           <div class="badges">
             <span class="badge admin">Admin</span>
             <span class="badge live">Live</span>
           </div>
         </div>
-
         <div class="route">
           <div>
-            <div class="path">
-              <a href="" data-route="/admin/invites" target="_blank">/admin/invites</a>
-            </div>
-            <p class="desc">
-              <strong>Practitioner invitations.</strong> Send a new invitation by email (uses
-              Resend), list + status of pending/accepted/expired, revoke pending. Idempotent —
-              resending to same email reuses the existing token.
-            </p>
+            <div class="path"><a href="" data-route="/admin/invites" target="_blank">/admin/invites</a></div>
+            <p class="desc"><strong>Practitioner invitations.</strong> Send a new invitation by email (uses Resend), list + status of pending/accepted/expired, revoke pending. Idempotent — resending to same email reuses the existing token.</p>
+            
           </div>
           <div class="badges">
             <span class="badge admin">Admin</span>
             <span class="badge live">Live</span>
           </div>
         </div>
-
         <div class="route">
           <div>
-            <div class="path">
-              <a href="" data-route="/admin/connected-accounts" target="_blank">/admin/connected-accounts</a>
-            </div>
-            <p class="desc">
-              <strong>Whop sub-merchant lifecycle.</strong> 5-cell summary strip (Total /
-              Verified / Pending / Not-started / Rejected) + sorted list per practitioner with
-              KYC status badge + product count. Will populate once Whop Platforms access is
-              granted; currently all NOT_STARTED.
-            </p>
+            <div class="path"><a href="" data-route="/admin/whop-webhooks" target="_blank">/admin/whop-webhooks</a></div>
+            <p class="desc"><strong>Webhook event log.</strong> Last 100 WhopWebhookEvent rows ordered by receivedAt desc. Empty today; lists the 8 expected event types (company.created, account.verified, payment.succeeded, payout.paid, etc.) in a &lt;details&gt; element while empty.</p>
+            
           </div>
           <div class="badges">
             <span class="badge admin">Admin</span>
             <span class="badge scaffold">Scaffold</span>
           </div>
         </div>
-
         <div class="route">
           <div>
-            <div class="path">
-              <a href="" data-route="/admin/whop-webhooks" target="_blank">/admin/whop-webhooks</a>
-            </div>
-            <p class="desc">
-              <strong>Webhook event log.</strong> Last 100 WhopWebhookEvent rows ordered by
-              receivedAt desc. Empty today; lists the 8 expected event types
-              (company.created, account.verified, payment.succeeded, payout.paid, etc.) in
-              a &lt;details&gt; element while empty.
-            </p>
+            <div class="path"><a href="" data-route="/admin/connected-accounts" target="_blank">/admin/connected-accounts</a></div>
+            <p class="desc"><strong>Whop sub-merchant lifecycle.</strong> 5-cell summary strip (Total / Verified / Pending / Not-started / Rejected) + sorted list per practitioner with KYC status badge + product count. Will populate once Whop Platforms access is granted; currently all NOT_STARTED.</p>
+            
           </div>
           <div class="badges">
             <span class="badge admin">Admin</span>
@@ -447,52 +259,48 @@
         </div>
       </section>
 
-      <!-- API -->
       <section class="group">
         <h2>API routes — programmatic, not for humans</h2>
-        <p class="intro">
-          Not intended for direct browser visits, but listed for completeness.
-        </p>
-
-        <div class="route">
-          <div>
-            <div class="path">
-              <a href="" data-route="/api/auth/session" target="_blank">/api/auth/[...nextauth]</a>
-            </div>
-            <p class="desc">
-              <strong>NextAuth handlers.</strong> Catches /api/auth/signin, /signout, /session,
-              /callback/*, /csrf, etc. Magic-link verification callback runs here.
-            </p>
-          </div>
-          <div class="badges">
-            <span class="badge api">API</span>
-            <span class="badge live">Live</span>
-          </div>
-        </div>
-
+        <p class="intro">Not intended for direct browser visits, but listed for completeness.</p>
+        
         <div class="route">
           <div>
             <div class="path">/api/whop/webhook</div>
-            <p class="desc">
-              <strong>Whop webhook receiver.</strong> Designed in
-              docs/PHASE-2C-WHOP-DESIGN.md but not yet implemented. Will verify HMAC + dedupe
-              via whopEventId + persist to WhopWebhookEvent + process by eventType.
-            </p>
+            <p class="desc"><strong>Whop webhook receiver.</strong> Designed in docs/PHASE-2C-WHOP-DESIGN.md but not yet implemented. Will verify HMAC + dedupe via whopEventId + persist to WhopWebhookEvent + process by eventType.</p>
+            
           </div>
           <div class="badges">
             <span class="badge api">API</span>
             <span class="badge scaffold">Not yet</span>
           </div>
         </div>
-
         <div class="route">
           <div>
-            <div class="path">/api/whop/onboarding/start, /return</div>
-            <p class="desc">
-              <strong>Whop sub-merchant onboarding flow.</strong> Designed; will create the
-              sub-merchant + KYC link on start, receive the KYC completion redirect on
-              return. Both gated on Whop for Platforms API access.
-            </p>
+            <div class="path"><a href="" data-route="/api/auth/session" target="_blank">/api/auth/[...nextauth]</a></div>
+            <p class="desc"><strong>NextAuth handlers.</strong> Catches /api/auth/signin, /signout, /session, /callback/*, /csrf, etc. Magic-link verification callback runs here.</p>
+            
+          </div>
+          <div class="badges">
+            <span class="badge api">API</span>
+            <span class="badge live">Live</span>
+          </div>
+        </div>
+        <div class="route">
+          <div>
+            <div class="path">/api/whop/onboarding/start</div>
+            <p class="desc"><strong>Whop sub-merchant onboarding kickoff.</strong> Designed; will create the sub-merchant + KYC link. Gated on Whop for Platforms API access.</p>
+            
+          </div>
+          <div class="badges">
+            <span class="badge api">API</span>
+            <span class="badge scaffold">Not yet</span>
+          </div>
+        </div>
+        <div class="route">
+          <div>
+            <div class="path">/api/whop/onboarding/return</div>
+            <p class="desc"><strong>Whop sub-merchant onboarding return.</strong> Receives the KYC completion redirect. Updates Practitioner.whopKycStatus optimistically; webhook is authoritative.</p>
+            
           </div>
           <div class="badges">
             <span class="badge api">API</span>
@@ -500,7 +308,6 @@
           </div>
         </div>
       </section>
-
       <footer>
         <p>
           <strong>Production:</strong>
@@ -519,6 +326,11 @@
         <p>
           See <code>docs/PHASE-2-PLAN.md</code>, <code>docs/PHASE-2C-WHOP-DESIGN.md</code>,
           <code>docs/DEMO-PREP-5-28.md</code>.
+        </p>
+        <p>
+          To add a new route: create the page.tsx, add a matching entry in
+          <code>scripts/routes-meta.ts</code>, re-run <code>npm run docs:routes</code>
+          (or just <code>npm run build</code>).
         </p>
       </footer>
     </main>
