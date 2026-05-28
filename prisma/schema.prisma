@@ -112,8 +112,12 @@ model Practitioner {
   // Range-facetable attribute (Phase 1 stretch)
   yearsInPractice Int?
 
-  // Wedge 2B — practitioner-owned booking URL (Cal.com / Calendly / etc.)
+  // Wedge 2B — practitioner-owned booking links (Cal.com / Calendly / etc.)
   // Multi-tenant by construction: each practitioner brings their own scheduling provider.
+  // Multiple links supported (e.g. "Free intro" + "Deep dive"); see BookingLink.
+  bookingLinks BookingLink[]
+  // DEPRECATED: superseded by bookingLinks. Kept for expand/contract zero-downtime
+  // migration on the shared Neon DB; data copied into BookingLink. Drop in a follow-up.
   bookingUrl String?
 
   // Wedge 2C — Whop Platforms sub-merchant (Connected Account)
@@ -133,6 +137,18 @@ model Practitioner {
   updatedAt   DateTime @updatedAt
 
   @@index([latitude, longitude])  // haversine "near me"
+}
+
+model BookingLink {
+  id             String       @id @default(cuid())
+  practitionerId String
+  practitioner   Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
+  label          String?      // optional title, e.g. "Free 15-min intro"
+  url            String
+  sortOrder      Int          @default(0)
+  createdAt      DateTime     @default(now())
+
+  @@index([practitionerId])
 }
 
 model Specialty {

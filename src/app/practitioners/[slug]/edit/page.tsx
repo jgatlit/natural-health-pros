@@ -9,6 +9,7 @@ import { Card } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { updatePractitioner } from './actions';
+import { BookingLinksField } from '@/components/practitioners/BookingLinksField';
 
 type Props = {
   params: { slug: string };
@@ -28,6 +29,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
     include: {
       specialties: { include: { specialty: true } },
       whopProducts: { where: { archived: false }, orderBy: { createdAt: 'desc' } },
+      bookingLinks: { orderBy: { sortOrder: 'asc' } },
     },
   });
   if (!practitioner) notFound();
@@ -210,15 +212,14 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
             </div>
 
             <Field
-              label="Booking link"
-              hint="Your scheduling link (Cal.com, Calendly, SavvyCal, Acuity, etc.). Patients clicking 'Book intro consult' will land here. Leave empty if you're not taking new bookings."
+              label="Booking links"
+              hint="Your scheduling links (Cal.com, Calendly, SavvyCal, Acuity, etc.). Each appears as its own button on your profile. Add an optional label per link (e.g. 'Free 15-min intro'). Leave empty if you're not taking new bookings."
             >
-              <input
-                type="url"
-                name="bookingUrl"
-                defaultValue={practitioner.bookingUrl ?? ''}
-                placeholder="https://cal.com/your-username/intro-consult"
-                className="h-10 w-full rounded-md border bg-card px-3 text-sm outline-none ring-ring/30 focus-visible:ring-2"
+              <BookingLinksField
+                initial={practitioner.bookingLinks.map((b) => ({
+                  label: b.label ?? '',
+                  url: b.url,
+                }))}
               />
             </Field>
 

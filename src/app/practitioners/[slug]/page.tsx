@@ -15,6 +15,7 @@ async function loadPractitioner(slug: string) {
     include: {
       city: true,
       specialties: { include: { specialty: true } },
+      bookingLinks: { orderBy: { sortOrder: 'asc' } },
     },
   });
 }
@@ -50,7 +51,9 @@ export default async function PractitionerPage({ params }: PageProps) {
 
           <Separator />
 
-          <PractitionerLinks bookingUrl={p.bookingUrl} />
+          <PractitionerLinks
+            bookingLinks={p.bookingLinks.map((b) => ({ label: b.label, url: b.url }))}
+          />
 
           {p.bio && (
             <>

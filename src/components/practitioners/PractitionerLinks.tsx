@@ -1,25 +1,32 @@
 import { Calendar, FileText, Layers, ChevronRight } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 
-type Props = { bookingUrl?: string | null };
+type BookingLink = { label?: string | null; url: string };
+type Props = { bookingLinks?: BookingLink[] };
 
 // Blake's framing (5/15 meeting): Linktree-style "elements practitioners can move around"
-// on their landing page. Booking is wired (Wedge 2B — practitioner-owned URLs).
+// on their landing page. Booking is wired (Wedge 2B — practitioner-owned URLs, multiple).
 // Offerings + invoice flows are gated on Wedge 2C (Whop for Platforms / Connected Accounts —
 // invite-only API access pending operator outreach to sales@whop.com).
-export function PractitionerLinks({ bookingUrl }: Props) {
-  const items: Array<{
-    icon: React.ComponentType<{ className?: string }>;
-    label: string;
-    helper: string;
-    href?: string;
-  }> = [
-    {
-      icon: Calendar,
-      label: 'Book an intro consult',
-      helper: bookingUrl ? hostHint(bookingUrl) : '30-minute fit call',
-      href: bookingUrl ?? undefined,
-    },
+type LinkItem = {
+  icon: React.ComponentType<{ className?: string }>;
+  label: string;
+  helper: string;
+  href?: string;
+};
+
+export function PractitionerLinks({ bookingLinks = [] }: Props) {
+  const bookingItems: LinkItem[] = bookingLinks.length
+    ? bookingLinks.map((b) => ({
+        icon: Calendar,
+        label: b.label?.trim() || 'Book an intro consult',
+        helper: hostHint(b.url),
+        href: b.url,
+      }))
+    : [{ icon: Calendar, label: 'Book an intro consult', helper: '30-minute fit call' }];
+
+  const items: LinkItem[] = [
+    ...bookingItems,
     { icon: Layers, label: 'Browse offerings', helper: 'Programs, memberships, packages' },
     {
       icon: FileText,
@@ -30,7 +37,7 @@ export function PractitionerLinks({ bookingUrl }: Props) {
 
   return (
     <section aria-label="Links" className="space-y-2">
-      {items.map(({ icon: Icon, label, helper, href }) => {
+      {items.map(({ icon: Icon, label, helper, href }, i) => {
         const inner = (
           <>
             <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted">
@@ -59,7 +66,7 @@ export function PractitionerLinks({ bookingUrl }: Props) {
         if (href) {
           return (
             <a
-              key={label}
+              key={i}
               href={href}
               target="_blank"
               rel="noopener noreferrer"
@@ -72,7 +79,7 @@ export function PractitionerLinks({ bookingUrl }: Props) {
 
         return (
           <div
-            key={label}
+            key={i}
             className="group flex items-center gap-3 rounded-lg border bg-card p-3 opacity-70"
             aria-disabled
           >

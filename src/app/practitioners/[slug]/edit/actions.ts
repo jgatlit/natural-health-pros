@@ -78,14 +78,28 @@ export async function updatePractitioner(slug: string, formData: FormData): Prom
   const yearsRaw = String(formData.get('yearsInPractice') ?? '').trim();
   const yearsInPractice = yearsRaw === '' ? null : Math.max(0, parseInt(yearsRaw, 10) || 0);
   const specialtyIds = formData.getAll('specialtyIds').map((s) => String(s));
-  const bookingUrlRaw = String(formData.get('bookingUrl') ?? '').trim();
-  const bookingUrl = normalizeBookingUrl(bookingUrlRaw);
 
   if (!displayName) {
     redirect(`/practitioners/${slug}/edit?error=name-required`);
   }
-  if (bookingUrlRaw && !bookingUrl) {
-    redirect(`/practitioners/${slug}/edit?error=invalid-booking-url`);
+
+  // Booking links: paired bookingLabel/bookingUrl rows zipped by index. Skip empty
+  // rows, validate each URL against the provider allowlist, dedupe by normalized URL.
+  const bookingLabels = formData.getAll('bookingLabel').map((s) => String(s));
+  const bookingUrlsRaw = formData.getAll('bookingUrl').map((s) => String(s).trim());
+  const bookingLinks: { label: string | null; url: string }[] = [];
+  const seenBookingUrls = new Set<string>();
+  for (let i = 0; i < bookingUrlsRaw.length; i++) {
+    const raw = bookingUrlsRaw[i];
+    if (!raw) continue;
+    const url = normalizeBookingUrl(raw);
+    if (!url) {
+      redirect(`/practitioners/${slug}/edit?error=invalid-booking-url`);
+    }
+    if (seenBookingUrls.has(url)) continue;
+    seenBookingUrls.add(url);
+    const label = (bookingLabels[i] ?? '').trim() || null;
+    bookingLinks.push({ label, url });
   }
 
   // City coords for haversine
@@ -124,6 +138,7 @@ export async function updatePractitioner(slug: string, formData: FormData): Prom
 
   await prisma.$transaction(async (tx) => {
     await tx.practitionerSpecialty.deleteMany({ where: { practitionerId: target.id } });
+    await tx.bookingLink.deleteMany({ where: { practitionerId: target.id } });
     await tx.practitioner.update({
       where: { id: target.id },
       data: {
@@ -133,7 +148,6 @@ export async function updatePractitioner(slug: string, formData: FormData): Prom
         latitude: coords?.[0] ?? null,
         longitude: coords?.[1] ?? null,
         yearsInPractice,
-        bookingUrl,
         searchText: buildSearchText(
           displayName,
           bio,
@@ -143,6 +157,13 @@ export async function updatePractitioner(slug: string, formData: FormData): Prom
         ),
         specialties: {
           create: specialtyIds.map((id) => ({ specialty: { connect: { id } } })),
+        },
+        bookingLinks: {
+          create: bookingLinks.map((b, idx) => ({
+            label: b.label,
+            url: b.url,
+            sortOrder: idx,
+          })),
         },
       },
     });
