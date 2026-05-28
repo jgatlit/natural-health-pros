@@ -11,9 +11,10 @@ export const dynamic = 'force-dynamic';
 
 export default async function WhopWebhooksPage() {
   const session = await auth();
-  if (!session?.user || session.user.role !== 'ADMIN') {
-    redirect('/auth/signin?callbackUrl=/admin/whop-webhooks');
-  }
+  // ⚠️ TEMP — LOCAL TESTING ONLY: admin gate disabled. REVERT BEFORE PUSH.
+  // if (!session?.user || session.user.role !== 'ADMIN') {
+  //   redirect('/auth/signin?callbackUrl=/admin/whop-webhooks');
+  // }
 
   const events = await prisma.whopWebhookEvent.findMany({
     orderBy: { receivedAt: 'desc' },

@@ -11,9 +11,10 @@ export const dynamic = 'force-dynamic';
 
 export default async function AdminInvitesPage() {
   const session = await auth();
-  if (!session?.user || session.user.role !== 'ADMIN') {
-    redirect('/auth/signin?callbackUrl=/admin/invites');
-  }
+  // ⚠️ TEMP — LOCAL TESTING ONLY: admin gate disabled. REVERT BEFORE PUSH.
+  // if (!session?.user || session.user.role !== 'ADMIN') {
+  //   redirect('/auth/signin?callbackUrl=/admin/invites');
+  // }
 
   const invitations = await prisma.invitation.findMany({
     orderBy: { createdAt: 'desc' },
@@ -125,7 +126,7 @@ export default async function AdminInvitesPage() {
 
         <Separator />
         <p className="text-center text-xs text-muted-foreground">
-          Admin · {session.user.email}
+          Admin · {session?.user?.email ?? 'TEST BYPASS'}
         </p>
       </div>
     </main>

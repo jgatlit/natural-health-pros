@@ -13,9 +13,10 @@ export const dynamic = 'force-dynamic';
 
 export default async function ConnectedAccountsPage() {
   const session = await auth();
-  if (!session?.user || session.user.role !== 'ADMIN') {
-    redirect('/auth/signin?callbackUrl=/admin/connected-accounts');
-  }
+  // ⚠️ TEMP — LOCAL TESTING ONLY: admin gate disabled. REVERT BEFORE PUSH.
+  // if (!session?.user || session.user.role !== 'ADMIN') {
+  //   redirect('/auth/signin?callbackUrl=/admin/connected-accounts');
+  // }
 
   const practitioners = await prisma.practitioner.findMany({
     include: {

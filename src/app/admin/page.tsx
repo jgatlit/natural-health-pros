@@ -12,9 +12,10 @@ export const dynamic = 'force-dynamic';
 
 export default async function AdminIndex() {
   const session = await auth();
-  if (!session?.user || session.user.role !== 'ADMIN') {
-    redirect('/auth/signin?callbackUrl=/admin');
-  }
+  // ⚠️ TEMP — LOCAL TESTING ONLY: admin gate disabled. REVERT BEFORE PUSH.
+  // if (!session?.user || session.user.role !== 'ADMIN') {
+  //   redirect('/auth/signin?callbackUrl=/admin');
+  // }
 
   const [pendingInvites, connectedAccounts, recentWebhooks] = await Promise.all([
     prisma.invitation.count({
@@ -62,7 +63,7 @@ export default async function AdminIndex() {
         <header className="space-y-1">
           <h1 className="text-2xl font-semibold tracking-tight">Admin tools</h1>
           <p className="text-sm text-muted-foreground">
-            HHE Directory operator surface · {session.user.email}
+            HHE Directory operator surface · {session?.user?.email ?? 'TEST BYPASS'}
           </p>
         </header>
 

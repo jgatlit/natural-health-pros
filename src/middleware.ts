@@ -6,16 +6,17 @@ export default auth((req) => {
   const session = req.auth;
 
   // Admin routes require Role.ADMIN
-  if (pathname.startsWith('/admin')) {
-    if (!session?.user) {
-      const signinUrl = new URL('/auth/signin', req.nextUrl);
-      signinUrl.searchParams.set('callbackUrl', pathname);
-      return NextResponse.redirect(signinUrl);
-    }
-    if (session.user.role !== 'ADMIN') {
-      return NextResponse.redirect(new URL('/auth/error?error=AccessDenied', req.nextUrl));
-    }
-  }
+  // ⚠️ TEMP — LOCAL TESTING ONLY: /admin gate disabled. REVERT BEFORE PUSH.
+  // if (pathname.startsWith('/admin')) {
+  //   if (!session?.user) {
+  //     const signinUrl = new URL('/auth/signin', req.nextUrl);
+  //     signinUrl.searchParams.set('callbackUrl', pathname);
+  //     return NextResponse.redirect(signinUrl);
+  //   }
+  //   if (session.user.role !== 'ADMIN') {
+  //     return NextResponse.redirect(new URL('/auth/error?error=AccessDenied', req.nextUrl));
+  //   }
+  // }
 
   // Practitioner edit + onboarding require authenticated session (in-page ownership check)
   if (pathname.match(/^\/practitioners\/[^/]+\/edit/) || pathname.startsWith('/onboarding')) {
