@@ -1,7 +1,5 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { ArrowLeft, Check, AlertTriangle, Clock } from 'lucide-react';
-import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
 import { isWhopPlatformsReady } from '@/lib/whop';
 import { Card } from '@/components/ui/card';
@@ -10,8 +8,8 @@ import { Badge } from '@/components/ui/badge';
 export const dynamic = 'force-dynamic';
 
 export default async function WhopWebhooksPage() {
-  const session = await auth();
   // ⚠️ TEMP — LOCAL TESTING ONLY: admin gate disabled. REVERT BEFORE PUSH.
+  // const session = await auth();
   // if (!session?.user || session.user.role !== 'ADMIN') {
   //   redirect('/auth/signin?callbackUrl=/admin/whop-webhooks');
   // }

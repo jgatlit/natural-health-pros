@@ -1,4 +1,3 @@
-import { redirect } from 'next/navigation';
 import { Mail, Send, Trash2, Check, Clock } from 'lucide-react';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';

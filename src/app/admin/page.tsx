@@ -1,5 +1,4 @@
 import Link from 'next/link';
-import { redirect } from 'next/navigation';
 import { Mail, Building2, Webhook, ChevronRight } from 'lucide-react';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
