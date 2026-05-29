@@ -53,7 +53,7 @@ export function PractitionerHero({
             HHE Certified
           </Badge>
         )}
-        <h1 className="text-2xl font-semibold tracking-tight">{displayName}</h1>
+        <h1 className="font-serif text-3xl font-semibold tracking-tight">{displayName}</h1>
         {headline && <p className="text-sm text-muted-foreground">{headline}</p>}
       </div>
 
