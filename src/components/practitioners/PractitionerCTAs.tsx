@@ -32,7 +32,7 @@ export function PractitionerCTAs({ bookingLinks = [], websiteUrl }: Props) {
           href={primaryBooking.url}
           target="_blank"
           rel="noopener noreferrer"
-          className="group flex items-center gap-3 rounded-lg bg-primary p-4 text-primary-foreground transition-opacity hover:opacity-90"
+          className="group flex items-center gap-3 rounded-lg bg-cta p-4 text-cta-foreground transition-opacity hover:opacity-90"
         >
           <Calendar className="h-5 w-5 shrink-0" aria-hidden />
           <div className="min-w-0 flex-1">
