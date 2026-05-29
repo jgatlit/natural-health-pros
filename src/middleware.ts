@@ -1,5 +1,10 @@
+import NextAuth from 'next-auth';
 import { NextResponse } from 'next/server';
-import { auth } from '@/auth';
+import { authConfig } from '@/auth.config';
+
+// Build the middleware's auth instance from the EDGE-SAFE config only (no Prisma adapter)
+// so this Edge Function stays under Vercel's 1 MB limit.
+const { auth } = NextAuth(authConfig);
 
 export default auth((req) => {
   const { pathname } = req.nextUrl;
