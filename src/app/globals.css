@@ -15,6 +15,11 @@
   --color-primary: var(--primary);
   --color-primary-foreground: var(--primary-foreground);
 
+  /* Brand CTA (Theme D "Accent/CTA" = Rose Magenta). Separate from shadcn --accent,
+     which is the subtle hover slot. Used by the booking action: bg-cta / text-cta-foreground. */
+  --color-cta: var(--cta);
+  --color-cta-foreground: var(--cta-foreground);
+
   --color-secondary: var(--secondary);
   --color-secondary-foreground: var(--secondary-foreground);
 
@@ -35,7 +40,8 @@
   --radius-md: calc(var(--radius) - 2px);
   --radius-sm: calc(var(--radius) - 4px);
 
-  --font-sans: var(--font-geist-sans), system-ui, sans-serif;
+  --font-sans: var(--font-inter), system-ui, sans-serif;
+  --font-serif: var(--font-playfair), Georgia, serif;
   --font-mono: var(--font-geist-mono), ui-monospace, monospace;
 }
 
@@ -62,26 +68,31 @@
 }
 
 @layer base {
+  /* Brand: HHE Directory — Theme D "Midnight Navy" (consumed from cms.chem.dev/hhe-directory,
+     2026-05-29). Navy=primary/structure, Rose Magenta=CTA, Botanical Sage=secondary, white bg.
+     Values converted from the CMS DTCG tokens to OKLCH. See docs/P2-design-system-prep.md. */
   :root {
-    --background: oklch(1 0 0);
-    --foreground: oklch(0.145 0 0);
+    --background: oklch(1 0 0); /* #FFFFFF */
+    --foreground: oklch(0.302 0.056 255.3); /* #1A2F4A deep navy */
     --card: oklch(1 0 0);
-    --card-foreground: oklch(0.145 0 0);
+    --card-foreground: oklch(0.302 0.056 255.3);
     --popover: oklch(1 0 0);
-    --popover-foreground: oklch(0.145 0 0);
-    --primary: oklch(0.205 0 0);
-    --primary-foreground: oklch(0.985 0 0);
-    --secondary: oklch(0.97 0 0);
-    --secondary-foreground: oklch(0.205 0 0);
-    --muted: oklch(0.97 0 0);
-    --muted-foreground: oklch(0.556 0 0);
-    --accent: oklch(0.97 0 0);
-    --accent-foreground: oklch(0.205 0 0);
+    --popover-foreground: oklch(0.302 0.056 255.3);
+    --primary: oklch(0.403 0.071 253.9); /* #2C4A6E midnight navy */
+    --primary-foreground: oklch(1 0 0);
+    --cta: oklch(0.564 0.18 1.7); /* #C4396E rose magenta — booking/CTA */
+    --cta-foreground: oklch(1 0 0);
+    --secondary: oklch(0.965 0.012 153.7); /* #EEF6F0 soft sage surface */
+    --secondary-foreground: oklch(0.42 0.07 154); /* deep sage */
+    --muted: oklch(0.97 0.006 260); /* navy-tinted neutral */
+    --muted-foreground: oklch(0.551 0.023 264.4); /* #6B7280 */
+    --accent: oklch(0.957 0.007 260.7); /* #EEF1F6 navy-tint hover surface */
+    --accent-foreground: oklch(0.403 0.071 253.9);
     --destructive: oklch(0.577 0.245 27.325);
     --destructive-foreground: oklch(0.985 0 0);
-    --border: oklch(0.922 0 0);
-    --input: oklch(0.922 0 0);
-    --ring: oklch(0.708 0 0);
+    --border: oklch(0.9 0.006 260); /* light navy-gray */
+    --input: oklch(0.9 0.006 260);
+    --ring: oklch(0.403 0.071 253.9); /* navy focus */
     --radius: 0.625rem;
   }
   .dark {
@@ -93,6 +104,8 @@
     --popover-foreground: oklch(0.985 0 0);
     --primary: oklch(0.922 0 0);
     --primary-foreground: oklch(0.205 0 0);
+    --cta: oklch(0.564 0.18 1.7);
+    --cta-foreground: oklch(1 0 0);
     --secondary: oklch(0.269 0 0);
     --secondary-foreground: oklch(0.985 0 0);
     --muted: oklch(0.269 0 0);

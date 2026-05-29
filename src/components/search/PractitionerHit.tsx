@@ -1,6 +1,5 @@
 import Link from 'next/link';
 import { MapPin } from 'lucide-react';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
 
@@ -9,6 +8,7 @@ export type PractitionerHit = {
   slug: string;
   displayName: string;
   bio?: string;
+  photoUrl?: string;
   cityName: string;
   cityState: string;
   specialtyNames: string[];
@@ -31,11 +31,21 @@ export function PractitionerHitCard({ hit }: { hit: PractitionerHit }) {
   return (
     <Link href={`/practitioners/${hit.slug}`} className="group block">
       <Card className="flex h-full gap-4 p-4 transition-colors group-hover:bg-accent/30">
-        <Avatar size="lg" className="size-14 shrink-0 ring-1 ring-border">
-          <AvatarFallback className="text-base font-medium">
-            {initials(hit.displayName)}
-          </AvatarFallback>
-        </Avatar>
+        <div className="size-16 shrink-0 overflow-hidden rounded-md ring-1 ring-border">
+          {hit.photoUrl ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img
+              src={hit.photoUrl}
+              alt={hit.displayName}
+              className="h-full w-full object-cover"
+              loading="lazy"
+            />
+          ) : (
+            <div className="flex h-full w-full items-center justify-center bg-muted text-base font-medium text-muted-foreground">
+              {initials(hit.displayName)}
+            </div>
+          )}
+        </div>
         <div className="min-w-0 flex-1 space-y-1.5">
           <div className="space-y-0.5">
             <p className="truncate text-sm font-semibold leading-tight">{hit.displayName}</p>

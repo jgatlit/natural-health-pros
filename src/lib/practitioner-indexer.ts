@@ -13,11 +13,15 @@ export type PractitionerDoc = {
   slug: string;
   displayName: string;
   bio?: string;
+  photoUrl?: string;
   cityName: string;
   cityState: string;
   location?: [number, number];
   specialtyNames: string[];
   specialtySlugs: string[];
+  // Dual-label model: the practitioner's own phrasing (rawLabel). Searchable so their
+  // voice is findable, but kept OUT of the facet list (specialtyNames stays the curated facet).
+  specialtyLabels: string[];
   acceptedAt: number;
   yearsInPractice?: number;
   searchText?: string;
@@ -62,6 +66,7 @@ export function isProfileComplete(p: Parameters<typeof profileCompletenessSignal
 export function toTypesenseDoc(p: PractitionerForIndex): PractitionerDoc {
   const specialtyNames = new Set<string>();
   const specialtySlugs = new Set<string>();
+  const specialtyLabels = new Set<string>();
   for (const ps of p.specialties) {
     specialtyNames.add(ps.specialty.name);
     specialtySlugs.add(ps.specialty.slug);
@@ -69,6 +74,7 @@ export function toTypesenseDoc(p: PractitionerForIndex): PractitionerDoc {
       specialtyNames.add(ps.specialty.parent.name);
       specialtySlugs.add(ps.specialty.parent.slug);
     }
+    if (ps.rawLabel && ps.rawLabel.trim()) specialtyLabels.add(ps.rawLabel.trim());
   }
 
   const location: [number, number] | undefined =
@@ -79,11 +85,13 @@ export function toTypesenseDoc(p: PractitionerForIndex): PractitionerDoc {
     slug: p.slug,
     displayName: p.displayName,
     bio: p.bio ?? undefined,
+    photoUrl: p.photoUrl ?? undefined,
     cityName: p.city?.name ?? '',
     cityState: p.city?.state ?? '',
     location,
     specialtyNames: Array.from(specialtyNames),
     specialtySlugs: Array.from(specialtySlugs),
+    specialtyLabels: Array.from(specialtyLabels),
     acceptedAt: p.acceptedAt ? Math.floor(p.acceptedAt.getTime() / 1000) : 0,
     yearsInPractice: p.yearsInPractice ?? undefined,
     searchText: p.searchText ?? undefined,

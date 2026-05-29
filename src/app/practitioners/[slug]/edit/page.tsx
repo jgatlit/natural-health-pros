@@ -10,6 +10,7 @@ import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
 import { updatePractitioner } from './actions';
 import { BookingLinksField } from '@/components/practitioners/BookingLinksField';
+import { SpecialtyComboboxField } from '@/components/practitioners/SpecialtyComboboxField';
 
 type Props = {
   params: { slug: string };
@@ -50,14 +51,24 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
     redirect('/auth/error?error=AccessDenied');
   }
 
-  const [cities, specialties] = await Promise.all([
+  const [cities, specialties, approvedAliases] = await Promise.all([
     prisma.city.findMany({ orderBy: [{ state: 'asc' }, { name: 'asc' }] }),
-    prisma.specialty.findMany({ orderBy: { name: 'asc' } }),
+    prisma.specialty.findMany({
+      where: { status: { in: ['ACTIVE', 'PROPOSED'] } },
+      orderBy: { name: 'asc' },
+    }),
+    prisma.specialtyAlias.findMany({
+      where: { status: 'APPROVED' },
+      select: { label: true, specialtyId: true },
+    }),
   ]);
 
-  const selectedSpecialtyIds = new Set(
-    practitioner.specialties.map((ps) => ps.specialtyId),
-  );
+  // Dual-label: seed the combobox with each selected specialty's raw phrasing (their voice),
+  // falling back to the canonical name when no rawLabel was captured.
+  const initialSpecialties = practitioner.specialties.map((ps) => ({
+    specialtyId: ps.specialtyId,
+    rawLabel: ps.rawLabel?.trim() || ps.specialty.name,
+  }));
 
   // Bind the slug for the form action
   const action = updatePractitioner.bind(null, params.slug);
@@ -225,27 +236,13 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
 
             <Field
               label="Specialties"
-              hint="Select all that apply. Parent + child specialties supported (e.g., Functional Medicine includes Hormone Balance)."
+              hint="Search the curated list, or type your own term — we'll keep your wording on your profile and match it to the right category. Nothing is blocked while we review new terms."
             >
-              <ul className="grid grid-cols-1 gap-1.5 sm:grid-cols-2">
-                {specialties.map((s) => {
-                  const checked = selectedSpecialtyIds.has(s.id);
-                  return (
-                    <li key={s.id}>
-                      <label className="flex cursor-pointer items-center gap-2 rounded-md border bg-card px-3 py-2 text-sm hover:bg-accent/40">
-                        <input
-                          type="checkbox"
-                          name="specialtyIds"
-                          value={s.id}
-                          defaultChecked={checked}
-                          className="h-4 w-4 rounded border-input"
-                        />
-                        <span>{s.name}</span>
-                      </label>
-                    </li>
-                  );
-                })}
-              </ul>
+              <SpecialtyComboboxField
+                options={specialties.map((s) => ({ id: s.id, name: s.name }))}
+                aliases={approvedAliases}
+                initial={initialSpecialties}
+              />
             </Field>
 
             <Separator />

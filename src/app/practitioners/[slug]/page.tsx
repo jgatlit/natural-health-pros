@@ -3,9 +3,8 @@ import type { Metadata } from 'next';
 import { prisma } from '@/lib/prisma';
 import { Card } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
-import { PractitionerHeader } from '@/components/practitioners/PractitionerHeader';
-import { PractitionerLinks } from '@/components/practitioners/PractitionerLinks';
-import { PractitionerBio } from '@/components/practitioners/PractitionerBio';
+import { PractitionerHero } from '@/components/practitioners/PractitionerHero';
+import { PractitionerCTAs } from '@/components/practitioners/PractitionerCTAs';
 
 type PageProps = { params: { slug: string } };
 
@@ -16,6 +15,7 @@ async function loadPractitioner(slug: string) {
       city: true,
       specialties: { include: { specialty: true } },
       bookingLinks: { orderBy: { sortOrder: 'asc' } },
+      caseStudies: { orderBy: { createdAt: 'desc' } },
     },
   });
 }
@@ -23,10 +23,10 @@ async function loadPractitioner(slug: string) {
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const p = await loadPractitioner(params.slug);
   if (!p) return { title: 'Practitioner not found' };
-  const cityLine = p.city ? `${p.city.name}, ${p.city.state}` : null;
+  const descr = p.whoIHelp || p.headline || p.bio || undefined;
   return {
-    title: `${p.displayName}${cityLine ? ` — ${cityLine}` : ''} · HHE Directory`,
-    description: p.bio ?? undefined,
+    title: `${p.displayName}${p.headline ? ` — ${p.headline}` : ''} · HHE Directory`,
+    description: descr?.slice(0, 200),
   };
 }
 
@@ -34,38 +34,101 @@ export default async function PractitionerPage({ params }: PageProps) {
   const p = await loadPractitioner(params.slug);
   if (!p) notFound();
 
-  const specialties = p.specialties.map((ps) => ({
-    id: ps.specialty.id,
-    name: ps.specialty.name,
-  }));
+  // Dual-label: canonical names = curated rail chips; rawLabels = the practitioner's own
+  // phrasing, listed under "How I work". Parent rollups excluded from the chip set to keep it tight.
+  const canonicalChips = Array.from(new Set(p.specialties.map((ps) => ps.specialty.name)));
+  const rawModalities = Array.from(
+    new Set(p.specialties.map((ps) => ps.rawLabel?.trim()).filter((l): l is string => !!l)),
+  );
 
   return (
     <main className="min-h-screen bg-muted/30 px-4 py-10 sm:py-16">
-      <div className="mx-auto max-w-md">
-        <Card className="space-y-6 p-6 sm:p-8">
-          <PractitionerHeader
-            displayName={p.displayName}
-            city={p.city ? { name: p.city.name, state: p.city.state } : null}
-            specialties={specialties}
-          />
+      <div className="mx-auto max-w-4xl">
+        <Card className="p-6 sm:p-10">
+          <div className="grid gap-10 sm:grid-cols-[19rem_1fr]">
+            {/* Sticky identity + booking rail (Variation B) */}
+            <aside className="min-w-0 space-y-6 sm:sticky sm:top-8 sm:self-start">
+              <PractitionerHero
+                displayName={p.displayName}
+                headline={p.headline}
+                photoUrl={p.photoUrl}
+                city={p.city ? { name: p.city.name, state: p.city.state } : null}
+                telehealth={p.telehealth}
+                inPerson={p.inPerson}
+                chips={canonicalChips}
+                hheCertified
+              />
+              <PractitionerCTAs
+                bookingLinks={p.bookingLinks.map((b) => ({ label: b.label, url: b.url }))}
+                websiteUrl={p.websiteUrl}
+              />
+            </aside>
 
-          <Separator />
+            {/* Scrollable narrative */}
+            <div className="min-w-0 space-y-8">
+              {p.whoIHelp && (
+                <p className="text-lg leading-relaxed text-foreground">{p.whoIHelp}</p>
+              )}
 
-          <PractitionerLinks
-            bookingLinks={p.bookingLinks.map((b) => ({ label: b.label, url: b.url }))}
-          />
+              {p.bio && (
+                <>
+                  {p.whoIHelp && <Separator />}
+                  <section aria-label="About" className="space-y-2">
+                    <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                      About {p.displayName.split(/\s+/)[0]}
+                    </h2>
+                    <div className="space-y-3 text-sm leading-relaxed text-foreground">
+                      {p.bio.split(/\n{2,}/).map((para, i) => (
+                        <p key={i}>{para.trim()}</p>
+                      ))}
+                    </div>
+                  </section>
+                </>
+              )}
 
-          {p.bio && (
-            <>
-              <Separator />
-              <PractitionerBio bio={p.bio} />
-            </>
-          )}
+              {rawModalities.length > 0 && (
+                <section aria-label="How I work" className="space-y-2">
+                  <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                    How I work
+                  </h2>
+                  <ul className="divide-y rounded-lg border bg-card">
+                    {rawModalities.map((m) => (
+                      <li key={m} className="px-3 py-2.5 text-sm">
+                        {m}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+
+              {p.caseStudies.length > 0 && (
+                <section aria-label="Outcomes" className="space-y-3">
+                  <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                    Outcomes
+                  </h2>
+                  <ul className="space-y-3">
+                    {p.caseStudies.map((cs) => (
+                      <li key={cs.id} className="rounded-lg border bg-card p-4">
+                        <p className="text-sm font-medium">{cs.title}</p>
+                        <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                          {cs.summary}
+                        </p>
+                        {cs.outcome && (
+                          <p className="mt-1 text-sm leading-relaxed text-foreground">{cs.outcome}</p>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+            </div>
+          </div>
+
+          <Separator className="my-8" />
+          <p className="text-center text-xs text-muted-foreground">
+            HHE-curated practitioner · invite-only directory
+          </p>
         </Card>
-
-        <p className="mt-6 text-center text-xs text-muted-foreground">
-          HHE-curated practitioner · invite-only directory
-        </p>
       </div>
     </main>
   );

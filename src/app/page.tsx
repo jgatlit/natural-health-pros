@@ -58,7 +58,7 @@ export default async function Home() {
             <Sparkles className="h-3 w-3" aria-hidden />
             HHE-curated practitioners
           </span>
-          <h1 className="mt-5 text-balance text-4xl font-semibold tracking-tight sm:text-5xl">
+          <h1 className="mt-5 text-balance font-serif text-4xl font-semibold tracking-tight sm:text-5xl">
             Find a practitioner you can trust.
           </h1>
           <p className="mx-auto mt-4 max-w-xl text-balance text-base text-muted-foreground">

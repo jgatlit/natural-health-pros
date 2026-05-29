@@ -1,11 +1,13 @@
 import NextAuth from 'next-auth';
-import Resend from 'next-auth/providers/resend';
 import { PrismaAdapter } from '@auth/prisma-adapter';
 import { prisma } from '@/lib/prisma';
 import type { Role } from '@prisma/client';
+import { authConfig } from '@/auth.config';
 
 // Wedge 2A: NextAuth v5 + Prisma adapter + Resend Email provider (magic link).
-// Invite-only model — sign-in is by magic link, role assignment is post-accept.
+// Full (Node-runtime) instance — composes the edge-safe base (auth.config.ts) with the
+// Prisma adapter + db-touching jwt callback/events. Middleware uses auth.config directly
+// so Prisma never lands in the Edge bundle (1 MB limit).
 
 function adminEmails(): Set<string> {
   return new Set(
@@ -17,19 +19,8 @@ function adminEmails(): Set<string> {
 }
 
 export const { handlers, signIn, signOut, auth } = NextAuth({
+  ...authConfig,
   adapter: PrismaAdapter(prisma),
-  session: { strategy: 'jwt' },
-  pages: {
-    signIn: '/auth/signin',
-    verifyRequest: '/auth/verify-request',
-    error: '/auth/error',
-  },
-  providers: [
-    Resend({
-      apiKey: process.env.RESEND_API_KEY ?? '',
-      from: process.env.EMAIL_FROM ?? 'HHE Directory <onboarding@resend.dev>',
-    }),
-  ],
   events: {
     // Auto-promote configured admin emails on first sign-in.
     async createUser({ user }) {
@@ -54,6 +45,7 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
     },
   },
   callbacks: {
+    ...authConfig.callbacks,
     async jwt({ token, user }) {
       if (user) {
         const dbUser = await prisma.user.findUnique({
@@ -63,13 +55,6 @@ export const { handlers, signIn, signOut, auth } = NextAuth({
         token.role = (dbUser?.role ?? 'CLIENT') as Role;
       }
       return token;
-    },
-    session({ session, token }) {
-      if (session.user && token.sub) {
-        session.user.id = token.sub;
-        session.user.role = (token.role ?? 'CLIENT') as Role;
-      }
-      return session;
     },
   },
 });

@@ -12,15 +12,21 @@ export function createSearchAdapter() {
       cacheSearchResultsForSeconds: 60,
     },
     additionalSearchParameters: {
-      query_by: 'displayName,cityName,specialtyNames,bio,searchText',
-      query_by_weights: '8,6,5,2,3',
+      // PRIMARY (P1d): keyword over canonical + the practitioner's own phrasing
+      // (specialtyLabels) + bio/searchText. Multi-way synonyms (the dual-label collapse
+      // + SECONDARY-a symptom bridge) apply automatically — the synonym set is attached
+      // to the collection (see typesense-synonyms.ts), so no query param is needed.
+      // SECONDARY-b (native vector fallback on low recall) is V1.5.
+      query_by: 'displayName,cityName,specialtyNames,specialtyLabels,bio,searchText',
+      query_by_weights: '8,6,5,5,2,3',
       sort_by: '_text_match:desc,acceptedAt:desc',
-      num_typos: '1,1,1,2,2',
+      num_typos: '1,1,1,1,2,2',
       typo_tokens_threshold: 1,
       drop_tokens_threshold: 1,
       prefix: true,
-      infix: 'fallback,off,off,off,off',
-      highlight_full_fields: 'displayName,cityName,specialtyNames',
+      infix: 'fallback,off,off,off,off,off',
+      highlight_full_fields: 'displayName,cityName,specialtyNames,specialtyLabels',
+      // Facet on the CURATED canonical only — raw labels stay searchable but out of the facet.
       facet_by: 'specialtyNames,cityName,cityState,yearsInPractice',
       max_facet_values: 50,
       // Phase 2.5 completeness gate: only show practitioners with name + city +

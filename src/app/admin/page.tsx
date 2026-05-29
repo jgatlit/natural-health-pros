@@ -1,5 +1,5 @@
 import Link from 'next/link';
-import { Mail, Building2, Webhook, ChevronRight } from 'lucide-react';
+import { Mail, Building2, Webhook, Tags, ChevronRight } from 'lucide-react';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
 import { isWhopPlatformsReady } from '@/lib/whop';
@@ -16,7 +16,7 @@ export default async function AdminIndex() {
   //   redirect('/auth/signin?callbackUrl=/admin');
   // }
 
-  const [pendingInvites, connectedAccounts, recentWebhooks] = await Promise.all([
+  const [pendingInvites, connectedAccounts, recentWebhooks, pendingSpecialties] = await Promise.all([
     prisma.invitation.count({
       where: { acceptedAt: null, expiresAt: { gt: new Date() } },
     }),
@@ -24,6 +24,7 @@ export default async function AdminIndex() {
     prisma.whopWebhookEvent.count({
       where: { receivedAt: { gt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } },
     }),
+    prisma.specialtyAlias.count({ where: { status: 'PENDING' } }),
   ]);
 
   const tools = [
@@ -34,6 +35,15 @@ export default async function AdminIndex() {
       count: pendingInvites,
       countLabel: 'pending',
       description: 'Send + manage practitioner invitations.',
+      status: 'active' as const,
+    },
+    {
+      icon: Tags,
+      title: 'Specialty moderation',
+      href: '/admin/specialties',
+      count: pendingSpecialties,
+      countLabel: 'pending',
+      description: 'Approve aliases + promote/merge proposed specialties. Grows the taxonomy.',
       status: 'active' as const,
     },
     {

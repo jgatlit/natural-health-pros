@@ -38,6 +38,10 @@ next-env.d.ts
 # secrets — defense in depth (copied from .env.local for prisma migrate to pick up)
 .env
 
+# Pilot practitioner data (real PII — names/emails/bios). Local-only; the importer
+# seeds the DB from here. Source xlsx + LLM-normalized JSON live here, never committed.
+amy-assets/
+
 # Playwright MCP session traces (smoke-test artifacts, not project content)
 .playwright-mcp/
 

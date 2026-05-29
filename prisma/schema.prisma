@@ -11,8 +11,8 @@ datasource db {
   provider  = "postgresql"
   // Neon Marketplace integration prefixes all env vars with `hhe_directory_` by default.
   // If the prefix is later removed in Vercel/Neon settings, rename to standard names.
-  url       = env("hhe_directory_DATABASE_URL")           // pooled (pgbouncer) — runtime queries
-  directUrl = env("hhe_directory_DATABASE_URL_UNPOOLED")  // unpooled — Prisma Migrate (DDL needs direct connection)
+  url       = env("hhe_directory_DATABASE_URL") // pooled (pgbouncer) — runtime queries
+  directUrl = env("hhe_directory_DATABASE_URL_UNPOOLED") // unpooled — Prisma Migrate (DDL needs direct connection)
 }
 
 // ----- NextAuth v5 tables (Prisma adapter contract) -----
@@ -30,7 +30,7 @@ model User {
   accounts        Account[]
   sessions        Session[]
   practitioner    Practitioner?
-  invitationsSent Invitation[] @relation("InvitedBy")
+  invitationsSent Invitation[]  @relation("InvitedBy")
 }
 
 enum Role {
@@ -91,23 +91,33 @@ model VerificationToken {
 // ----- HHE Directory Phase 0 domain -----
 
 model Practitioner {
-  id          String   @id @default(cuid())
-  userId      String   @unique
-  user        User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  id     String @id @default(cuid())
+  userId String @unique
+  user   User   @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  slug        String   @unique
+  slug        String  @unique
   displayName String
-  bio         String?  @db.Text
+  bio         String? @db.Text
+
+  // V1 pilot — rich landing-page fields (Amy 5/28; LLM-onboarding normalizes these)
+  headline               String? // credentials / professional title line under the name
+  whoIHelp               String?  @db.Text // "who/how I help" block + matching signal (LLM-synthesized when source blank)
+  photoUrl               String? // Vercel Blob URL; Avatar falls back to initials when null
+  websiteUrl             String? // external site (classified out of overloaded col-D)
+  telehealth             Boolean? // offers virtual sessions (~70% of pilot)
+  inPerson               Boolean? // offers in-person sessions
+  firstSessionPriceCents Int? // first-session price in cents; render as $X.XX
 
   cityId      String?
-  city        City?    @relation(fields: [cityId], references: [id])
+  city        City?                   @relation(fields: [cityId], references: [id])
   specialties PractitionerSpecialty[]
+  caseStudies CaseStudy[]
 
-  latitude    Float?
-  longitude   Float?
+  latitude  Float?
+  longitude Float?
 
   // Denormalized for pg_trgm typo tolerance (Decisions-JSON Phase 1)
-  searchText  String?  @db.Text
+  searchText String? @db.Text
 
   // Range-facetable attribute (Phase 1 stretch)
   yearsInPractice Int?
@@ -118,7 +128,7 @@ model Practitioner {
   bookingLinks BookingLink[]
   // DEPRECATED: superseded by bookingLinks. Kept for expand/contract zero-downtime
   // migration on the shared Neon DB; data copied into BookingLink. Drop in a follow-up.
-  bookingUrl String?
+  bookingUrl   String?
 
   // Wedge 2C — Whop Platforms sub-merchant (Connected Account)
   // whopCompanyId is the practitioner's sub-merchant company on HHE's Whop platform parent.
@@ -129,21 +139,21 @@ model Practitioner {
   whopProducts       WhopProduct[]
 
   // Invite-only model (5/15 Amy reframe)
-  invitedBy   String?
-  invitedAt   DateTime?
-  acceptedAt  DateTime?
+  invitedBy  String?
+  invitedAt  DateTime?
+  acceptedAt DateTime?
 
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
-  @@index([latitude, longitude])  // haversine "near me"
+  @@index([latitude, longitude]) // haversine "near me"
 }
 
 model BookingLink {
   id             String       @id @default(cuid())
   practitionerId String
   practitioner   Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
-  label          String?      // optional title, e.g. "Free 15-min intro"
+  label          String? // optional title, e.g. "Free 15-min intro"
   url            String
   sortOrder      Int          @default(0)
   createdAt      DateTime     @default(now())
@@ -151,46 +161,108 @@ model BookingLink {
   @@index([practitionerId])
 }
 
+// V1 pilot — evolving dual-label taxonomy (Amy 5/29 "collapse synonyms" requirement).
+// Canonical node: faceted + matched on. rawLabel (on PractitionerSpecialty) preserves voice.
+enum SpecialtyStatus {
+  ACTIVE // curated, live canonical
+  PROPOSED // promoted from a pending alias, awaiting parent/curation
+  MERGED // collapsed into mergedInto; kept for referential history
+}
+
 model Specialty {
-  id           String                  @id @default(cuid())
-  slug         String                  @unique
-  name         String
-  parentId     String?                 // hierarchical taxonomy
-  parent       Specialty?              @relation("SpecialtyTree", fields: [parentId], references: [id])
-  children     Specialty[]             @relation("SpecialtyTree")
+  id       String      @id @default(cuid())
+  slug     String      @unique
+  name     String
+  parentId String? // hierarchical taxonomy
+  parent   Specialty?  @relation("SpecialtyTree", fields: [parentId], references: [id])
+  children Specialty[] @relation("SpecialtyTree")
+
+  status       SpecialtyStatus @default(ACTIVE)
+  mergedIntoId String? // when MERGED, points at the surviving canonical
+  mergedInto   Specialty?      @relation("SpecialtyMerge", fields: [mergedIntoId], references: [id])
+  mergedFrom   Specialty[]     @relation("SpecialtyMerge")
+
+  aliases       SpecialtyAlias[]
   practitioners PractitionerSpecialty[]
+}
+
+// Bridge between a practitioner's raw phrasing and the system canonical.
+// PENDING rows are the /admin/specialties moderation queue. APPROVED rows
+// sync to Typesense as multi-way synonyms (the "gut health ⇄ digestive disorders" collapse).
+enum AliasSource {
+  PRACTITIONER // self-entered during intake
+  CURATED // operator-authored
+  IMPORT // seeded by the onboarding LLM pipeline
+}
+
+enum AliasStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+model SpecialtyAlias {
+  id          String      @id @default(cuid())
+  label       String      @unique // normalized (lowercased, trimmed) raw phrasing
+  specialtyId String
+  specialty   Specialty   @relation(fields: [specialtyId], references: [id], onDelete: Cascade)
+  source      AliasSource @default(PRACTITIONER)
+  status      AliasStatus @default(PENDING)
+  confidence  Float? // 0..1 from LLM/vector mapping; null for curated
+  createdAt   DateTime    @default(now())
+  updatedAt   DateTime    @updatedAt
+
+  @@index([status])
+  @@index([specialtyId])
 }
 
 model PractitionerSpecialty {
   practitionerId String
   specialtyId    String
+  rawLabel       String? // the practitioner's exact phrasing (their voice), shown on profile
   practitioner   Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
   specialty      Specialty    @relation(fields: [specialtyId], references: [id], onDelete: Cascade)
 
   @@id([practitionerId, specialtyId])
 }
 
+// V1 pilot — anonymized outcomes the AI matcher reads (Amy: "if it's not on the
+// landing page, it's not going to come up in search"). Backend matching signal +
+// optional landing-page block.
+model CaseStudy {
+  id             String       @id @default(cuid())
+  practitionerId String
+  practitioner   Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
+  title          String
+  summary        String       @db.Text
+  outcome        String?      @db.Text
+  anonymized     Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+
+  @@index([practitionerId])
+}
+
 // Wedge 2C — Whop product (offering) attached to a practitioner's sub-merchant company
 model WhopProduct {
-  id                   String          @id @default(cuid())
-  practitionerId       String
-  practitioner         Practitioner    @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
+  id             String       @id @default(cuid())
+  practitionerId String
+  practitioner   Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
 
-  whopProductId        String          @unique  // products.create response
-  whopPlanId           String?                  // plans.create response
-  whopCheckoutConfigId String?                  // checkoutConfigurations.create response
-  purchaseUrl          String?                  // Whop-hosted checkout URL
+  whopProductId        String  @unique // products.create response
+  whopPlanId           String? // plans.create response
+  whopCheckoutConfigId String? // checkoutConfigurations.create response
+  purchaseUrl          String? // Whop-hosted checkout URL
 
-  title                String
-  description          String?
-  priceUsdCents        Int             // always in cents; render as $X.XX
-  applicationFeeCents  Int             @default(0)  // HHE platform fee per transaction
-  interval             ProductInterval @default(ONE_TIME)
+  title               String
+  description         String?
+  priceUsdCents       Int // always in cents; render as $X.XX
+  applicationFeeCents Int             @default(0) // HHE platform fee per transaction
+  interval            ProductInterval @default(ONE_TIME)
 
-  active               Boolean         @default(true)
-  archived             Boolean         @default(false)
-  createdAt            DateTime        @default(now())
-  updatedAt            DateTime        @updatedAt
+  active    Boolean  @default(true)
+  archived  Boolean  @default(false)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([practitionerId, active])
 }
