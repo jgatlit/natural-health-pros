@@ -13,6 +13,7 @@ export type PractitionerDoc = {
   slug: string;
   displayName: string;
   bio?: string;
+  photoUrl?: string;
   cityName: string;
   cityState: string;
   location?: [number, number];
@@ -84,6 +85,7 @@ export function toTypesenseDoc(p: PractitionerForIndex): PractitionerDoc {
     slug: p.slug,
     displayName: p.displayName,
     bio: p.bio ?? undefined,
+    photoUrl: p.photoUrl ?? undefined,
     cityName: p.city?.name ?? '',
     cityState: p.city?.state ?? '',
     location,

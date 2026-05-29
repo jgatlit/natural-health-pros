@@ -5,6 +5,7 @@
     { "name": "slug", "type": "string", "index": true },
     { "name": "displayName", "type": "string", "index": true, "sort": true, "infix": true },
     { "name": "bio", "type": "string", "index": true, "optional": true },
+    { "name": "photoUrl", "type": "string", "index": false, "optional": true },
     { "name": "cityName", "type": "string", "facet": true, "index": true },
     { "name": "cityState", "type": "string", "facet": true, "index": true },
     { "name": "location", "type": "geopoint", "optional": true },

@@ -1,5 +1,4 @@
 import { MapPin, Video, Users, BadgeCheck } from 'lucide-react';
-import { Avatar, AvatarImage, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 
 function initials(name: string) {
@@ -41,10 +40,16 @@ export function PractitionerHero({
 }: Props) {
   return (
     <header className="space-y-4">
-      <Avatar size="lg" className="size-24 ring-2 ring-border">
-        {photoUrl && <AvatarImage src={photoUrl} alt={displayName} />}
-        <AvatarFallback className="text-2xl font-medium">{initials(displayName)}</AvatarFallback>
-      </Avatar>
+      <div className="aspect-[4/5] w-full overflow-hidden rounded-xl bg-muted ring-1 ring-border">
+        {photoUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={photoUrl} alt={displayName} className="h-full w-full object-cover" />
+        ) : (
+          <div className="flex h-full w-full items-center justify-center text-5xl font-medium text-muted-foreground">
+            {initials(displayName)}
+          </div>
+        )}
+      </div>
 
       <div className="space-y-1.5">
         {hheCertified && (
