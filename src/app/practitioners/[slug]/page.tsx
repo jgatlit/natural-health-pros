@@ -3,7 +3,6 @@ import type { Metadata } from 'next';
 import { prisma } from '@/lib/prisma';
 import { Card } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
-import { Badge } from '@/components/ui/badge';
 import { PractitionerHero } from '@/components/practitioners/PractitionerHero';
 import { PractitionerCTAs } from '@/components/practitioners/PractitionerCTAs';
 
@@ -16,6 +15,7 @@ async function loadPractitioner(slug: string) {
       city: true,
       specialties: { include: { specialty: true } },
       bookingLinks: { orderBy: { sortOrder: 'asc' } },
+      caseStudies: { orderBy: { createdAt: 'desc' } },
     },
   });
 }
@@ -34,75 +34,97 @@ export default async function PractitionerPage({ params }: PageProps) {
   const p = await loadPractitioner(params.slug);
   if (!p) notFound();
 
-  // Dual-label: show the practitioner's own phrasing (rawLabel) as their voice; fall
-  // back to the canonical name when a raw label wasn't captured.
-  const specialtyLabels = Array.from(
-    new Set(p.specialties.map((ps) => (ps.rawLabel?.trim() || ps.specialty.name).trim())),
+  // Dual-label: canonical names = curated rail chips; rawLabels = the practitioner's own
+  // phrasing, listed under "How I work". Parent rollups excluded from the chip set to keep it tight.
+  const canonicalChips = Array.from(new Set(p.specialties.map((ps) => ps.specialty.name)));
+  const rawModalities = Array.from(
+    new Set(p.specialties.map((ps) => ps.rawLabel?.trim()).filter((l): l is string => !!l)),
   );
 
   return (
     <main className="min-h-screen bg-muted/30 px-4 py-10 sm:py-16">
-      <div className="mx-auto max-w-3xl space-y-6">
-        <Card className="space-y-8 p-6 sm:p-10">
-          <PractitionerHero
-            displayName={p.displayName}
-            headline={p.headline}
-            photoUrl={p.photoUrl}
-            city={p.city ? { name: p.city.name, state: p.city.state } : null}
-            telehealth={p.telehealth}
-            inPerson={p.inPerson}
-            specialtyLabels={specialtyLabels}
-          />
-
-          <div className="grid gap-8 sm:grid-cols-[1fr_18rem]">
-            <div className="space-y-8">
-              {p.whoIHelp && (
-                <section aria-label="Who I help" className="space-y-2">
-                  <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                    Who I help
-                  </h2>
-                  <p className="text-base leading-relaxed text-foreground">{p.whoIHelp}</p>
-                </section>
-              )}
-
-              {p.bio && (
-                <section aria-label="About" className="space-y-2">
-                  <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                    About
-                  </h2>
-                  <div className="space-y-3 text-sm leading-relaxed text-foreground">
-                    {p.bio.split(/\n{2,}/).map((para, i) => (
-                      <p key={i}>{para.trim()}</p>
-                    ))}
-                  </div>
-                </section>
-              )}
-
-              {specialtyLabels.length > 0 && (
-                <section aria-label="Specialties & modalities" className="space-y-2">
-                  <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                    Specialties &amp; modalities
-                  </h2>
-                  <div className="flex flex-wrap gap-1.5">
-                    {specialtyLabels.map((label) => (
-                      <Badge key={label} variant="secondary">
-                        {label}
-                      </Badge>
-                    ))}
-                  </div>
-                </section>
-              )}
-            </div>
-
-            <aside className="space-y-3 sm:sticky sm:top-8 sm:self-start">
+      <div className="mx-auto max-w-4xl">
+        <Card className="p-6 sm:p-10">
+          <div className="grid gap-10 sm:grid-cols-[19rem_1fr]">
+            {/* Sticky identity + booking rail (Variation B) */}
+            <aside className="min-w-0 space-y-6 sm:sticky sm:top-8 sm:self-start">
+              <PractitionerHero
+                displayName={p.displayName}
+                headline={p.headline}
+                photoUrl={p.photoUrl}
+                city={p.city ? { name: p.city.name, state: p.city.state } : null}
+                telehealth={p.telehealth}
+                inPerson={p.inPerson}
+                chips={canonicalChips}
+                hheCertified
+              />
               <PractitionerCTAs
                 bookingLinks={p.bookingLinks.map((b) => ({ label: b.label, url: b.url }))}
                 websiteUrl={p.websiteUrl}
               />
             </aside>
+
+            {/* Scrollable narrative */}
+            <div className="min-w-0 space-y-8">
+              {p.whoIHelp && (
+                <p className="text-lg leading-relaxed text-foreground">{p.whoIHelp}</p>
+              )}
+
+              {p.bio && (
+                <>
+                  {p.whoIHelp && <Separator />}
+                  <section aria-label="About" className="space-y-2">
+                    <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                      About {p.displayName.split(/\s+/)[0]}
+                    </h2>
+                    <div className="space-y-3 text-sm leading-relaxed text-foreground">
+                      {p.bio.split(/\n{2,}/).map((para, i) => (
+                        <p key={i}>{para.trim()}</p>
+                      ))}
+                    </div>
+                  </section>
+                </>
+              )}
+
+              {rawModalities.length > 0 && (
+                <section aria-label="How I work" className="space-y-2">
+                  <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                    How I work
+                  </h2>
+                  <ul className="divide-y rounded-lg border bg-card">
+                    {rawModalities.map((m) => (
+                      <li key={m} className="px-3 py-2.5 text-sm">
+                        {m}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+
+              {p.caseStudies.length > 0 && (
+                <section aria-label="Outcomes" className="space-y-3">
+                  <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                    Outcomes
+                  </h2>
+                  <ul className="space-y-3">
+                    {p.caseStudies.map((cs) => (
+                      <li key={cs.id} className="rounded-lg border bg-card p-4">
+                        <p className="text-sm font-medium">{cs.title}</p>
+                        <p className="mt-1 text-sm leading-relaxed text-muted-foreground">
+                          {cs.summary}
+                        </p>
+                        {cs.outcome && (
+                          <p className="mt-1 text-sm leading-relaxed text-foreground">{cs.outcome}</p>
+                        )}
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+            </div>
           </div>
 
-          <Separator />
+          <Separator className="my-8" />
           <p className="text-center text-xs text-muted-foreground">
             HHE-curated practitioner · invite-only directory
           </p>
