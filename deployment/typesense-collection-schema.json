@@ -10,6 +10,7 @@
     { "name": "location", "type": "geopoint", "optional": true },
     { "name": "specialtyNames", "type": "string[]", "facet": true, "index": true },
     { "name": "specialtySlugs", "type": "string[]", "facet": true, "index": true, "optional": true },
+    { "name": "specialtyLabels", "type": "string[]", "index": true, "facet": false, "optional": true },
     { "name": "acceptedAt", "type": "int64", "sort": true },
     { "name": "yearsInPractice", "type": "int32", "facet": true, "sort": true, "optional": true },
     { "name": "searchText", "type": "string", "index": true, "optional": true },

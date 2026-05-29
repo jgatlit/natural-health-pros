@@ -1,34 +1,10 @@
 import { PrismaClient, Role } from '@prisma/client';
+import { seedTaxonomy } from './taxonomy';
 
 const prisma = new PrismaClient();
 
-// Hierarchical specialty taxonomy (decisions-JSON: hierarchical-tax YES).
-// 4 parents + 4 children. Anchored in Amy's 5/15 framing of HHE programs.
-const SPECIALTY_TREE = [
-  {
-    slug: 'functional-medicine',
-    name: 'Functional Medicine',
-    children: [
-      { slug: 'hormone-balance', name: 'Hormone Balance' },
-      { slug: 'gut-health', name: 'Gut Health' },
-    ],
-  },
-  {
-    slug: 'holistic-nutrition',
-    name: 'Holistic Nutrition',
-    children: [{ slug: 'childrens-holistic-health', name: "Children's Holistic Health" }],
-  },
-  {
-    slug: 'mind-body-coaching',
-    name: 'Mind-Body Coaching',
-    children: [{ slug: 'stress-sleep-optimization', name: 'Stress / Sleep Optimization' }],
-  },
-  {
-    slug: 'herbal-medicine',
-    name: 'Herbal Medicine',
-    children: [],
-  },
-];
+// Canonical specialty taxonomy now lives in ./taxonomy (genesis canonical set +
+// APPROVED aliases), shared with the pilot importer. seedTaxonomy() is idempotent.
 
 // 60% GA / 40% other (operator directive).
 // Coordinates are city centroids; per-practitioner jitter applied below.
@@ -273,20 +249,12 @@ async function main() {
   await prisma.practitionerSpecialty.deleteMany({});
   await prisma.practitioner.deleteMany({});
   await prisma.user.deleteMany({ where: { email: { endsWith: '@example.com' } } });
+  await prisma.specialtyAlias.deleteMany({});
   await prisma.specialty.deleteMany({});
   await prisma.city.deleteMany({});
 
-  console.log('Seeding specialties…');
-  for (const parent of SPECIALTY_TREE) {
-    const parentRow = await prisma.specialty.create({
-      data: { slug: parent.slug, name: parent.name },
-    });
-    for (const child of parent.children) {
-      await prisma.specialty.create({
-        data: { slug: child.slug, name: child.name, parentId: parentRow.id },
-      });
-    }
-  }
+  console.log('Seeding genesis taxonomy (canonical + aliases)…');
+  await seedTaxonomy(prisma);
 
   console.log('Seeding cities…');
   const cityRows = new Map<string, { id: string; name: string; lat: number; lng: number }>();

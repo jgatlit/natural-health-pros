@@ -92,6 +92,8 @@ Phase 1 shipped + verified at https://hhe-directory.vercel.app (commits through 
 
 Phase 1 retrospective lives in `docs/PHASE-1-PLAN.md` (Blocks A/B/C/D all marked done).
 
+**Post-Amy-meeting plan (2026-05-28)**: see `docs/2026-05-28-amy-meeting-plan.md` — V1 pilot greenlit (~20 practitioners, booking+payments, ~July 1). Two named priorities: (P1) rich practitioner landing-page redesign + ingest Amy's pilot spreadsheet/image-folder; (P2) consume design system from `cms.chem.dev` (slug TBD) + apply locked brand (white / forest-green / red-hot-pink / sage). Branding is locked but NOT yet applied (`globals.css` still default zinc). Canonical meeting record: `~/vault/300 Entities/Meetings/2026-05-28 HHE Ask Zuzu + Holistic Practitioner Directory - Dev & Strategy.md`.
+
 ## Reference artifacts (outside repo)
 
 Authoritative source documents kept in the operator's vault / Downloads (vault is at `~/vault/`):

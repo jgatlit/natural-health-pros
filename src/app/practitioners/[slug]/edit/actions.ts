@@ -2,9 +2,11 @@
 
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
+import type { Prisma } from '@prisma/client';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
 import { indexPractitioner } from '@/lib/practitioner-indexer';
+import { syncSpecialtySynonyms } from '@/lib/typesense-synonyms';
 
 async function authorizeForSlug(slug: string) {
   const session = await auth();
@@ -26,14 +28,58 @@ async function authorizeForSlug(slug: string) {
   return practitioner;
 }
 
-function buildSearchText(
-  displayName: string,
-  bio: string,
-  cityName: string,
-  cityState: string,
-  specialtyNames: string[],
-): string {
-  return [displayName, bio, cityName, cityState, ...specialtyNames].join(' ');
+function buildSearchText(parts: (string | null | undefined)[]): string {
+  return parts.filter((p) => p && p.trim()).join(' \n ');
+}
+
+const normLabel = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
+
+function slugify(s: string): string {
+  return s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 60) || 'specialty';
+}
+
+type RawSelection = { specialtyId: string | null; rawLabel: string };
+
+/**
+ * Resolve one combobox selection → a canonical specialtyId + the practitioner's rawLabel.
+ * - Picked canonical → use it.
+ * - Free-text that matches an existing alias/canonical (normalized) → reuse that canonical.
+ * - Genuinely novel free-text → create a PROPOSED canonical + PENDING alias (the
+ *   /admin/specialties moderation queue). Practitioner goes live immediately, never blocked.
+ * Returns null when the rawLabel is empty.
+ */
+async function resolveSelection(
+  tx: Prisma.TransactionClient,
+  sel: RawSelection,
+): Promise<{ specialtyId: string; rawLabel: string } | null> {
+  const rawLabel = sel.rawLabel.trim();
+  if (!rawLabel) return null;
+  if (sel.specialtyId) return { specialtyId: sel.specialtyId, rawLabel };
+
+  const label = normLabel(rawLabel);
+
+  const alias = await tx.specialtyAlias.findUnique({ where: { label } });
+  if (alias) return { specialtyId: alias.specialtyId, rawLabel };
+
+  const byName = await tx.specialty.findFirst({
+    where: { name: { equals: rawLabel, mode: 'insensitive' } },
+  });
+  if (byName) return { specialtyId: byName.id, rawLabel };
+
+  // Novel — create a PROPOSED canonical (unique slug) + PENDING alias.
+  let slug = slugify(rawLabel);
+  if (await tx.specialty.findUnique({ where: { slug } })) slug = `${slug}-${Date.now().toString(36)}`;
+  const created = await tx.specialty.create({
+    data: { slug, name: rawLabel, status: 'PROPOSED' },
+  });
+  await tx.specialtyAlias.create({
+    data: { label, specialtyId: created.id, source: 'PRACTITIONER', status: 'PENDING' },
+  });
+  return { specialtyId: created.id, rawLabel };
 }
 
 function normalizeUrl(raw: string, allowlist: string[]): string | null {
@@ -77,7 +123,21 @@ export async function updatePractitioner(slug: string, formData: FormData): Prom
   const cityId = String(formData.get('cityId') ?? '').trim() || null;
   const yearsRaw = String(formData.get('yearsInPractice') ?? '').trim();
   const yearsInPractice = yearsRaw === '' ? null : Math.max(0, parseInt(yearsRaw, 10) || 0);
-  const specialtyIds = formData.getAll('specialtyIds').map((s) => String(s));
+
+  let rawSelections: RawSelection[] = [];
+  try {
+    const parsed = JSON.parse(String(formData.get('specialtiesJson') ?? '[]'));
+    if (Array.isArray(parsed)) {
+      rawSelections = parsed
+        .map((p) => ({
+          specialtyId: typeof p.specialtyId === 'string' ? p.specialtyId : null,
+          rawLabel: typeof p.rawLabel === 'string' ? p.rawLabel : '',
+        }))
+        .filter((p) => p.rawLabel.trim());
+    }
+  } catch {
+    rawSelections = [];
+  }
 
   if (!displayName) {
     redirect(`/practitioners/${slug}/edit?error=name-required`);
@@ -107,16 +167,11 @@ export async function updatePractitioner(slug: string, formData: FormData): Prom
     ? await prisma.city.findUnique({ where: { id: cityId } })
     : null;
 
-  // Lookup specialty names for search-text composition
-  const specialtyRows = await prisma.specialty.findMany({
-    where: { id: { in: specialtyIds } },
-    include: { parent: true },
+  // Existing landing-page fields (not edited by this form) — preserve in searchText.
+  const existing = await prisma.practitioner.findUnique({
+    where: { id: target.id },
+    select: { headline: true, whoIHelp: true },
   });
-  const specialtyDisplayNames = Array.from(
-    new Set(
-      specialtyRows.flatMap((s) => (s.parent ? [s.name, s.parent.name] : [s.name])),
-    ),
-  );
 
   // Approx city centroids — Phase 2.5 can add per-practitioner override
   const cityCoords: Record<string, [number, number]> = {
@@ -136,7 +191,31 @@ export async function updatePractitioner(slug: string, formData: FormData): Prom
   };
   const coords = city ? cityCoords[city.slug] ?? null : null;
 
+  let createdNewTaxonomy = false;
+
   await prisma.$transaction(async (tx) => {
+    // Resolve combobox selections → canonical ids (+ create PROPOSED/PENDING for novel terms)
+    const resolved: { specialtyId: string; rawLabel: string }[] = [];
+    const seen = new Set<string>();
+    for (const sel of rawSelections) {
+      const before = await tx.specialty.count();
+      const r = await resolveSelection(tx, sel);
+      if (!r || seen.has(r.specialtyId)) continue;
+      if ((await tx.specialty.count()) > before) createdNewTaxonomy = true;
+      seen.add(r.specialtyId);
+      resolved.push(r);
+    }
+
+    // Canonical names (+ parents) for searchText
+    const specialtyRows = await tx.specialty.findMany({
+      where: { id: { in: resolved.map((r) => r.specialtyId) } },
+      include: { parent: true },
+    });
+    const canonicalNames = Array.from(
+      new Set(specialtyRows.flatMap((s) => (s.parent ? [s.name, s.parent.name] : [s.name]))),
+    );
+    const rawLabels = resolved.map((r) => r.rawLabel);
+
     await tx.practitionerSpecialty.deleteMany({ where: { practitionerId: target.id } });
     await tx.bookingLink.deleteMany({ where: { practitionerId: target.id } });
     await tx.practitioner.update({
@@ -148,15 +227,21 @@ export async function updatePractitioner(slug: string, formData: FormData): Prom
         latitude: coords?.[0] ?? null,
         longitude: coords?.[1] ?? null,
         yearsInPractice,
-        searchText: buildSearchText(
+        searchText: buildSearchText([
           displayName,
+          existing?.headline,
           bio,
-          city?.name ?? '',
-          city?.state ?? '',
-          specialtyDisplayNames,
-        ),
+          existing?.whoIHelp,
+          city?.name,
+          city?.state,
+          ...rawLabels,
+          ...canonicalNames,
+        ]),
         specialties: {
-          create: specialtyIds.map((id) => ({ specialty: { connect: { id } } })),
+          create: resolved.map((r) => ({
+            rawLabel: r.rawLabel,
+            specialty: { connect: { id: r.specialtyId } },
+          })),
         },
         bookingLinks: {
           create: bookingLinks.map((b, idx) => ({
@@ -172,6 +257,12 @@ export async function updatePractitioner(slug: string, formData: FormData): Prom
   await indexPractitioner(target.id).catch((err) =>
     console.error('Typesense reindex failed:', err),
   );
+  // New rawLabels / proposed canonicals change the synonym groups — resync (cheap, no reindex).
+  if (createdNewTaxonomy || rawSelections.length > 0) {
+    await syncSpecialtySynonyms().catch((err) =>
+      console.error('Typesense synonym sync failed:', err),
+    );
+  }
 
   revalidatePath(`/practitioners/${slug}`);
   revalidatePath(`/practitioners/${slug}/edit`);
