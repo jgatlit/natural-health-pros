@@ -2,8 +2,11 @@
 
 > **Why this exists**: On 2026-06-24 the Typesense Cloud cluster `1rt8fj5i9epv2s6mp` was found **terminated** — its host `1rt8fj5i9epv2s6mp-1.a1.typesense.net` no longer resolves (DNS NXDOMAIN). `/search` returns HTTP 200 but the SSR initial search hangs against the dead host, so the streamed page never resolves past the loading skeleton. `/` is unaffected (it never touches Typesense). This runbook recreates an **identical-or-better** cluster and rewires the app. Execute top-to-bottom once the new admin API key is in hand.
 
-**Status**: PREP COMPLETE — blocked on new cluster + admin API key.
+**Status**: ✅ EXECUTED 2026-06-24 — search restored (see Execution Log). Keep this runbook for the next rebuild.
 **Owner**: operator (jgatlit). **Est. execution time**: ~20–30 min once key arrives.
+
+### Execution Log
+- **2026-06-24** — original cluster `1rt8fj5i9epv2s6mp` terminated; rebuilt as **`vm8gj01ubsi7hyxep`** (host `vm8gj01ubsi7hyxep-1.a2.typesense.net`, Server **v30.2**, single-node Starter). Ran bootstrap → reindex (13 docs) → synonyms (21 groups); rewired Vercel env (host + 2 keys × 3 scopes via v10 REST single-POST — no CLI bug); also fixed a pre-existing latent bug where `TYPESENSE_PORT`/`TYPESENSE_PROTOCOL` were stored EMPTY in the **production** scope only (set to 443/https). Redeployed prod (`hhe-directory-j5ul8xcpl`). Verified: `/search` 200 in ~0.9s with real hits (was hanging 15s).
 
 ---
 
