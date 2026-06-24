@@ -11,6 +11,7 @@ import { CurrentRefinements } from './CurrentRefinements';
 import { SortBy } from './SortBy';
 import { SearchResults, ResultStats } from './SearchResults';
 import { MobileFiltersSheet } from './MobileFiltersSheet';
+import { SearchErrorBoundary, SearchErrorState } from './SearchUnavailable';
 
 /**
  * react-instantsearch-nextjs doesn't always fire the initial search on
@@ -32,38 +33,42 @@ export function SearchExperience() {
   const searchClient = useMemo(() => createSearchAdapter().searchClient, []);
 
   return (
-    <InstantSearchNext
-      searchClient={searchClient}
-      indexName={TYPESENSE_COLLECTION}
-      routing={true}
-      future={{ preserveSharedStateOnUnmount: true }}
-    >
-      <EnsureInitialSearch />
-      <div className="space-y-4">
-        <SearchBox />
+    <SearchErrorBoundary>
+      <InstantSearchNext
+        searchClient={searchClient}
+        indexName={TYPESENSE_COLLECTION}
+        routing={true}
+        future={{ preserveSharedStateOnUnmount: true }}
+      >
+        <EnsureInitialSearch />
+        <SearchErrorState>
+          <div className="space-y-4">
+            <SearchBox />
 
-        <div className="flex flex-wrap items-center justify-between gap-2">
-          <div className="flex flex-wrap items-center gap-2">
-            <ResultStats />
-            <CurrentRefinements />
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                <ResultStats />
+                <CurrentRefinements />
+              </div>
+              <div className="flex items-center gap-2">
+                <MobileFiltersSheet />
+                <SortBy />
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-6 md:grid-cols-[220px_1fr]">
+              <aside className="hidden space-y-5 md:block">
+                <RefinementGroup attribute="specialtyNames" title="Specialty" operator="or" />
+                <RefinementGroup attribute="cityName" title="City" operator="and" />
+                <RefinementGroup attribute="cityState" title="State" operator="and" />
+                <RangeFacet attribute="yearsInPractice" title="Years in practice" unit="yr" />
+              </aside>
+
+              <SearchResults />
+            </div>
           </div>
-          <div className="flex items-center gap-2">
-            <MobileFiltersSheet />
-            <SortBy />
-          </div>
-        </div>
-
-        <div className="grid grid-cols-1 gap-6 md:grid-cols-[220px_1fr]">
-          <aside className="hidden space-y-5 md:block">
-            <RefinementGroup attribute="specialtyNames" title="Specialty" operator="or" />
-            <RefinementGroup attribute="cityName" title="City" operator="and" />
-            <RefinementGroup attribute="cityState" title="State" operator="and" />
-            <RangeFacet attribute="yearsInPractice" title="Years in practice" unit="yr" />
-          </aside>
-
-          <SearchResults />
-        </div>
-      </div>
-    </InstantSearchNext>
+        </SearchErrorState>
+      </InstantSearchNext>
+    </SearchErrorBoundary>
   );
 }

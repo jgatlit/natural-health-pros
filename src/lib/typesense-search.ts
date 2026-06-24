@@ -10,6 +10,16 @@ export function createSearchAdapter() {
       nodes: [{ host, port: 443, protocol: 'https' }],
       apiKey,
       cacheSearchResultsForSeconds: 60,
+      // Fail FAST when the cluster is unreachable. Without these, the typesense-js
+      // default (5s timeout × ~3 retries) makes the SSR initial search hang ~15s,
+      // which streams an HTTP 200 shell that never resolves past the loading
+      // skeleton — exactly the silent outage seen 2026-06-24 when the cluster was
+      // terminated. 2s × 1 retry bounds the failure to a few seconds so the error
+      // boundary in SearchExperience can render a real "unavailable" state.
+      connectionTimeoutSeconds: 2,
+      numRetries: 1,
+      retryIntervalSeconds: 0.5,
+      healthcheckIntervalSeconds: 15,
     },
     additionalSearchParameters: {
       // PRIMARY (P1d): keyword over canonical + the practitioner's own phrasing
