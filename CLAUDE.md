@@ -11,12 +11,12 @@
 ## Stack (Phase 0 + Block A — live)
 
 - Next.js 14.2.35 (App Router, `src/`, TS strict)
-- **Tailwind 4.3 + shadcn/ui (`new-york` style, zinc base)** — primitives installed: Avatar, Badge, Button, Card, Separator, Skeleton. Config lives in `src/app/globals.css` via `@theme` (no `tailwind.config.ts`).
+- **Tailwind 4.3 + shadcn/ui (`new-york` style)** — primitives installed: Avatar, Badge, Button, Card, Separator, Skeleton. Config lives in `src/app/globals.css` via `@theme` (no `tailwind.config.ts`). **Applied brand = CMS Theme D "Midnight Navy"** (midnight navy + rose-magenta + sage), shipped 2026-05-29 — NOT the default shadcn zinc (that base note is historical).
 - Prisma 6.19 + PostgreSQL (Neon via Vercel Marketplace) — **`pg_trgm` extension live** + GIN trigram index on `Practitioner.searchText`
 - NextAuth v5 (Auth.js) + Prisma adapter (no providers wired yet — Phase 0.5)
 - Vercel Blob + Vercel KV / Upstash Ratelimit
 - Sentry · Resend
-- **Typesense Cloud** (cluster `1rt8fj5i9epv2s6mp`) + `react-instantsearch` + `react-instantsearch-nextjs` — live, env vars provisioned on Vercel for all 3 scopes
+- **Typesense Cloud** (cluster `vm8gj01ubsi7hyxep`, Server v30.2) + `react-instantsearch` + `react-instantsearch-nextjs` — live, env vars provisioned on Vercel for all 3 scopes. (Original cluster `1rt8fj5i9epv2s6mp` was terminated 2026-06-24 and rebuilt same-day — see `docs/runbooks/typesense-cluster-rebuild.md`.)
 
 **Phase 2A also shipped** (2026-05-25): practitioner authentication via NextAuth + Resend magic-link, invitation system at `/admin/invites`, accept-invite flow → `/onboarding` → `/practitioners/[slug]/edit`. Middleware gates `/admin/*` + `/practitioners/[slug]/edit` + `/onboarding`. `ADMIN_EMAILS` env auto-promotes operator (jgatlit@gmail.com) on first sign-in.
 
@@ -39,7 +39,7 @@
 | **Vercel project** | `ai-chemist/hhe-directory` — Vercel inspector: https://vercel.com/ai-chemist/hhe-directory |
 | **Production URL** | https://hhe-directory.vercel.app |
 | **Neon DB** | `neondb` @ `ep-plain-bird-ap6zr7b3.c-7.us-east-1.aws.neon.tech` (Marketplace-connected; branching per env) |
-| **Typesense Cloud** | cluster `1rt8fj5i9epv2s6mp`, host `1rt8fj5i9epv2s6mp-1.a1.typesense.net`, collection `practitioners`, dashboard https://cloud.typesense.org |
+| **Typesense Cloud** | cluster `vm8gj01ubsi7hyxep` (Server v30.2), host `vm8gj01ubsi7hyxep-1.a2.typesense.net`, collection `practitioners`, dashboard https://cloud.typesense.org (rebuilt 2026-06-24; prior cluster `1rt8fj5i9epv2s6mp` terminated) |
 
 ## DO NOT touch (legacy / orphaned, per 5/24 operator directive)
 
@@ -92,7 +92,7 @@ Phase 1 shipped + verified at https://hhe-directory.vercel.app (commits through 
 
 Phase 1 retrospective lives in `docs/PHASE-1-PLAN.md` (Blocks A/B/C/D all marked done).
 
-**Post-Amy-meeting plan (2026-05-28)**: see `docs/2026-05-28-amy-meeting-plan.md` — V1 pilot greenlit (~20 practitioners, booking+payments, ~July 1). Two named priorities: (P1) rich practitioner landing-page redesign + ingest Amy's pilot spreadsheet/image-folder; (P2) consume design system from `cms.chem.dev` (slug TBD) + apply locked brand (white / forest-green / red-hot-pink / sage). Branding is locked but NOT yet applied (`globals.css` still default zinc). Canonical meeting record: `~/vault/300 Entities/Meetings/2026-05-28 HHE Ask Zuzu + Holistic Practitioner Directory - Dev & Strategy.md`.
+**Post-Amy-meeting plan (2026-05-28)**: see `docs/2026-05-28-amy-meeting-plan.md` — V1 pilot greenlit (~20 practitioners, booking+payments, ~July 1). Two named priorities: (P1) rich practitioner landing-page redesign + ingest Amy's pilot spreadsheet/image-folder; (P2) consume design system from `cms.chem.dev`. ⚠️ **BRANDING — SHIPPED, do not reopen**: the directory's live brand is CMS **Theme D "Midnight Navy"** (midnight navy + rose-magenta + sage; Inter/Playfair), applied 2026-05-29 via commits `8cf4f17`/`5a23aff`. The "white / forest-green / red-hot-pink" palette floated on 5/28 was **superseded the next day (5/29)** when the team chose "Midnight Navy Option D" and was **never shipped**. Any note saying "apply forest-green / globals.css still zinc" is STALE — ignore it. Canonical meeting record: `~/vault/300 Entities/Meetings/2026-05-28 HHE Ask Zuzu + Holistic Practitioner Directory - Dev & Strategy.md`.
 
 ## Reference artifacts (outside repo)
 

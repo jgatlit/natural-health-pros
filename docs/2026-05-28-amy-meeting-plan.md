@@ -15,6 +15,8 @@ purpose: Requirements + prioritized build plan distilled from the 2026-05-28 Amy
 > This doc is the **repo-local, build-ready distillation** — only the directory-relevant requirements + the sequenced plan.
 > Ask Zuzu (Kajabi transcript→course-ID mapping agent) is a **separate workstream**, not built in this repo — noted at the bottom for completeness.
 
+> ⚠️ **BRANDING SUPERSEDED — correction added 2026-06-24.** The white / forest-green / red-hot-pink / sage palette described throughout this 5/28 plan (the "Branding" row, P-Brand, and the "apply locked brand tokens / globals.css still zinc" steps) was **NOT shipped**. The **next day (2026-05-29)** the team chose CMS **Theme D "Midnight Navy"** (midnight navy + rose-magenta + sage), which is the **live, deployed brand** (commits `8cf4f17`/`5a23aff`; see the 5/29 design session). Treat every forest-green / P-Brand / "apply today" instruction below as **historical only — do NOT re-apply forest-green or touch the brand tokens.**
+
 ## Headline outcome
 
 Amy greenlit a **dated V1 pilot**: a *styled, real-data* directory with **~20 (min ~12) HHE practitioners**, **booking + payments**, target **~July 1, 2026** (~30 days). Hands-on build was to start on-site **2026-05-29**. Branding is **locked**. The two named operator priorities for this priming pass:
