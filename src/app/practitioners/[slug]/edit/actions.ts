@@ -7,6 +7,7 @@ import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
 import { indexPractitioner } from '@/lib/practitioner-indexer';
 import { syncSpecialtySynonyms } from '@/lib/typesense-synonyms';
+import { draftProfile, type DraftSpecialty } from '@/lib/onboarding-draft';
 
 async function authorizeForSlug(slug: string) {
   const session = await auth();
@@ -115,11 +116,23 @@ function normalizeBookingUrl(raw: string): string | null {
   return normalizeUrl(raw, BOOKING_HOSTS);
 }
 
+// Website is an open field (any host) — accept any valid http(s) URL, null when blank/invalid.
+function normalizeWebsiteUrl(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  return normalizeUrl(trimmed, []);
+}
+
 export async function updatePractitioner(slug: string, formData: FormData): Promise<void> {
   const target = await authorizeForSlug(slug);
 
   const displayName = String(formData.get('displayName') ?? '').trim();
   const bio = String(formData.get('bio') ?? '').trim();
+  const headline = String(formData.get('headline') ?? '').trim() || null;
+  const whoIHelp = String(formData.get('whoIHelp') ?? '').trim() || null;
+  const websiteUrl = normalizeWebsiteUrl(String(formData.get('websiteUrl') ?? ''));
+  const telehealth = formData.get('telehealth') === 'on' || formData.get('telehealth') === 'true';
+  const inPerson = formData.get('inPerson') === 'on' || formData.get('inPerson') === 'true';
   const cityId = String(formData.get('cityId') ?? '').trim() || null;
   const yearsRaw = String(formData.get('yearsInPractice') ?? '').trim();
   const yearsInPractice = yearsRaw === '' ? null : Math.max(0, parseInt(yearsRaw, 10) || 0);
@@ -166,12 +179,6 @@ export async function updatePractitioner(slug: string, formData: FormData): Prom
   const city = cityId
     ? await prisma.city.findUnique({ where: { id: cityId } })
     : null;
-
-  // Existing landing-page fields (not edited by this form) — preserve in searchText.
-  const existing = await prisma.practitioner.findUnique({
-    where: { id: target.id },
-    select: { headline: true, whoIHelp: true },
-  });
 
   // Approx city centroids — Phase 2.5 can add per-practitioner override
   const cityCoords: Record<string, [number, number]> = {
@@ -223,15 +230,20 @@ export async function updatePractitioner(slug: string, formData: FormData): Prom
       data: {
         displayName,
         bio: bio || null,
+        headline,
+        whoIHelp,
+        websiteUrl,
+        telehealth,
+        inPerson,
         cityId,
         latitude: coords?.[0] ?? null,
         longitude: coords?.[1] ?? null,
         yearsInPractice,
         searchText: buildSearchText([
           displayName,
-          existing?.headline,
+          headline,
           bio,
-          existing?.whoIHelp,
+          whoIHelp,
           city?.name,
           city?.state,
           ...rawLabels,
@@ -269,4 +281,171 @@ export async function updatePractitioner(slug: string, formData: FormData): Prom
   revalidatePath('/');
   revalidatePath('/search');
   redirect(`/practitioners/${slug}/edit?saved=1`);
+}
+
+/**
+ * Resolve one AI-drafted specialty → canonical id, writing the proposed mapping as
+ * an IMPORT/PENDING SpecialtyAlias with the LLM confidence (Task B spec). Mirrors
+ * resolveSelection but the proposal always lands in the moderation queue (PENDING)
+ * with source=IMPORT, and novel canonicals are created PROPOSED.
+ */
+async function resolveDraftSpecialty(
+  tx: Prisma.TransactionClient,
+  d: DraftSpecialty,
+): Promise<{ specialtyId: string; rawLabel: string } | null> {
+  const rawLabel = d.rawLabel.trim();
+  if (!rawLabel) return null;
+  const label = normLabel(rawLabel);
+
+  // Already-known phrasing → reuse its canonical (don't disturb an approved alias).
+  const existingAlias = await tx.specialtyAlias.findUnique({ where: { label } });
+  if (existingAlias) return { specialtyId: existingAlias.specialtyId, rawLabel };
+
+  // Map to the proposed canonical: by slug, then by name, else create a PROPOSED node.
+  let canonical =
+    (await tx.specialty.findUnique({ where: { slug: d.canonicalSlug } })) ||
+    (await tx.specialty.findFirst({
+      where: { name: { equals: d.canonicalName, mode: 'insensitive' } },
+    }));
+  if (!canonical) {
+    let slug = slugify(d.canonicalSlug || d.canonicalName);
+    if (await tx.specialty.findUnique({ where: { slug } })) {
+      slug = `${slug}-${Date.now().toString(36)}`;
+    }
+    canonical = await tx.specialty.create({
+      data: { slug, name: d.canonicalName || rawLabel, status: 'PROPOSED' },
+    });
+  }
+
+  await tx.specialtyAlias.create({
+    data: {
+      label,
+      specialtyId: canonical.id,
+      source: 'IMPORT',
+      status: 'PENDING',
+      confidence: d.confidence,
+    },
+  });
+  return { specialtyId: canonical.id, rawLabel };
+}
+
+/**
+ * AI onboarding DRAFT step (Task B). Reads the practitioner's raw self-description,
+ * drafts profile fields via the LLM (or template fallback), and persists them as a
+ * reviewable starting point — the practitioner then edits/overrides each field in the
+ * form below and clicks Save to publish. Drafted specialties write IMPORT/PENDING
+ * aliases (moderation queue); drafted case studies are persisted for review/removal.
+ */
+export async function generateDraftAction(slug: string, formData: FormData): Promise<void> {
+  const target = await authorizeForSlug(slug);
+  const rawSource = String(formData.get('draftSource') ?? '').trim();
+
+  const [practitioner, catalog] = await Promise.all([
+    prisma.practitioner.findUnique({
+      where: { id: target.id },
+      select: {
+        displayName: true,
+        headline: true,
+        whoIHelp: true,
+        bio: true,
+        specialties: { select: { rawLabel: true } },
+      },
+    }),
+    prisma.specialty.findMany({
+      where: { status: { in: ['ACTIVE', 'PROPOSED'] } },
+      select: { slug: true, name: true },
+      orderBy: { name: 'asc' },
+    }),
+  ]);
+  if (!practitioner) redirect('/auth/error?error=AccessDenied');
+
+  const { draft, source } = await draftProfile({
+    displayName: practitioner.displayName,
+    rawSource,
+    existing: {
+      headline: practitioner.headline,
+      whoIHelp: practitioner.whoIHelp,
+      bio: practitioner.bio,
+      rawLabels: practitioner.specialties
+        .map((s) => s.rawLabel?.trim())
+        .filter((s): s is string => !!s),
+    },
+    canonicalCatalog: catalog,
+  });
+
+  await prisma.$transaction(async (tx) => {
+    const resolved: { specialtyId: string; rawLabel: string }[] = [];
+    const seen = new Set<string>();
+    for (const d of draft.specialties) {
+      const r = await resolveDraftSpecialty(tx, d);
+      if (!r || seen.has(r.specialtyId)) continue;
+      seen.add(r.specialtyId);
+      resolved.push(r);
+    }
+
+    const specialtyRows = await tx.specialty.findMany({
+      where: { id: { in: resolved.map((r) => r.specialtyId) } },
+      include: { parent: true },
+    });
+    const canonicalNames = Array.from(
+      new Set(specialtyRows.flatMap((s) => (s.parent ? [s.name, s.parent.name] : [s.name]))),
+    );
+
+    await tx.practitionerSpecialty.deleteMany({ where: { practitionerId: target.id } });
+    await tx.practitioner.update({
+      where: { id: target.id },
+      data: {
+        headline: draft.headline || null,
+        whoIHelp: draft.whoIHelp || null,
+        bio: draft.bio || null,
+        searchText: buildSearchText([
+          practitioner.displayName,
+          draft.headline,
+          draft.bio,
+          draft.whoIHelp,
+          ...draft.modalities,
+          ...draft.specialties.map((s) => s.rawLabel),
+          ...canonicalNames,
+        ]),
+        specialties: {
+          create: resolved.map((r) => ({
+            rawLabel: r.rawLabel,
+            specialty: { connect: { id: r.specialtyId } },
+          })),
+        },
+      },
+    });
+
+    // Replace any prior AI-drafted case studies with the fresh draft (reviewable below).
+    await tx.caseStudy.deleteMany({ where: { practitionerId: target.id } });
+    for (const cs of draft.caseStudies) {
+      await tx.caseStudy.create({
+        data: {
+          practitionerId: target.id,
+          title: cs.title,
+          summary: cs.summary,
+          outcome: cs.outcome ?? null,
+          anonymized: true,
+        },
+      });
+    }
+  });
+
+  await indexPractitioner(target.id).catch((err) =>
+    console.error('Typesense reindex failed:', err),
+  );
+  await syncSpecialtySynonyms().catch((err) =>
+    console.error('Typesense synonym sync failed:', err),
+  );
+
+  revalidatePath(`/practitioners/${slug}/edit`);
+  redirect(`/practitioners/${slug}/edit?drafted=1&source=${source}`);
+}
+
+/** Remove one AI-drafted case study during review. */
+export async function removeCaseStudy(slug: string, caseStudyId: string): Promise<void> {
+  const target = await authorizeForSlug(slug);
+  await prisma.caseStudy.deleteMany({ where: { id: caseStudyId, practitionerId: target.id } });
+  revalidatePath(`/practitioners/${slug}/edit`);
+  redirect(`/practitioners/${slug}/edit`);
 }
