@@ -214,8 +214,15 @@ The reason the 2026-06-24 outage was *invisible* (HTTP 200, infinite skeleton) i
 
 Net effect: a dead/slow cluster now degrades to an honest, actionable message in ~2–4s instead of a perpetual skeleton. Cluster-tier-independent.
 
-### 7.4 Uptime monitoring
-Nothing alerted us — the outage was found manually. Add a lightweight probe (e.g. a cron `GET /health` on the cluster + `GET /search` content-assert via Vercel Cron, BetterStack, or `/loop`) so the next termination/outage pages us instead of surfacing in a demo.
+### 7.4 Uptime monitoring — ✅ IMPLEMENTED (branch `feat/search-uptime-monitoring`)
+The 2026-06-24 outage was found manually because nothing alerted us. Shipped a lightweight probe that asserts BOTH the cluster `/health` **and** a real search returning hits (`found > 0`) — the content assertion the HTTP-200 shell could never give us:
+
+1. `src/lib/search-probe.ts` — `probeSearch()`: `GET https://<host>/health` (expects `{ok:true}`) + `GET /collections/practitioners/documents/search?q=*` (expects `found > 0`). 4s timeout per check, never throws. Resolves host/key from `NEXT_PUBLIC_TYPESENSE_HOST` / `NEXT_PUBLIC_TYPESENSE_SEARCH_API_KEY` (falls back to the admin key).
+2. `src/app/api/health/search/route.ts` — returns 200 healthy / **503 + `Sentry.captureMessage`** on failure. Auth-gated by `Authorization: Bearer $CRON_SECRET` when `CRON_SECRET` is set (open otherwise, for local curl).
+3. `vercel.json` — Vercel Cron hits `/api/health/search` every 15 min (`*/15 * * * *`). Adjust cadence to plan limits (Hobby = daily only; Pro/Enterprise = any). Set `CRON_SECRET` in Vercel env so the endpoint isn't publicly pollable.
+4. `scripts/probe-search-uptime.ts` (`npm run probe:search`) — same checks from the CLI; exits 1 on failure. Use after a rebuild, or to drive an external cron (BetterStack / GitHub Actions / `/loop`) instead of Vercel Cron.
+
+**Post-rebuild check:** `npm run probe:search` should print `✅ Search stack healthy (N indexed practitioners)`.
 
 ### 7.5 Script the search-only key (determinism)
 The search-only key was created **manually** in the dashboard — undocumented and non-reproducible. Add a `typesense:keys` script that derives a search-scoped key from the admin key via the API:
