@@ -44,8 +44,8 @@ export default async function PractitionerPage({ params }: PageProps) {
   return (
     <main className="min-h-screen bg-muted/30 px-4 py-10 sm:py-16">
       <div className="mx-auto max-w-4xl">
-        <Card className="p-6 sm:p-10">
-          <div className="grid gap-10 sm:grid-cols-[19rem_1fr]">
+        <Card className="p-6 sm:p-12">
+          <div className="grid gap-12 sm:grid-cols-[22rem_1fr]">
             {/* Sticky identity + booking rail (Variation B) */}
             <aside className="min-w-0 space-y-6 sm:sticky sm:top-8 sm:self-start">
               <PractitionerHero
@@ -55,39 +55,44 @@ export default async function PractitionerPage({ params }: PageProps) {
                 city={p.city ? { name: p.city.name, state: p.city.state } : null}
                 telehealth={p.telehealth}
                 inPerson={p.inPerson}
+                yearsInPractice={p.yearsInPractice}
                 chips={canonicalChips}
                 hheCertified
               />
               <PractitionerCTAs
                 bookingLinks={p.bookingLinks.map((b) => ({ label: b.label, url: b.url }))}
                 websiteUrl={p.websiteUrl}
+                firstSessionPriceCents={p.firstSessionPriceCents}
               />
             </aside>
 
             {/* Scrollable narrative */}
-            <div className="min-w-0 space-y-8">
+            <div className="min-w-0 space-y-6">
               {p.whoIHelp && (
                 <p className="text-lg leading-relaxed text-foreground">{p.whoIHelp}</p>
               )}
 
               {p.bio && (
-                <>
-                  {p.whoIHelp && <Separator />}
-                  <section aria-label="About" className="space-y-2">
-                    <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
-                      About {p.displayName.split(/\s+/)[0]}
-                    </h2>
-                    <div className="space-y-3 text-sm leading-relaxed text-foreground">
-                      {p.bio.split(/\n{2,}/).map((para, i) => (
-                        <p key={i}>{para.trim()}</p>
-                      ))}
-                    </div>
-                  </section>
-                </>
+                <section
+                  aria-label="About"
+                  className="space-y-2 rounded-xl bg-secondary/40 p-6"
+                >
+                  <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                    About {p.displayName.split(/\s+/)[0]}
+                  </h2>
+                  <div className="space-y-3 text-sm leading-relaxed text-foreground">
+                    {p.bio.split(/\n{2,}/).map((para, i) => (
+                      <p key={i}>{para.trim()}</p>
+                    ))}
+                  </div>
+                </section>
               )}
 
               {rawModalities.length > 0 && (
-                <section aria-label="How I work" className="space-y-2">
+                <section
+                  aria-label="How I work"
+                  className="space-y-2 rounded-xl bg-secondary/40 p-6"
+                >
                   <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                     How I work
                   </h2>
@@ -102,7 +107,10 @@ export default async function PractitionerPage({ params }: PageProps) {
               )}
 
               {p.caseStudies.length > 0 && (
-                <section aria-label="Outcomes" className="space-y-3">
+                <section
+                  aria-label="Outcomes"
+                  className="space-y-3 rounded-xl bg-secondary/40 p-6"
+                >
                   <h2 className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
                     Outcomes
                   </h2>
