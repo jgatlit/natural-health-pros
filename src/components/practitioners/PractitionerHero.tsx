@@ -18,6 +18,8 @@ type Props = {
   city: { name: string; state: string } | null;
   telehealth: boolean | null;
   inPerson: boolean | null;
+  /** Years in practice — surfaced as a small line under the headline when present. */
+  yearsInPractice?: number | null;
   /** Curated canonical specialty names — the clean tag set shown in the identity rail. */
   chips: string[];
   hheCertified?: boolean;
@@ -35,17 +37,18 @@ export function PractitionerHero({
   city,
   telehealth,
   inPerson,
+  yearsInPractice,
   chips,
   hheCertified,
 }: Props) {
   return (
-    <header className="space-y-4">
-      <div className="aspect-[4/5] w-full overflow-hidden rounded-xl bg-muted ring-1 ring-border">
+    <header className="space-y-5">
+      <div className="aspect-[4/5] w-full overflow-hidden rounded-2xl bg-muted shadow-md ring-1 ring-border">
         {photoUrl ? (
           // eslint-disable-next-line @next/next/no-img-element
           <img src={photoUrl} alt={displayName} className="h-full w-full object-cover" />
         ) : (
-          <div className="flex h-full w-full items-center justify-center text-5xl font-medium text-muted-foreground">
+          <div className="flex h-full w-full items-center justify-center text-6xl font-medium text-muted-foreground">
             {initials(displayName)}
           </div>
         )}
@@ -60,6 +63,11 @@ export function PractitionerHero({
         )}
         <h1 className="font-serif text-3xl font-semibold tracking-tight">{displayName}</h1>
         {headline && <p className="text-sm text-muted-foreground">{headline}</p>}
+        {yearsInPractice != null && yearsInPractice > 0 && (
+          <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+            {yearsInPractice} {yearsInPractice === 1 ? 'year' : 'years'} in practice
+          </p>
+        )}
       </div>
 
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 text-sm text-muted-foreground">

@@ -5,6 +5,8 @@ type BookingLink = { label?: string | null; url: string };
 type Props = {
   bookingLinks?: BookingLink[];
   websiteUrl?: string | null;
+  /** First-session price in cents — rendered inside the primary booking CTA when present. */
+  firstSessionPriceCents?: number | null;
 };
 
 function hostHint(url: string): string {
@@ -15,15 +17,22 @@ function hostHint(url: string): string {
   }
 }
 
+/** cents → "$X" (whole) or "$X.XX" (fractional). */
+function formatPrice(cents: number): string {
+  const dollars = cents / 100;
+  return Number.isInteger(dollars) ? `$${dollars}` : `$${dollars.toFixed(2)}`;
+}
+
 /**
  * Rich-landing-page action block. Booking is live (Wedge 2B — practitioner-owned URLs).
  * Website is the classified col-D external link. Offerings + invoice stay "coming soon"
  * (Wedge 2C — Whop for Platforms, invite-only API pending). Booking = checkout pairing
  * (Amy 5/28) lands when Whop access does. All token-driven.
  */
-export function PractitionerCTAs({ bookingLinks = [], websiteUrl }: Props) {
+export function PractitionerCTAs({ bookingLinks = [], websiteUrl, firstSessionPriceCents }: Props) {
   const primaryBooking = bookingLinks[0];
   const moreBookings = bookingLinks.slice(1);
+  const hasFirstSessionPrice = firstSessionPriceCents != null && firstSessionPriceCents > 0;
 
   return (
     <section aria-label="Book & connect" className="space-y-3">
@@ -39,7 +48,11 @@ export function PractitionerCTAs({ bookingLinks = [], websiteUrl }: Props) {
             <p className="truncate text-sm font-semibold">
               {primaryBooking.label?.trim() || 'Book a session'}
             </p>
-            <p className="truncate text-xs opacity-80">{hostHint(primaryBooking.url)}</p>
+            <p className="truncate text-xs opacity-80">
+              {hasFirstSessionPrice
+                ? `First session: ${formatPrice(firstSessionPriceCents!)}`
+                : hostHint(primaryBooking.url)}
+            </p>
           </div>
           <ChevronRight
             className="h-4 w-4 shrink-0 transition-transform group-hover:translate-x-0.5"

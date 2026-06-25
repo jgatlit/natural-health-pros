@@ -33,7 +33,7 @@ export function SearchBox() {
         onChange={(e) => setValue(e.target.value)}
         onFocus={() => setFocused(true)}
         onBlur={() => setFocused(false)}
-        placeholder="Find a functional medicine practitioner near Atlanta"
+        placeholder="Describe what you're experiencing — bloating, fatigue, anxiety…"
         aria-label="Search practitioners"
         className="h-11 w-full rounded-lg border bg-card pl-10 pr-10 text-sm shadow-sm outline-none ring-ring/30 transition-shadow focus-visible:ring-2"
       />
