@@ -87,7 +87,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
         {searchParams.welcome && (
           <Card className="border-primary/30 bg-primary/5 p-4">
             <p className="text-sm">
-              <strong>Welcome to HHE Directory.</strong> Fill in your profile below to make it
+              <strong>Welcome to Natural Health Pros.</strong> Fill in your profile below to make it
               public.
             </p>
           </Card>

@@ -22,8 +22,8 @@ const geistMono = localFont({
 });
 
 export const metadata: Metadata = {
-  title: 'HHE Directory',
-  description: 'HHE-students-first practitioner directory.',
+  title: 'Natural Health Pros',
+  description: 'A curated directory of practitioners trained through Holistic Health Educators.',
 };
 
 export default function RootLayout({

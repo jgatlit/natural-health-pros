@@ -25,7 +25,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   if (!p) return { title: 'Practitioner not found' };
   const descr = p.whoIHelp || p.headline || p.bio || undefined;
   return {
-    title: `${p.displayName}${p.headline ? ` — ${p.headline}` : ''} · HHE Directory`,
+    title: `${p.displayName}${p.headline ? ` — ${p.headline}` : ''} · Natural Health Pros`,
     description: descr?.slice(0, 200),
   };
 }

@@ -8,7 +8,7 @@ function getResend(): Resend | null {
   return _client;
 }
 
-const FROM = process.env.EMAIL_FROM ?? 'HHE Directory <onboarding@resend.dev>';
+const FROM = process.env.EMAIL_FROM ?? 'Natural Health Pros <onboarding@resend.dev>';
 
 export type InvitationEmailParams = {
   to: string;
@@ -17,12 +17,12 @@ export type InvitationEmailParams = {
 };
 
 export async function sendInvitationEmail(params: InvitationEmailParams): Promise<void> {
-  const subject = 'You\'re invited to join HHE Directory';
+  const subject = 'You\'re invited to join Natural Health Pros';
   const invitedLine = params.invitedByName
     ? `${params.invitedByName} invited you`
     : 'You were invited';
   const text = [
-    `${invitedLine} to join the HHE Directory — a curated practitioner directory for graduates of Holistic Health Educators programs.`,
+    `${invitedLine} to join Natural Health Pros — a curated practitioner directory for graduates of Holistic Health Educators programs.`,
     '',
     `Accept your invitation:`,
     params.acceptUrl,
@@ -33,9 +33,9 @@ export async function sendInvitationEmail(params: InvitationEmailParams): Promis
   ].join('\n');
   const html = `
     <div style="font-family: system-ui, -apple-system, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; color: #1a1a1a;">
-      <h2 style="font-size: 18px; margin: 0 0 16px 0;">${invitedLine} to join HHE Directory.</h2>
+      <h2 style="font-size: 18px; margin: 0 0 16px 0;">${invitedLine} to join Natural Health Pros.</h2>
       <p style="font-size: 14px; line-height: 1.6; color: #555;">
-        HHE Directory is a curated practitioner directory for graduates of Holistic Health Educators
+        Natural Health Pros is a curated practitioner directory for graduates of Holistic Health Educators
         programs. Click below to claim your profile.
       </p>
       <p style="margin: 24px 0;">

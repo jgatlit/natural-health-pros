@@ -72,7 +72,7 @@ export default async function AdminIndex() {
         <header className="space-y-1">
           <h1 className="text-2xl font-semibold tracking-tight">Admin tools</h1>
           <p className="text-sm text-muted-foreground">
-            HHE Directory operator surface · {session?.user?.email ?? 'TEST BYPASS'}
+            Natural Health Pros operator surface · {session?.user?.email ?? 'TEST BYPASS'}
           </p>
         </header>
 

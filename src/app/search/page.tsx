@@ -2,8 +2,8 @@ import type { Metadata } from 'next';
 import { SearchExperience } from '@/components/search/SearchExperience';
 
 export const metadata: Metadata = {
-  title: 'Search · HHE Directory',
-  description: 'HHE-students-first practitioner directory.',
+  title: 'Search · Natural Health Pros',
+  description: 'A curated directory of practitioners trained through Holistic Health Educators.',
 };
 
 export default function SearchPage() {

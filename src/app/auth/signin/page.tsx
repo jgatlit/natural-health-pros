@@ -58,7 +58,7 @@ export default function SignInPage({ searchParams }: Props) {
           </form>
 
           <p className="text-center text-xs text-muted-foreground">
-            HHE Directory is invite-only. If you don&apos;t have an invitation, request one
+            Natural Health Pros is invite-only. If you don&apos;t have an invitation, request one
             from your HHE program lead.
           </p>
         </Card>

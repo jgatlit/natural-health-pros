@@ -46,7 +46,7 @@ export default async function InviteAcceptPage({ params }: Props) {
             <h1 className="text-xl font-semibold tracking-tight">You&apos;re invited.</h1>
             <p className="text-sm text-muted-foreground">
               {invitation.invitedBy?.name ?? 'An HHE admin'} invited{' '}
-              <strong>{invitation.email}</strong> to claim a practitioner profile on HHE Directory.
+              <strong>{invitation.email}</strong> to claim a practitioner profile on Natural Health Pros.
             </p>
           </div>
 

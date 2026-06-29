@@ -19,7 +19,7 @@ export const authConfig = {
   providers: [
     Resend({
       apiKey: process.env.RESEND_API_KEY ?? '',
-      from: process.env.EMAIL_FROM ?? 'HHE Directory <onboarding@resend.dev>',
+      from: process.env.EMAIL_FROM ?? 'Natural Health Pros <onboarding@resend.dev>',
     }),
   ],
   callbacks: {
