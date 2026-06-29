@@ -4,9 +4,9 @@
 
 ## What this project is
 
-**HHE Directory** — HHE-students-first practitioner directory + marketplace for Holistic Health Educators (HHE). Phase 0 stack live as of 2026-05-24. Currently building toward Phase 1 demo for in-person meeting with Amy (HHE budget authority) on 2026-05-28.
+**Natural Health Pros** — HHE-students-first practitioner directory + marketplace for Holistic Health Educators (HHE). Phase 0 stack live as of 2026-05-24. Phase 1 demo'd for Amy (HHE budget authority) 2026-05-28; V1 pilot greenlit.
 
-**Brand note**: This project was formerly called "PracticeNear" — that name was discontinued 2026-05-24 along with all legacy codebases. "HHE Directory" is the canonical go-forward brand. Historical artifacts (joint-call meeting note, decisions JSON, reconciliation doc, vault project entity filename) retain the "PracticeNear" name as point-in-time references; do not rename them.
+**Brand note**: Product name lineage: "PracticeNear" (discontinued 2026-05-24) → "HHE Directory" (interim) → **"Natural Health Pros"** (canonical go-forward, rebranded 2026-06-29; domain `naturalhealthpros.com`). User-facing product copy uses "Natural Health Pros"; "Holistic Health Educators / HHE" is retained wherever it denotes the school/credential (positioning, "HHE program lead", "graduates of HHE programs"). Historical artifacts (joint-call meeting note, decisions JSON, reconciliation doc, vault project entity filename) retain the "PracticeNear" name as point-in-time references; do not rename them.
 
 ## Stack (Phase 0 + Block A — live)
 
@@ -34,10 +34,10 @@
 
 | | |
 |---|---|
-| **Local cwd** | `~/projects/HHE/HHE-directory/` |
-| **GitHub** | https://github.com/jgatlit/HHE-directory (public) |
-| **Vercel project** | `ai-chemist/hhe-directory` — Vercel inspector: https://vercel.com/ai-chemist/hhe-directory |
-| **Production URL** | https://hhe-directory.vercel.app |
+| **Local cwd** | `~/projects/HHE/HHE-directory/` (folder unchanged) |
+| **GitHub** | https://github.com/jgatlit/natural-health-pros (public; renamed from `HHE-directory` 2026-06-29, GitHub keeps redirects) |
+| **Vercel project** | `ai-chemist/hhe-directory` — inspector: https://vercel.com/ai-chemist/hhe-directory (**project NOT yet renamed** — held until `naturalhealthpros.com` DNS resolves, to avoid a dark-window on the live `.vercel.app` demo URL) |
+| **Production URL** | https://hhe-directory.vercel.app (current) · **`naturalhealthpros.com` added to project 2026-06-29, pending DNS** — A record `naturalhealthpros.com → 76.76.21.21` must be set in **Cloudflare** (nameservers are `serenity/terry.ns.cloudflare.com`, NOT GoDaddy) |
 | **Neon DB** | `neondb` @ `ep-plain-bird-ap6zr7b3.c-7.us-east-1.aws.neon.tech` (Marketplace-connected; branching per env) |
 | **Typesense Cloud** | cluster `vm8gj01ubsi7hyxep` (Server v30.2), host `vm8gj01ubsi7hyxep-1.a2.typesense.net`, collection `practitioners`, dashboard https://cloud.typesense.org (rebuilt 2026-06-24; prior cluster `1rt8fj5i9epv2s6mp` terminated) |
 
