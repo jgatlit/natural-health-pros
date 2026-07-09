@@ -1,21 +1,23 @@
 import { notFound, redirect } from 'next/navigation';
 import Link from 'next/link';
-import { ArrowLeft, Check, CreditCard, Clock, AlertCircle, X } from 'lucide-react';
+import { ArrowLeft, Check, CreditCard, Clock, AlertCircle, X, Sparkles } from 'lucide-react';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
 import { isWhopPlatformsReady } from '@/lib/whop';
 import { profileCompletenessSignals } from '@/lib/practitioner-indexer';
+import { isLlmConfigured } from '@/lib/onboarding-draft';
 import { Card } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
-import { updatePractitioner } from './actions';
+import { updatePractitioner, generateDraftAction, removeCaseStudy } from './actions';
 import { BookingLinksField } from '@/components/practitioners/BookingLinksField';
 import { SpecialtyComboboxField } from '@/components/practitioners/SpecialtyComboboxField';
 import { PhotoUploadField } from '@/components/practitioners/PhotoUploadField';
+import { AiDraftPanel } from '@/components/practitioners/AiDraftPanel';
 
 type Props = {
   params: { slug: string };
-  searchParams: { welcome?: string; saved?: string; error?: string };
+  searchParams: { welcome?: string; saved?: string; error?: string; drafted?: string; source?: string };
 };
 
 export const dynamic = 'force-dynamic';
@@ -32,6 +34,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
       specialties: { include: { specialty: true } },
       whopProducts: { where: { archived: false }, orderBy: { createdAt: 'desc' } },
       bookingLinks: { orderBy: { sortOrder: 'asc' } },
+      caseStudies: { orderBy: { createdAt: 'desc' } },
     },
   });
   if (!practitioner) notFound();
@@ -71,8 +74,9 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
     rawLabel: ps.rawLabel?.trim() || ps.specialty.name,
   }));
 
-  // Bind the slug for the form action
+  // Bind the slug for the form actions
   const action = updatePractitioner.bind(null, params.slug);
+  const draftAction = generateDraftAction.bind(null, params.slug);
 
   return (
     <main className="min-h-screen bg-muted/30 px-4 py-10 sm:py-14">
@@ -89,10 +93,33 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
           <Card className="border-primary/30 bg-primary/5 p-4">
             <p className="text-sm">
               <strong>Welcome to Natural Health Pros.</strong> Fill in your profile below to make it
-              public.
+              public — or let AI draft a first pass from a short description.
             </p>
           </Card>
         )}
+
+        {searchParams.drafted && (
+          <Card className="border-primary/40 bg-primary/5 p-4">
+            <div className="flex items-start gap-3">
+              <span className="mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-primary/15">
+                <Sparkles className="h-4 w-4 text-primary" aria-hidden />
+              </span>
+              <div className="space-y-0.5">
+                <p className="text-sm font-semibold">
+                  {searchParams.source === 'llm'
+                    ? 'AI-drafted your profile.'
+                    : 'Drafted a starting template.'}
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Review and edit each field below, then Save to publish. Nothing is public until
+                  you save a complete profile.
+                </p>
+              </div>
+            </div>
+          </Card>
+        )}
+
+        <AiDraftPanel action={draftAction} llmConfigured={isLlmConfigured()} />
 
         {missing.length > 0 && (
           <Card className="border-amber-500/30 bg-amber-500/5 p-4">
@@ -191,6 +218,18 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
             </Field>
 
             <Field
+              label="Headline / credentials"
+              hint="Your professional title line under your name (e.g. 'Functional Nutritionist, FDN-P · 10+ yrs')."
+            >
+              <input
+                type="text"
+                name="headline"
+                defaultValue={practitioner.headline ?? ''}
+                className="h-10 w-full rounded-md border bg-card px-3 text-sm outline-none ring-ring/30 focus-visible:ring-2"
+              />
+            </Field>
+
+            <Field
               label="Bio"
               hint="Short, plain-English description. What you do, who you work with, what makes you HHE-style."
             >
@@ -200,6 +239,54 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
                 defaultValue={practitioner.bio ?? ''}
                 className="w-full rounded-md border bg-card px-3 py-2 text-sm outline-none ring-ring/30 focus-visible:ring-2"
               />
+            </Field>
+
+            <Field
+              label="Who you help / how you work"
+              hint="The matching signal: who you serve and how you help them. Surfaced on your profile and used by search."
+            >
+              <textarea
+                name="whoIHelp"
+                rows={3}
+                defaultValue={practitioner.whoIHelp ?? ''}
+                className="w-full rounded-md border bg-card px-3 py-2 text-sm outline-none ring-ring/30 focus-visible:ring-2"
+              />
+            </Field>
+
+            <Field
+              label="Website / affiliations"
+              hint="Your practice site or primary professional link (any URL)."
+            >
+              <input
+                type="url"
+                name="websiteUrl"
+                defaultValue={practitioner.websiteUrl ?? ''}
+                placeholder="https://your-practice.com"
+                className="h-10 w-full rounded-md border bg-card px-3 text-sm outline-none ring-ring/30 focus-visible:ring-2"
+              />
+            </Field>
+
+            <Field label="Session formats">
+              <div className="flex flex-wrap gap-4">
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    name="telehealth"
+                    defaultChecked={practitioner.telehealth ?? false}
+                    className="h-4 w-4 rounded border"
+                  />
+                  Telehealth / virtual
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="checkbox"
+                    name="inPerson"
+                    defaultChecked={practitioner.inPerson ?? false}
+                    className="h-4 w-4 rounded border"
+                  />
+                  In-person
+                </label>
+              </div>
             </Field>
 
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
@@ -271,6 +358,49 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
             </div>
           </form>
         </Card>
+
+        {practitioner.caseStudies.length > 0 && (
+          <Card className="space-y-4 p-6 sm:p-8">
+            <div className="space-y-0.5">
+              <div className="flex items-center gap-2">
+                <Sparkles className="h-4 w-4 text-primary" aria-hidden />
+                <h2 className="text-sm font-semibold">Client outcomes (AI-drafted)</h2>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Anonymized highlights drafted from your description — a matching signal for search.
+                Remove any that aren&apos;t accurate.
+              </p>
+            </div>
+            <Separator />
+            <ul className="space-y-3">
+              {practitioner.caseStudies.map((cs) => {
+                const remove = removeCaseStudy.bind(null, params.slug, cs.id);
+                return (
+                  <li key={cs.id} className="flex items-start justify-between gap-3 rounded-md border p-3">
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium">{cs.title}</p>
+                      <p className="text-xs text-muted-foreground">{cs.summary}</p>
+                      {cs.outcome && (
+                        <p className="text-xs text-muted-foreground">
+                          <span className="font-medium text-foreground">Outcome:</span> {cs.outcome}
+                        </p>
+                      )}
+                    </div>
+                    <form action={remove}>
+                      <button
+                        type="submit"
+                        aria-label="Remove outcome"
+                        className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md border text-muted-foreground transition-colors hover:bg-accent/40 hover:text-foreground"
+                      >
+                        <X className="h-3.5 w-3.5" aria-hidden />
+                      </button>
+                    </form>
+                  </li>
+                );
+              })}
+            </ul>
+          </Card>
+        )}
 
         <PaymentsSection
           kycStatus={practitioner.whopKycStatus}
