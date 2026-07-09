@@ -54,6 +54,14 @@ enum ProductInterval {
   ANNUAL
 }
 
+// Layer X — practitioner platform-subscription lifecycle (they pay us to be listed)
+enum SubscriptionStatus {
+  NONE
+  ACTIVE
+  PAST_DUE
+  CANCELED
+}
+
 model Account {
   userId            String
   type              String
@@ -138,6 +146,11 @@ model Practitioner {
   whopKycStatus      WhopKycStatus @default(NOT_STARTED)
   whopKycCompletedAt DateTime?
   whopProducts       WhopProduct[]
+
+  // Layer X — platform subscription (practitioner pays $59/mo to be listed; pilots comped)
+  subscriptionStatus SubscriptionStatus @default(NONE)
+  comped             Boolean            @default(false)
+  whopMembershipId   String?            @unique // membership on our own $59/mo Whop product
 
   // Invite-only model (5/15 Amy reframe)
   invitedBy  String?

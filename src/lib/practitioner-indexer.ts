@@ -1,4 +1,10 @@
-import type { Practitioner, City, Specialty, PractitionerSpecialty } from '@prisma/client';
+import type {
+  Practitioner,
+  City,
+  Specialty,
+  PractitionerSpecialty,
+  SubscriptionStatus,
+} from '@prisma/client';
 import { prisma } from './prisma';
 import { getTypesenseAdmin, TYPESENSE_COLLECTION } from './typesense-server';
 
@@ -63,6 +69,20 @@ export function isProfileComplete(p: Parameters<typeof profileCompletenessSignal
   return s.hasDisplayName && s.hasCity && s.hasBio && s.hasSpecialty;
 }
 
+/**
+ * Listing gate (Layer X): a profile is publicly discoverable only when it's complete AND
+ * the practitioner is paying (subscriptionStatus ACTIVE) or comped (pilots). Direct profile
+ * URLs still resolve for everyone — this only controls /search + recently-joined visibility.
+ */
+export function isListed(
+  p: Parameters<typeof profileCompletenessSignals>[0] & {
+    subscriptionStatus: SubscriptionStatus;
+    comped: boolean;
+  },
+): boolean {
+  return isProfileComplete(p) && (p.comped || p.subscriptionStatus === 'ACTIVE');
+}
+
 export function toTypesenseDoc(p: PractitionerForIndex): PractitionerDoc {
   const specialtyNames = new Set<string>();
   const specialtySlugs = new Set<string>();
@@ -111,6 +131,11 @@ export async function indexPractitioner(id: string): Promise<void> {
     include: PRACTITIONER_INCLUDE,
   });
   if (!p) return;
+  // Listing gate: an unsubscribed/incomplete practitioner is removed from discovery.
+  if (!isListed(p)) {
+    await deleteFromIndex(id);
+    return;
+  }
   await getTypesenseAdmin()
     .collections(TYPESENSE_COLLECTION)
     .documents()
@@ -119,7 +144,11 @@ export async function indexPractitioner(id: string): Promise<void> {
 
 export async function indexAllPractitioners(): Promise<{ indexed: number }> {
   const practitioners = await prisma.practitioner.findMany({ include: PRACTITIONER_INCLUDE });
-  const docs = practitioners.map(toTypesenseDoc);
+  // Listing gate: only index listed practitioners; drop any that are no longer listed.
+  await Promise.all(
+    practitioners.filter((p) => !isListed(p)).map((p) => deleteFromIndex(p.id).catch(() => {})),
+  );
+  const docs = practitioners.filter(isListed).map(toTypesenseDoc);
   if (docs.length === 0) return { indexed: 0 };
   const result = await getTypesenseAdmin()
     .collections(TYPESENSE_COLLECTION)

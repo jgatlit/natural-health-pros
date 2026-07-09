@@ -18,6 +18,7 @@ import {
   deleteOffering,
 } from './actions';
 import { OfferingsEditor } from '@/components/practitioners/OfferingsEditor';
+import { SubscriptionSection } from '@/components/practitioners/SubscriptionSection';
 import { BookingLinksField } from '@/components/practitioners/BookingLinksField';
 import { SpecialtyComboboxField } from '@/components/practitioners/SpecialtyComboboxField';
 import { PhotoUploadField } from '@/components/practitioners/PhotoUploadField';
@@ -414,6 +415,13 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
             </ul>
           </Card>
         )}
+
+        <SubscriptionSection
+          status={practitioner.subscriptionStatus}
+          comped={practitioner.comped}
+          checkoutUrl={process.env.WHOP_PLATFORM_CHECKOUT_URL ?? null}
+          priceLabel="$59/mo"
+        />
 
         <OfferingsEditor
           offerings={practitioner.whopProducts.map((o) => ({
