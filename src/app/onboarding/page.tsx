@@ -2,6 +2,9 @@ import { redirect } from 'next/navigation';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
 import { indexPractitioner } from '@/lib/practitioner-indexer';
+import { isLlmConfigured } from '@/lib/onboarding-draft';
+import { submitOnboarding } from '@/app/practitioners/[slug]/edit/actions';
+import { OnboardingForm } from '@/components/practitioners/OnboardingForm';
 
 type Props = { searchParams: { invitation?: string } };
 
@@ -24,6 +27,8 @@ async function generateUniqueSlug(email: string): Promise<string> {
     slug = `${base}-${suffix}`;
   }
 }
+
+const withSpecialties = { specialties: { include: { specialty: true } } } as const;
 
 export default async function OnboardingPage({ searchParams }: Props) {
   const session = await auth();
@@ -50,10 +55,11 @@ export default async function OnboardingPage({ searchParams }: Props) {
     redirect('/auth/error?error=AccessDenied');
   }
 
-  // Idempotent: if the user already has a practitioner record, treat the invitation as fully
-  // accepted and route them to edit.
+  // Idempotent: reuse the practitioner record if it already exists (pre-filled case),
+  // else create a blank one to fill in.
   let practitioner = await prisma.practitioner.findUnique({
     where: { userId: session.user.id },
+    include: withSpecialties,
   });
 
   if (!practitioner) {
@@ -69,12 +75,8 @@ export default async function OnboardingPage({ searchParams }: Props) {
       'New Practitioner';
 
     practitioner = await prisma.practitioner.create({
-      data: {
-        userId: session.user.id,
-        slug,
-        displayName,
-        acceptedAt: new Date(),
-      },
+      data: { userId: session.user.id, slug, displayName, acceptedAt: new Date() },
+      include: withSpecialties,
     });
 
     await prisma.user.update({
@@ -92,10 +94,53 @@ export default async function OnboardingPage({ searchParams }: Props) {
     },
   });
 
-  // Push initial sparse record into Typesense so search reflects them immediately.
+  // Push the (possibly sparse) record into Typesense so search reflects them immediately.
   await indexPractitioner(practitioner.id).catch((err) =>
     console.error('Typesense index failed for new practitioner:', err),
   );
 
-  redirect(`/practitioners/${practitioner.slug}/edit?welcome=1`);
+  const [cities, specialties, approvedAliases] = await Promise.all([
+    prisma.city.findMany({ orderBy: [{ state: 'asc' }, { name: 'asc' }] }),
+    prisma.specialty.findMany({
+      where: { status: { in: ['ACTIVE', 'PROPOSED'] } },
+      orderBy: { name: 'asc' },
+    }),
+    prisma.specialtyAlias.findMany({
+      where: { status: 'APPROVED' },
+      select: { label: true, specialtyId: true },
+    }),
+  ]);
+
+  const initialSpecialties = practitioner.specialties.map((ps) => ({
+    specialtyId: ps.specialtyId,
+    rawLabel: ps.rawLabel?.trim() || ps.specialty.name,
+  }));
+
+  // Pre-filled = they already have narrative or specialties (revise → regenerate);
+  // otherwise a blank first-time build.
+  const isPrefilled = Boolean(
+    practitioner.bio?.trim() || practitioner.headline?.trim() || practitioner.specialties.length > 0,
+  );
+
+  const action = submitOnboarding.bind(null, practitioner.slug);
+
+  return (
+    <OnboardingForm
+      action={action}
+      isPrefilled={isPrefilled}
+      llmConfigured={isLlmConfigured()}
+      values={{
+        displayName: practitioner.displayName,
+        describe: practitioner.bio ?? '',
+        cityId: practitioner.cityId ?? '',
+        yearsInPractice: practitioner.yearsInPractice,
+        telehealth: practitioner.telehealth ?? false,
+        inPerson: practitioner.inPerson ?? false,
+      }}
+      cities={cities}
+      specialties={specialties.map((s) => ({ id: s.id, name: s.name }))}
+      aliases={approvedAliases}
+      initialSpecialties={initialSpecialties}
+    />
+  );
 }
