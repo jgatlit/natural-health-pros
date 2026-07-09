@@ -107,6 +107,7 @@ model Practitioner {
   telehealth             Boolean? // offers virtual sessions (~70% of pilot)
   inPerson               Boolean? // offers in-person sessions
   firstSessionPriceCents Int? // first-session price in cents; render as $X.XX
+  hheCertified           Boolean  @default(true) // HHE-certification trust badge (pilots are HHE grads)
 
   cityId      String?
   city        City?                   @relation(fields: [cityId], references: [id])
@@ -248,7 +249,7 @@ model WhopProduct {
   practitionerId String
   practitioner   Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
 
-  whopProductId        String  @unique // products.create response
+  whopProductId        String? @unique // products.create response (null until Layer Y wires Whop)
   whopPlanId           String? // plans.create response
   whopCheckoutConfigId String? // checkoutConfigurations.create response
   purchaseUrl          String? // Whop-hosted checkout URL
@@ -258,6 +259,7 @@ model WhopProduct {
   priceUsdCents       Int // always in cents; render as $X.XX
   applicationFeeCents Int             @default(0) // HHE platform fee per transaction
   interval            ProductInterval @default(ONE_TIME)
+  category            String? // offering type label: consultation, product, package, subscription…
 
   active    Boolean  @default(true)
   archived  Boolean  @default(false)

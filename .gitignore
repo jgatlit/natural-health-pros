@@ -47,3 +47,4 @@ amy-assets/
 
 # Smoke-test screenshots at repo root — keep committed images in public/ or docs/
 /*.png
+.env.typescript

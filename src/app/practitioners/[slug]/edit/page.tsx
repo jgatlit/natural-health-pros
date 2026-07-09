@@ -9,7 +9,15 @@ import { isLlmConfigured } from '@/lib/onboarding-draft';
 import { Card } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { Badge } from '@/components/ui/badge';
-import { updatePractitioner, generateDraftAction, removeCaseStudy } from './actions';
+import {
+  updatePractitioner,
+  generateDraftAction,
+  removeCaseStudy,
+  createOffering,
+  updateOffering,
+  deleteOffering,
+} from './actions';
+import { OfferingsEditor } from '@/components/practitioners/OfferingsEditor';
 import { BookingLinksField } from '@/components/practitioners/BookingLinksField';
 import { SpecialtyComboboxField } from '@/components/practitioners/SpecialtyComboboxField';
 import { PhotoUploadField } from '@/components/practitioners/PhotoUploadField';
@@ -79,6 +87,9 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
   // Bind the slug for the form actions
   const action = updatePractitioner.bind(null, params.slug);
   const draftAction = generateDraftAction.bind(null, params.slug);
+  const createOfferingAction = createOffering.bind(null, params.slug);
+  const updateOfferingAction = updateOffering.bind(null, params.slug);
+  const deleteOfferingAction = deleteOffering.bind(null, params.slug);
 
   return (
     <main className="min-h-screen bg-muted/30 px-4 py-10 sm:py-14">
@@ -403,6 +414,20 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
             </ul>
           </Card>
         )}
+
+        <OfferingsEditor
+          offerings={practitioner.whopProducts.map((o) => ({
+            id: o.id,
+            title: o.title,
+            description: o.description,
+            priceUsdCents: o.priceUsdCents,
+            interval: o.interval,
+            category: o.category,
+          }))}
+          createAction={createOfferingAction}
+          updateAction={updateOfferingAction}
+          deleteAction={deleteOfferingAction}
+        />
 
         <PaymentsSection
           kycStatus={practitioner.whopKycStatus}
