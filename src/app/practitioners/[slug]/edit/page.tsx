@@ -11,6 +11,7 @@ import { Badge } from '@/components/ui/badge';
 import { updatePractitioner } from './actions';
 import { BookingLinksField } from '@/components/practitioners/BookingLinksField';
 import { SpecialtyComboboxField } from '@/components/practitioners/SpecialtyComboboxField';
+import { PhotoUploadField } from '@/components/practitioners/PhotoUploadField';
 
 type Props = {
   params: { slug: string };
@@ -171,6 +172,13 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
             </div>
 
             <Separator />
+
+            <Field
+              label="Profile photo"
+              hint="Shown on your profile hero and search card. Falls back to your initials when empty."
+            >
+              <PhotoUploadField slug={params.slug} initial={practitioner.photoUrl} />
+            </Field>
 
             <Field label="Display name" required>
               <input

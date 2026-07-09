@@ -121,6 +121,7 @@ export async function updatePractitioner(slug: string, formData: FormData): Prom
   const displayName = String(formData.get('displayName') ?? '').trim();
   const bio = String(formData.get('bio') ?? '').trim();
   const cityId = String(formData.get('cityId') ?? '').trim() || null;
+  const photoUrl = String(formData.get('photoUrl') ?? '').trim() || null;
   const yearsRaw = String(formData.get('yearsInPractice') ?? '').trim();
   const yearsInPractice = yearsRaw === '' ? null : Math.max(0, parseInt(yearsRaw, 10) || 0);
 
@@ -223,6 +224,7 @@ export async function updatePractitioner(slug: string, formData: FormData): Prom
       data: {
         displayName,
         bio: bio || null,
+        photoUrl,
         cityId,
         latitude: coords?.[0] ?? null,
         longitude: coords?.[1] ?? null,
