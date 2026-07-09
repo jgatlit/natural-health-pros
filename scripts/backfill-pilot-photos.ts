@@ -107,6 +107,10 @@ async function main() {
       contentType: CONTENT_TYPE[ext] ?? 'application/octet-stream',
       addRandomSuffix: false,
       allowOverwrite: true,
+      // Pin the token explicitly: a local .env pulled from Vercel carries
+      // VERCEL_OIDC_TOKEN, which makes @vercel/blob prefer (stale) OIDC auth over
+      // BLOB_READ_WRITE_TOKEN and fail with "Access denied" when run off-platform.
+      token: process.env.BLOB_READ_WRITE_TOKEN,
     });
     await prisma.practitioner.update({
       where: { slug: p.slug },
