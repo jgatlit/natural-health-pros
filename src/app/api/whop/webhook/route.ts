@@ -52,16 +52,18 @@ function mapStatus(eventType: string): 'ACTIVE' | 'PAST_DUE' | 'CANCELED' | null
 
 export async function POST(req: NextRequest) {
   const secret = process.env.WHOP_WEBHOOK_SECRET;
+  // Fail CLOSED: reject everything until the signing secret is provisioned, so this public
+  // route can't process forged/unsigned events (which could flip listing visibility).
+  if (!secret) {
+    return NextResponse.json({ error: 'webhook not configured' }, { status: 503 });
+  }
   const rawBody = await req.text();
-
-  if (secret) {
-    const sig =
-      req.headers.get('x-whop-signature') ??
-      req.headers.get('whop-signature') ??
-      req.headers.get('x-signature');
-    if (!verifySignature(rawBody, sig, secret)) {
-      return NextResponse.json({ error: 'invalid signature' }, { status: 401 });
-    }
+  const sig =
+    req.headers.get('x-whop-signature') ??
+    req.headers.get('whop-signature') ??
+    req.headers.get('x-signature');
+  if (!verifySignature(rawBody, sig, secret)) {
+    return NextResponse.json({ error: 'invalid signature' }, { status: 401 });
   }
 
   let event: WhopWebhookPayload;
@@ -114,17 +116,23 @@ export async function POST(req: NextRequest) {
     }
 
     if (practitioner) {
-      await prisma.practitioner.update({
-        where: { id: practitioner.id },
-        data: {
-          subscriptionStatus: status,
-          whopMembershipId: membershipId ?? practitioner.whopMembershipId,
-        },
-      });
-      // Re-run the listing gate: subscribe → indexed; lapse → removed from discovery.
-      await indexPractitioner(practitioner.id).catch((e) =>
-        console.error('reindex after subscription webhook failed:', e),
-      );
+      try {
+        await prisma.practitioner.update({
+          where: { id: practitioner.id },
+          data: {
+            subscriptionStatus: status,
+            whopMembershipId: membershipId ?? practitioner.whopMembershipId,
+          },
+        });
+        // Re-run the listing gate: subscribe → indexed; lapse → removed from discovery.
+        await indexPractitioner(practitioner.id).catch((e) =>
+          console.error('reindex after subscription webhook failed:', e),
+        );
+      } catch (e) {
+        // e.g. a whopMembershipId unique collision (misrouted / reused delivery). Log and
+        // fall through so the event still gets processedAt — avoids a Whop poison-pill retry loop.
+        console.error('subscription update failed (acking anyway):', e);
+      }
     }
   }
 
