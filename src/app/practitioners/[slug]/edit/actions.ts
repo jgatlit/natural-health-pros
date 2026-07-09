@@ -3,17 +3,21 @@
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import type { Prisma } from '@prisma/client';
-import { auth } from '@/auth';
+// ⚠️ TEMP — re-enable this import together with the authorizeForSlug ownership gate.
+// import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
 import { indexPractitioner } from '@/lib/practitioner-indexer';
 import { syncSpecialtySynonyms } from '@/lib/typesense-synonyms';
 import { draftProfile, type DraftSpecialty } from '@/lib/onboarding-draft';
 
 async function authorizeForSlug(slug: string) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    redirect(`/auth/signin?callbackUrl=/practitioners/${slug}/edit`);
-  }
+  // ⚠️ TEMP — auth gates disabled for seamless HHE testing (operator request 2026-07-09).
+  // Magic-link retained as the auth method; session + ownership gates off.
+  // Re-enable per docs/AUTH-GATES-DISABLED-REVERT.md.
+  // const session = await auth();
+  // if (!session?.user?.id) {
+  //   redirect(`/auth/signin?callbackUrl=/practitioners/${slug}/edit`);
+  // }
   const practitioner = await prisma.practitioner.findUnique({
     where: { slug },
     select: { id: true, userId: true },
@@ -21,11 +25,11 @@ async function authorizeForSlug(slug: string) {
   if (!practitioner) {
     redirect('/auth/error?error=AccessDenied');
   }
-  const isOwner = practitioner.userId === session.user.id;
-  const isAdmin = session.user.role === 'ADMIN';
-  if (!isOwner && !isAdmin) {
-    redirect('/auth/error?error=AccessDenied');
-  }
+  // const isOwner = practitioner.userId === session.user.id;
+  // const isAdmin = session.user.role === 'ADMIN';
+  // if (!isOwner && !isAdmin) {
+  //   redirect('/auth/error?error=AccessDenied');
+  // }
   return practitioner;
 }
 

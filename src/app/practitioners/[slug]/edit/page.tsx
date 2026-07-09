@@ -1,4 +1,4 @@
-import { notFound, redirect } from 'next/navigation';
+import { notFound } from 'next/navigation';
 import Link from 'next/link';
 import { ArrowLeft, Check, CreditCard, Clock, AlertCircle, X, Sparkles } from 'lucide-react';
 import { auth } from '@/auth';
@@ -24,9 +24,10 @@ export const dynamic = 'force-dynamic';
 
 export default async function EditPractitionerPage({ params, searchParams }: Props) {
   const session = await auth();
-  if (!session?.user?.id) {
-    redirect(`/auth/signin?callbackUrl=/practitioners/${params.slug}/edit`);
-  }
+  // ⚠️ TEMP — auth gate disabled (operator request 2026-07-09; re-enable per docs/AUTH-GATES-DISABLED-REVERT.md)
+  // if (!session?.user?.id) {
+  //   redirect(`/auth/signin?callbackUrl=/practitioners/${params.slug}/edit`);
+  // }
 
   const practitioner = await prisma.practitioner.findUnique({
     where: { slug: params.slug },
@@ -49,11 +50,12 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
   ];
   const missing = allFields.filter((f) => !completeness[f.key]);
 
-  const isOwner = practitioner.userId === session.user.id;
-  const isAdmin = session.user.role === 'ADMIN';
-  if (!isOwner && !isAdmin) {
-    redirect('/auth/error?error=AccessDenied');
-  }
+  const isAdmin = session?.user?.role === 'ADMIN';
+  // ⚠️ TEMP — ownership gate disabled (operator request 2026-07-09; re-enable per revert doc)
+  // const isOwner = practitioner.userId === session?.user?.id;
+  // if (!isOwner && !isAdmin) {
+  //   redirect('/auth/error?error=AccessDenied');
+  // }
 
   const [cities, specialties, approvedAliases] = await Promise.all([
     prisma.city.findMany({ orderBy: [{ state: 'asc' }, { name: 'asc' }] }),
@@ -409,7 +411,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
         />
 
         <p className="text-center text-xs text-muted-foreground">
-          Signed in as {session.user.email}
+          Signed in as {session?.user?.email ?? 'guest (auth gate off)'}
           {isAdmin && ' · Admin'}
         </p>
       </div>
