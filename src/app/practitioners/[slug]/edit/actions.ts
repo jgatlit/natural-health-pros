@@ -621,7 +621,8 @@ function parsePriceToCents(raw: FormDataEntryValue | null): number {
   const s = String(raw ?? '').replace(/[^0-9.]/g, '').trim();
   const dollars = parseFloat(s);
   if (!s || !Number.isFinite(dollars) || dollars < 0) return 0;
-  return Math.round(dollars * 100);
+  // Clamp under Postgres INT4 max ($21.47M) so an oversized price can't overflow the column.
+  return Math.min(Math.round(dollars * 100), 2_000_000_00);
 }
 
 function offeringInterval(raw: FormDataEntryValue | null): 'ONE_TIME' | 'MONTHLY' {

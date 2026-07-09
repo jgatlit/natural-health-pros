@@ -63,6 +63,7 @@ export function OfferingsEditor({
                 <div className="flex items-center justify-end gap-2">
                   <button
                     formAction={deleteAction}
+                    formNoValidate
                     className="inline-flex h-8 items-center gap-1 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:text-destructive"
                   >
                     <Trash2 className="h-3.5 w-3.5" aria-hidden />
