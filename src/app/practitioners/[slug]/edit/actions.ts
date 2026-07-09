@@ -612,3 +612,68 @@ export async function submitOnboarding(slug: string, formData: FormData): Promis
   revalidatePath('/search');
   redirect(`/practitioners/${slug}?onboarded=1`);
 }
+
+// ---- Offerings (Phase 2) ----
+// Practitioner-configured offerings stored locally in WhopProduct. Payments are wired in
+// Layer Y (whopProductId/purchaseUrl stay null until then), so no Typesense reindex here.
+
+function parsePriceToCents(raw: FormDataEntryValue | null): number {
+  const s = String(raw ?? '').replace(/[^0-9.]/g, '').trim();
+  const dollars = parseFloat(s);
+  if (!s || !Number.isFinite(dollars) || dollars < 0) return 0;
+  // Clamp under Postgres INT4 max ($21.47M) so an oversized price can't overflow the column.
+  return Math.min(Math.round(dollars * 100), 2_000_000_00);
+}
+
+function offeringInterval(raw: FormDataEntryValue | null): 'ONE_TIME' | 'MONTHLY' {
+  return raw === 'MONTHLY' ? 'MONTHLY' : 'ONE_TIME';
+}
+
+export async function createOffering(slug: string, formData: FormData): Promise<void> {
+  const target = await authorizeForSlug(slug);
+  const title = String(formData.get('title') ?? '').trim();
+  if (!title) redirect(`/practitioners/${slug}/edit?error=offering-title#offerings`);
+  await prisma.whopProduct.create({
+    data: {
+      practitionerId: target.id,
+      title,
+      description: String(formData.get('description') ?? '').trim() || null,
+      category: String(formData.get('category') ?? '').trim() || null,
+      interval: offeringInterval(formData.get('interval')),
+      priceUsdCents: parsePriceToCents(formData.get('price')),
+    },
+  });
+  revalidatePath(`/practitioners/${slug}`);
+  revalidatePath(`/practitioners/${slug}/edit`);
+  redirect(`/practitioners/${slug}/edit?saved=offering#offerings`);
+}
+
+export async function updateOffering(slug: string, formData: FormData): Promise<void> {
+  const target = await authorizeForSlug(slug);
+  const id = String(formData.get('offeringId') ?? '');
+  const title = String(formData.get('title') ?? '').trim();
+  if (!id || !title) redirect(`/practitioners/${slug}/edit?error=offering-title#offerings`);
+  // updateMany scoped by practitionerId = the ownership check (no cross-practitioner edits).
+  await prisma.whopProduct.updateMany({
+    where: { id, practitionerId: target.id },
+    data: {
+      title,
+      description: String(formData.get('description') ?? '').trim() || null,
+      category: String(formData.get('category') ?? '').trim() || null,
+      interval: offeringInterval(formData.get('interval')),
+      priceUsdCents: parsePriceToCents(formData.get('price')),
+    },
+  });
+  revalidatePath(`/practitioners/${slug}`);
+  revalidatePath(`/practitioners/${slug}/edit`);
+  redirect(`/practitioners/${slug}/edit?saved=offering#offerings`);
+}
+
+export async function deleteOffering(slug: string, formData: FormData): Promise<void> {
+  const target = await authorizeForSlug(slug);
+  const id = String(formData.get('offeringId') ?? '');
+  if (id) await prisma.whopProduct.deleteMany({ where: { id, practitionerId: target.id } });
+  revalidatePath(`/practitioners/${slug}`);
+  revalidatePath(`/practitioners/${slug}/edit`);
+  redirect(`/practitioners/${slug}/edit#offerings`);
+}
