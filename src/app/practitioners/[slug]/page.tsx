@@ -1,12 +1,14 @@
 import { notFound } from 'next/navigation';
+import Link from 'next/link';
 import type { Metadata } from 'next';
+import { CheckCircle2 } from 'lucide-react';
 import { prisma } from '@/lib/prisma';
 import { Card } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { PractitionerHero } from '@/components/practitioners/PractitionerHero';
 import { PractitionerCTAs } from '@/components/practitioners/PractitionerCTAs';
 
-type PageProps = { params: { slug: string } };
+type PageProps = { params: { slug: string }; searchParams: { onboarded?: string } };
 
 async function loadPractitioner(slug: string) {
   return prisma.practitioner.findUnique({
@@ -30,7 +32,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
   };
 }
 
-export default async function PractitionerPage({ params }: PageProps) {
+export default async function PractitionerPage({ params, searchParams }: PageProps) {
   const p = await loadPractitioner(params.slug);
   if (!p) notFound();
 
@@ -43,7 +45,24 @@ export default async function PractitionerPage({ params }: PageProps) {
 
   return (
     <main className="min-h-screen bg-muted/30 px-4 py-10 sm:py-16">
-      <div className="mx-auto max-w-4xl">
+      <div className="mx-auto max-w-4xl space-y-4">
+        {searchParams.onboarded && (
+          <Card className="flex flex-col items-start gap-3 border-primary/30 bg-primary/5 p-4 sm:flex-row sm:items-center sm:justify-between">
+            <p className="flex items-center gap-2 text-sm">
+              <CheckCircle2 className="h-4 w-4 shrink-0 text-primary" aria-hidden />
+              <span>
+                <strong>Your page is live.</strong> Edit anything — bio, offerings, booking links —
+                anytime in your dashboard.
+              </span>
+            </p>
+            <Link
+              href={`/practitioners/${params.slug}/edit`}
+              className="inline-flex h-9 shrink-0 items-center justify-center rounded-md bg-primary px-4 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+            >
+              Go to dashboard
+            </Link>
+          </Card>
+        )}
         <Card className="p-6 sm:p-12">
           <div className="grid gap-12 sm:grid-cols-[22rem_1fr]">
             {/* Sticky identity + booking rail (Variation B) */}

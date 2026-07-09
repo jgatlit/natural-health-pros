@@ -123,6 +123,24 @@ function normalizeWebsiteUrl(raw: string): string | null {
   return normalizeUrl(trimmed, []);
 }
 
+// Approx city centroids for the haversine "near me" index — Phase 2.5 can add
+// per-practitioner overrides. Shared by updatePractitioner + submitOnboarding.
+const CITY_COORDS: Record<string, [number, number]> = {
+  atlanta: [33.749, -84.388],
+  savannah: [32.0809, -81.0912],
+  athens: [33.9519, -83.3576],
+  macon: [32.8407, -83.6324],
+  augusta: [33.4735, -82.0105],
+  decatur: [33.7748, -84.2963],
+  asheville: [35.5951, -82.5515],
+  boulder: [40.015, -105.2705],
+  austin: [30.2672, -97.7431],
+  portland: [45.5152, -122.6784],
+  nashville: [36.1627, -86.7816],
+  charleston: [32.7765, -79.9311],
+  sedona: [34.8697, -111.761],
+};
+
 export async function updatePractitioner(slug: string, formData: FormData): Promise<void> {
   const target = await authorizeForSlug(slug);
 
@@ -181,23 +199,7 @@ export async function updatePractitioner(slug: string, formData: FormData): Prom
     ? await prisma.city.findUnique({ where: { id: cityId } })
     : null;
 
-  // Approx city centroids — Phase 2.5 can add per-practitioner override
-  const cityCoords: Record<string, [number, number]> = {
-    atlanta: [33.749, -84.388],
-    savannah: [32.0809, -81.0912],
-    athens: [33.9519, -83.3576],
-    macon: [32.8407, -83.6324],
-    augusta: [33.4735, -82.0105],
-    decatur: [33.7748, -84.2963],
-    asheville: [35.5951, -82.5515],
-    boulder: [40.015, -105.2705],
-    austin: [30.2672, -97.7431],
-    portland: [45.5152, -122.6784],
-    nashville: [36.1627, -86.7816],
-    charleston: [32.7765, -79.9311],
-    sedona: [34.8697, -111.761],
-  };
-  const coords = city ? cityCoords[city.slug] ?? null : null;
+  const coords = city ? CITY_COORDS[city.slug] ?? null : null;
 
   let createdNewTaxonomy = false;
 
@@ -450,4 +452,159 @@ export async function removeCaseStudy(slug: string, caseStudyId: string): Promis
   await prisma.caseStudy.deleteMany({ where: { id: caseStudyId, practitionerId: target.id } });
   revalidatePath(`/practitioners/${slug}/edit`);
   redirect(`/practitioners/${slug}/edit`);
+}
+
+/**
+ * Onboarding submit (Phase 1). The onboarding form collects the basics + a free-text
+ * "describe your practice", then this action ONE-SHOT generates the landing page:
+ * persists the structured basics + user-picked specialties, runs draftProfile() to
+ * normalize the description into headline/whoIHelp/bio (+ modalities, case studies),
+ * then sends the practitioner to their freshly generated public page. Works for both
+ * the pre-filled (revise → regenerate) and blank (fill → generate) invite cases;
+ * ongoing field-level edits happen afterward in the admin portal (updatePractitioner).
+ */
+export async function submitOnboarding(slug: string, formData: FormData): Promise<void> {
+  const target = await authorizeForSlug(slug);
+
+  const displayName = String(formData.get('displayName') ?? '').trim();
+  if (!displayName) {
+    redirect(`/practitioners/${slug}/edit?error=name-required`);
+  }
+  const cityId = String(formData.get('cityId') ?? '').trim() || null;
+  const telehealth = formData.get('telehealth') === 'on' || formData.get('telehealth') === 'true';
+  const inPerson = formData.get('inPerson') === 'on' || formData.get('inPerson') === 'true';
+  const yearsRaw = String(formData.get('yearsInPractice') ?? '').trim();
+  const yearsInPractice = yearsRaw === '' ? null : Math.max(0, parseInt(yearsRaw, 10) || 0);
+  const draftSource = String(formData.get('draftSource') ?? '').trim();
+
+  let rawSelections: RawSelection[] = [];
+  try {
+    const parsed = JSON.parse(String(formData.get('specialtiesJson') ?? '[]'));
+    if (Array.isArray(parsed)) {
+      rawSelections = parsed
+        .map((p) => ({
+          specialtyId: typeof p.specialtyId === 'string' ? p.specialtyId : null,
+          rawLabel: typeof p.rawLabel === 'string' ? p.rawLabel : '',
+        }))
+        .filter((p) => p.rawLabel.trim());
+    }
+  } catch {
+    rawSelections = [];
+  }
+
+  const city = cityId ? await prisma.city.findUnique({ where: { id: cityId } }) : null;
+  const coords = city ? CITY_COORDS[city.slug] ?? null : null;
+
+  const [existing, catalog] = await Promise.all([
+    prisma.practitioner.findUnique({
+      where: { id: target.id },
+      select: { headline: true, whoIHelp: true, bio: true, specialties: { select: { rawLabel: true } } },
+    }),
+    prisma.specialty.findMany({
+      where: { status: { in: ['ACTIVE', 'PROPOSED'] } },
+      select: { slug: true, name: true },
+      orderBy: { name: 'asc' },
+    }),
+  ]);
+
+  // One-shot: normalize the practitioner's own words into a polished landing page.
+  const { draft } = await draftProfile({
+    displayName,
+    rawSource: draftSource,
+    existing: {
+      headline: existing?.headline ?? null,
+      whoIHelp: existing?.whoIHelp ?? null,
+      bio: existing?.bio ?? null,
+      rawLabels: (existing?.specialties ?? [])
+        .map((s) => s.rawLabel?.trim())
+        .filter((s): s is string => !!s),
+    },
+    canonicalCatalog: catalog,
+  });
+
+  let createdNewTaxonomy = false;
+
+  await prisma.$transaction(async (tx) => {
+    const resolved: { specialtyId: string; rawLabel: string }[] = [];
+    const seen = new Set<string>();
+    for (const sel of rawSelections) {
+      const before = await tx.specialty.count();
+      const r = await resolveSelection(tx, sel);
+      if (!r || seen.has(r.specialtyId)) continue;
+      if ((await tx.specialty.count()) > before) createdNewTaxonomy = true;
+      seen.add(r.specialtyId);
+      resolved.push(r);
+    }
+
+    const specialtyRows = await tx.specialty.findMany({
+      where: { id: { in: resolved.map((r) => r.specialtyId) } },
+      include: { parent: true },
+    });
+    const canonicalNames = Array.from(
+      new Set(specialtyRows.flatMap((s) => (s.parent ? [s.name, s.parent.name] : [s.name]))),
+    );
+    const rawLabels = resolved.map((r) => r.rawLabel);
+
+    await tx.practitionerSpecialty.deleteMany({ where: { practitionerId: target.id } });
+    await tx.practitioner.update({
+      where: { id: target.id },
+      data: {
+        displayName,
+        headline: draft.headline || null,
+        whoIHelp: draft.whoIHelp || null,
+        bio: draft.bio || null,
+        cityId,
+        telehealth,
+        inPerson,
+        latitude: coords?.[0] ?? null,
+        longitude: coords?.[1] ?? null,
+        yearsInPractice,
+        searchText: buildSearchText([
+          displayName,
+          draft.headline,
+          draft.bio,
+          draft.whoIHelp,
+          city?.name,
+          city?.state,
+          ...draft.modalities,
+          ...rawLabels,
+          ...canonicalNames,
+        ]),
+        specialties: {
+          create: resolved.map((r) => ({
+            rawLabel: r.rawLabel,
+            specialty: { connect: { id: r.specialtyId } },
+          })),
+        },
+      },
+    });
+
+    // Fresh AI-drafted outcomes (reviewable/removable later in the portal).
+    await tx.caseStudy.deleteMany({ where: { practitionerId: target.id } });
+    for (const cs of draft.caseStudies) {
+      await tx.caseStudy.create({
+        data: {
+          practitionerId: target.id,
+          title: cs.title,
+          summary: cs.summary,
+          outcome: cs.outcome ?? null,
+          anonymized: true,
+        },
+      });
+    }
+  });
+
+  await indexPractitioner(target.id).catch((err) =>
+    console.error('Typesense reindex failed:', err),
+  );
+  if (createdNewTaxonomy || rawSelections.length > 0) {
+    await syncSpecialtySynonyms().catch((err) =>
+      console.error('Typesense synonym sync failed:', err),
+    );
+  }
+
+  revalidatePath(`/practitioners/${slug}`);
+  revalidatePath('/');
+  revalidatePath('/search');
+  redirect(`/practitioners/${slug}?onboarded=1`);
 }
