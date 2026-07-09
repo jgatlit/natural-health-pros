@@ -28,6 +28,7 @@
     "import:pilot": "tsx --env-file=.env scripts/import-pilot-practitioners.ts",
     "photos:wire": "tsx --env-file=.env scripts/wire-pilot-photos.ts",
     "photos:backfill": "tsx --env-file=.env scripts/backfill-pilot-photos.ts",
+    "probe:search": "tsx --env-file=.env scripts/probe-search-uptime.ts",
     "postinstall": "prisma generate"
   },
   "dependencies": {
