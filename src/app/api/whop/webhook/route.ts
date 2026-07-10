@@ -1,5 +1,5 @@
 import { NextResponse, type NextRequest } from 'next/server';
-import crypto from 'node:crypto';
+import { makeWebhookValidator } from '@whop/api';
 import { prisma } from '@/lib/prisma';
 import { indexPractitioner } from '@/lib/practitioner-indexer';
 
@@ -7,97 +7,64 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 // Layer X — Whop membership webhook → flip the practitioner's platform-subscription status.
-// The exact Whop event names + signature header are confirmed against Whop's webhook docs when
-// the webhook is registered (WHOP_WEBHOOK_SECRET provisioned then); the resolution/mapping below
-// is the wiring. Practitioner is matched by the `practitioner_id` metadata we attach at checkout,
-// falling back to the membership id, then the buyer email.
+// Verified with Whop's official validator (correct signature scheme). Practitioner is matched by
+// the `practitioner_id` metadata we attach at checkout, then membership id, then buyer email.
 
-type WhopWebhookPayload = {
+const validateWebhook = makeWebhookValidator({
+  webhookSecret: process.env.WHOP_WEBHOOK_SECRET ?? '',
+});
+
+type MembershipData = {
   id?: string;
-  action?: string;
-  type?: string;
-  event?: string;
   membership_id?: string;
   email?: string;
-  metadata?: { practitioner_id?: string };
-  user?: { email?: string };
-  data?: {
-    id?: string;
-    membership_id?: string;
-    email?: string;
-    metadata?: { practitioner_id?: string };
-    membership?: { id?: string; metadata?: { practitioner_id?: string } };
-    user?: { email?: string };
-  };
+  metadata?: { practitioner_id?: string } | null;
+  user?: { id?: string; email?: string } | null;
 };
 
-function verifySignature(rawBody: string, signature: string | null, secret: string): boolean {
-  if (!signature) return false;
-  const expected = crypto.createHmac('sha256', secret).update(rawBody).digest('hex');
-  const provided = signature.replace(/^sha256=/, '').trim();
-  try {
-    return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(provided));
-  } catch {
-    return false;
-  }
-}
-
-function mapStatus(eventType: string): 'ACTIVE' | 'PAST_DUE' | 'CANCELED' | null {
-  const t = eventType.toLowerCase();
+function mapStatus(action: string): 'ACTIVE' | 'PAST_DUE' | 'CANCELED' | null {
+  const t = action.toLowerCase();
   if (t.includes('cancel') || t.includes('delete')) return 'CANCELED';
-  if (t.includes('invalid') || t.includes('expired') || t.includes('past_due')) return 'PAST_DUE';
+  if (t.includes('invalid') || t.includes('expired') || t.includes('past_due') || t.includes('fail'))
+    return 'PAST_DUE';
   if (t.includes('valid') || t.includes('succeed') || t.includes('active')) return 'ACTIVE';
   return null;
 }
 
-export async function POST(req: NextRequest) {
-  const secret = process.env.WHOP_WEBHOOK_SECRET;
-  // Fail CLOSED: reject everything until the signing secret is provisioned, so this public
-  // route can't process forged/unsigned events (which could flip listing visibility).
-  if (!secret) {
+export async function POST(request: NextRequest) {
+  // Fail CLOSED: reject everything until the signing secret is provisioned.
+  if (!process.env.WHOP_WEBHOOK_SECRET) {
     return NextResponse.json({ error: 'webhook not configured' }, { status: 503 });
   }
-  const rawBody = await req.text();
-  const sig =
-    req.headers.get('x-whop-signature') ??
-    req.headers.get('whop-signature') ??
-    req.headers.get('x-signature');
-  if (!verifySignature(rawBody, sig, secret)) {
+
+  let result: { action?: string; data?: MembershipData };
+  try {
+    result = (await validateWebhook(request)) as unknown as {
+      action?: string;
+      data?: MembershipData;
+    };
+  } catch {
     return NextResponse.json({ error: 'invalid signature' }, { status: 401 });
   }
 
-  let event: WhopWebhookPayload;
-  try {
-    event = JSON.parse(rawBody) as WhopWebhookPayload;
-  } catch {
-    return NextResponse.json({ error: 'invalid json' }, { status: 400 });
-  }
+  const action = result.action ?? '';
+  const data = result.data ?? {};
+  const membershipId = data.id ?? data.membership_id;
+  const status = mapStatus(action);
 
-  const d = event.data ?? {};
-  const eventId = event.id ?? d.id;
-  const eventType = event.action ?? event.type ?? event.event ?? '';
+  // Audit + dedup (idempotent on re-delivery); status writes are idempotent regardless.
+  const eventKey = `${action}:${membershipId ?? 'unknown'}`;
+  const logged = await prisma.whopWebhookEvent
+    .upsert({
+      where: { whopEventId: eventKey },
+      update: { eventType: action, payload: result as object },
+      create: { whopEventId: eventKey, eventType: action, payload: result as object },
+    })
+    .catch(() => null);
 
-  // Dedup + audit.
-  if (eventId) {
-    const existing = await prisma.whopWebhookEvent.findUnique({ where: { whopEventId: eventId } });
-    if (existing?.processedAt) return NextResponse.json({ ok: true, dedup: true });
-  }
-  const logged = eventId
-    ? await prisma.whopWebhookEvent.upsert({
-        where: { whopEventId: eventId },
-        update: { eventType, payload: event },
-        create: { whopEventId: eventId, eventType, payload: event },
-      })
-    : null;
-
-  const status = mapStatus(eventType);
   if (status) {
-    const practitionerId =
-      d.metadata?.practitioner_id ??
-      d.membership?.metadata?.practitioner_id ??
-      event.metadata?.practitioner_id;
-    const membershipId = d.id ?? d.membership_id ?? d.membership?.id ?? event.membership_id;
-    const email = (d.user?.email ?? d.email ?? event.user?.email ?? event.email)?.toLowerCase();
+    const practitionerId = data.metadata?.practitioner_id;
+    const email = (data.user?.email ?? data.email)?.toLowerCase();
 
     let practitioner = practitionerId
       ? await prisma.practitioner.findUnique({ where: { id: practitionerId } })
@@ -129,18 +96,16 @@ export async function POST(req: NextRequest) {
           console.error('reindex after subscription webhook failed:', e),
         );
       } catch (e) {
-        // e.g. a whopMembershipId unique collision (misrouted / reused delivery). Log and
-        // fall through so the event still gets processedAt — avoids a Whop poison-pill retry loop.
+        // e.g. a whopMembershipId unique collision — log + ack so Whop doesn't poison-pill retry.
         console.error('subscription update failed (acking anyway):', e);
       }
     }
   }
 
   if (logged) {
-    await prisma.whopWebhookEvent.update({
-      where: { id: logged.id },
-      data: { processedAt: new Date() },
-    });
+    await prisma.whopWebhookEvent
+      .update({ where: { id: logged.id }, data: { processedAt: new Date() } })
+      .catch(() => {});
   }
   return NextResponse.json({ ok: true });
 }
