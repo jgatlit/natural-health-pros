@@ -74,3 +74,33 @@ export async function revokeInvitation(formData: FormData): Promise<void> {
   });
   revalidatePath('/admin/invites');
 }
+
+export async function resendInvitation(formData: FormData): Promise<void> {
+  const session = await requireAdmin();
+  const id = String(formData.get('id') ?? '');
+  if (!id) return;
+
+  const invitation = await prisma.invitation.findUnique({ where: { id } });
+  if (!invitation) redirect('/admin/invites?error=not-found');
+  if (invitation.acceptedAt) redirect('/admin/invites?error=already-accepted');
+
+  // Expired or revoked (expiresAt in the past) → reactivate with a FRESH token so
+  // any previously-shared/revoked dead link stays dead. A still-valid pending invite
+  // keeps its token so the link already emailed to the practitioner keeps working.
+  const inactive = invitation.expiresAt <= new Date();
+  const updated = await prisma.invitation.update({
+    where: { id },
+    data: {
+      expiresAt: new Date(Date.now() + INVITATION_TTL_MS),
+      ...(inactive ? { token: newToken() } : {}),
+    },
+  });
+
+  await sendInvitationEmail({
+    to: updated.email,
+    acceptUrl: `${baseUrl()}/auth/invite-accept/${updated.token}`,
+    invitedByName: session?.user?.name ?? undefined,
+  });
+
+  revalidatePath('/admin/invites');
+}

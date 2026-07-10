@@ -4,7 +4,7 @@ import { prisma } from '@/lib/prisma';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
-import { createInvitation, revokeInvitation } from './actions';
+import { createInvitation, revokeInvitation, resendInvitation } from './actions';
 
 export const dynamic = 'force-dynamic';
 
@@ -103,6 +103,25 @@ export default async function AdminInvitesPage() {
                       <Badge variant="outline" className="text-[10px]">
                         Expired
                       </Badge>
+                    )}
+                    {(status === 'pending' || status === 'expired') && (
+                      <form action={resendInvitation}>
+                        <input type="hidden" name="id" value={inv.id} />
+                        <button
+                          type="submit"
+                          aria-label={
+                            expired
+                              ? `Resend and reactivate invitation to ${inv.email}`
+                              : `Resend invitation to ${inv.email}`
+                          }
+                          title={
+                            expired ? 'Resend — reactivates this expired invite' : 'Resend invite'
+                          }
+                          className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
+                        >
+                          <Send className="h-3.5 w-3.5" />
+                        </button>
+                      </form>
                     )}
                     {status === 'pending' && (
                       <form action={revokeInvitation}>
