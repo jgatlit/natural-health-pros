@@ -44,22 +44,26 @@ export async function createInvitation(formData: FormData): Promise<void> {
     orderBy: { createdAt: 'desc' },
   });
 
-  const invitation =
-    existing ??
-    (await prisma.invitation.create({
+  const token = existing?.token ?? newToken();
+
+  // Send BEFORE persisting a new row: if Resend rejects the send, we don't want an
+  // orphaned pending invitation whose recipient never received a link.
+  await sendInvitationEmail({
+    to: email,
+    acceptUrl: `${baseUrl()}/auth/invite-accept/${token}`,
+    invitedByName: session?.user?.name ?? undefined,
+  });
+
+  if (!existing) {
+    await prisma.invitation.create({
       data: {
-        token: newToken(),
+        token,
         email,
         invitedById: session?.user?.id ?? null,
         expiresAt: new Date(Date.now() + INVITATION_TTL_MS),
       },
-    }));
-
-  await sendInvitationEmail({
-    to: email,
-    acceptUrl: `${baseUrl()}/auth/invite-accept/${invitation.token}`,
-    invitedByName: session?.user?.name ?? undefined,
-  });
+    });
+  }
 
   revalidatePath('/admin/invites');
 }
@@ -88,18 +92,23 @@ export async function resendInvitation(formData: FormData): Promise<void> {
   // any previously-shared/revoked dead link stays dead. A still-valid pending invite
   // keeps its token so the link already emailed to the practitioner keeps working.
   const inactive = invitation.expiresAt <= new Date();
-  const updated = await prisma.invitation.update({
+  const token = inactive ? newToken() : invitation.token;
+
+  // Send BEFORE persisting: if Resend rejects the send, the invite stays unchanged
+  // (no premature token rotation or expiry bump), so the stored row never diverges
+  // from what was actually delivered.
+  await sendInvitationEmail({
+    to: invitation.email,
+    acceptUrl: `${baseUrl()}/auth/invite-accept/${token}`,
+    invitedByName: session?.user?.name ?? undefined,
+  });
+
+  await prisma.invitation.update({
     where: { id },
     data: {
       expiresAt: new Date(Date.now() + INVITATION_TTL_MS),
-      ...(inactive ? { token: newToken() } : {}),
+      ...(inactive ? { token } : {}),
     },
-  });
-
-  await sendInvitationEmail({
-    to: updated.email,
-    acceptUrl: `${baseUrl()}/auth/invite-accept/${updated.token}`,
-    invitedByName: session?.user?.name ?? undefined,
   });
 
   revalidatePath('/admin/invites');
