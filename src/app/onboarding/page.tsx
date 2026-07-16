@@ -74,8 +74,14 @@ export default async function OnboardingPage({ searchParams }: Props) {
         .join(' ') ||
       'New Practitioner';
 
+    // comped: an HHE invitation IS the pilot grant. Reaching this line proves it — the
+    // invitation-required, validity and email-match gates above all passed, so this user was
+    // vouched for by an admin. Without it they'd inherit the schema default (comped: false) and
+    // land behind the $59/mo Layer X paywall: profile complete, work done, silently absent from
+    // the directory. That happened to Amy (the client) on her own directory. Invite ⇒ pilot,
+    // until an operator decides otherwise per-practitioner.
     practitioner = await prisma.practitioner.create({
-      data: { userId: session.user.id, slug, displayName, acceptedAt: new Date() },
+      data: { userId: session.user.id, slug, displayName, acceptedAt: new Date(), comped: true },
       include: withSpecialties,
     });
 
