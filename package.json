@@ -30,7 +30,8 @@
     "photos:backfill": "tsx --env-file=.env scripts/backfill-pilot-photos.ts",
     "probe:search": "tsx --env-file=.env scripts/probe-search-uptime.ts",
     "postinstall": "prisma generate",
-    "taglines:backfill": "tsx --env-file=.env scripts/backfill-taglines.ts"
+    "taglines:backfill": "tsx --env-file=.env scripts/backfill-taglines.ts",
+    "links:audit": "tsx --env-file=.env scripts/audit-profile-links.ts"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.106.0",
