@@ -104,7 +104,13 @@ export function SubscriptionSection({
       : 'Your listing is free — complete your profile above to appear in the directory.';
   } else if (trialEndsAt.getTime() > now) {
     const daysRemaining = Math.max(1, Math.ceil((trialEndsAt.getTime() - now) / 86_400_000));
+    // timeZone pinned to UTC to match the warning email's date (see trial-sweep's warningCopy).
+    // Both describe the same instant, so if one honours the runtime's local zone and the other
+    // doesn't, a trial ending near UTC midnight gets two different dates — dashboard says the
+    // 14th, the email says the 15th. Vercel's Node runtime is UTC today, which is exactly why
+    // this would go unnoticed until it didn't.
     const trialEndsAtLabel = trialEndsAt.toLocaleDateString('en-US', {
+      timeZone: 'UTC',
       month: 'long',
       day: 'numeric',
       year: 'numeric',

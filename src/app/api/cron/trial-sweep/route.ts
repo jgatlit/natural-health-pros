@@ -191,10 +191,12 @@ export async function GET(request: Request): Promise<NextResponse> {
   // drops them. Two surfaces, same rule, opposite answers — and the dashboard would be telling
   // them "subscribe to return to the directory" while they were still in it.
   //
-  // indexPractitioner() re-derives isListed() from the DB and upserts or deletes accordingly,
-  // so this self-heals in BOTH directions: it delists a lapsed trial, and it re-lists someone
-  // who subscribed while the Whop webhook was failing. Idempotent — a delete of an
-  // already-absent doc is swallowed — so re-running it costs nothing but is never wrong.
+  // indexPractitioner() re-derives isListed() from the DB rather than assuming the answer, so
+  // it can't disagree with the gate. Note the query below already excludes ACTIVE/PAST_DUE and
+  // admins, so every row reaching it is guaranteed unlisted and this call site only ever takes
+  // the delete branch — it does NOT double as a re-listing repair pass. Re-listing on payment
+  // is the Whop webhook's job. Idempotent regardless: deleting an already-absent doc is
+  // swallowed, so re-running costs nothing and is never wrong.
   //
   // Re-sweeps every expired practitioner daily, forever, rather than tracking who's already
   // been delisted. At pilot scale (~20) that's a few no-op calls a day and it stays correct
