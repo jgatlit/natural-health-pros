@@ -19,7 +19,7 @@ Nothing in the repo needs to change to fix this — only the external Resend dom
 | Fact | Value |
 |---|---|
 | Domain | `naturalhealthpros.com` (Cloudflare DNS — nameservers `serenity/terry.ns.cloudflare.com`) |
-| Sender lib | `src/lib/email.ts` → `sendInvitationEmail` (Resend SDK) |
+| Sender lib | `src/auth.ts` → `sendBrandedVerificationRequest` (Resend REST, via the Auth.js provider). ⚠️ Historical: this was `src/lib/email.ts` → `sendInvitationEmail` until PR #28 collapsed invites to a single magic-link email; that module had zero importers afterwards and was deleted (recover from git history if needed). |
 | Current (broken) | `EMAIL_FROM = "HHE Directory <onboarding@resend.dev>"` (sandbox sender + stale brand) |
 | Target | `EMAIL_FROM = "Natural Health Pros <noreply@naturalhealthpros.com>"` |
 | Vercel env scopes | development · preview · production (set all three) |

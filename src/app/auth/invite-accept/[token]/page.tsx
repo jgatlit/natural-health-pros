@@ -6,6 +6,15 @@ import { Separator } from '@/components/ui/separator';
 
 type Props = { params: { token: string } };
 
+// ORPHANED BY DESIGN (PR #28). Nothing in the app links here any more: invitations now carry
+// the magic link directly, so one click signs in and lands on /onboarding. This route is kept
+// ONLY as a grace period for invitation emails sent BEFORE that deploy, which still point at
+// it — deleting it would turn those into dead links for anyone who hasn't clicked yet. It
+// still works (it calls signIn with the same redirectTo shape, so those users get the new
+// one-click flow from here on).
+// TODO(remove): safe to delete once no pending, unexpired Invitation predates PR #28 — i.e.
+// 7 days (INVITATION_TTL_MS) after that deploy, or when this returns nothing:
+//   SELECT 1 FROM "Invitation" WHERE "acceptedAt" IS NULL AND "expiresAt" > now() AND "createdAt" < '<deploy-date>';
 export const dynamic = 'force-dynamic';
 
 export default async function InviteAcceptPage({ params }: Props) {
