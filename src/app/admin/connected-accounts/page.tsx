@@ -1,5 +1,7 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { ArrowLeft, Check, Clock, X, MinusCircle, AlertCircle } from 'lucide-react';
+import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
 import { isWhopPlatformsReady } from '@/lib/whop';
 import { isProfileComplete } from '@/lib/practitioner-indexer';
@@ -10,11 +12,10 @@ import { Badge } from '@/components/ui/badge';
 export const dynamic = 'force-dynamic';
 
 export default async function ConnectedAccountsPage() {
-  // ⚠️ TEMP — LOCAL TESTING ONLY: admin gate disabled. REVERT BEFORE PUSH.
-  // const session = await auth();
-  // if (!session?.user || session.user.role !== 'ADMIN') {
-  //   redirect('/auth/signin?callbackUrl=/admin/connected-accounts');
-  // }
+  const session = await auth();
+  if (!session?.user || session.user.role !== 'ADMIN') {
+    redirect('/auth/signin?callbackUrl=/admin/connected-accounts');
+  }
 
   const practitioners = await prisma.practitioner.findMany({
     include: {

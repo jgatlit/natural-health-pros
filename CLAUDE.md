@@ -36,8 +36,8 @@
 |---|---|
 | **Local cwd** | `~/projects/HHE/HHE-directory/` (folder unchanged) |
 | **GitHub** | https://github.com/jgatlit/natural-health-pros (public; renamed from `HHE-directory` 2026-06-29, GitHub keeps redirects) |
-| **Vercel project** | `ai-chemist/hhe-directory` — inspector: https://vercel.com/ai-chemist/hhe-directory (**project NOT yet renamed** — held until `naturalhealthpros.com` DNS resolves, to avoid a dark-window on the live `.vercel.app` demo URL) |
-| **Production URL** | https://hhe-directory.vercel.app (current) · **`naturalhealthpros.com` added to project 2026-06-29, pending DNS** — A record `naturalhealthpros.com → 76.76.21.21` must be set in **Cloudflare** (nameservers are `serenity/terry.ns.cloudflare.com`, NOT GoDaddy) |
+| **Vercel project** | `ai-chemist/hhe-directory` — inspector: https://vercel.com/ai-chemist/hhe-directory (**project NOT yet renamed** — DNS cutover is done and email is live, so the rename is unblocked; it's held pending the auth-gate re-enable PR landing, then runs as the final launch step) |
+| **Production URL** | **`naturalhealthpros.com` LIVE over HTTPS as of 2026-07-15** — apex `A → 76.76.21.21` (DNS-only, replaced the GoDaddy builder), `www` CNAME → `cname.vercel-dns.com` (DNS-only); Let's Encrypt cert valid → 2026-10-14; Vercel domain `verified:true`. Zone `naturalhealthpros.com` (id `3ec2cb56dd0ad83824440b2e802ff73c`) lives in **Jonathan's own Cloudflare account**, editable via `ssh vps:~/apps/cloudflare/` (`cfapi` wrapper) — DNS was never gated on Amy's domain-admin auth; that was a phantom blocker. https://hhe-directory.vercel.app remains the current default `.vercel.app` URL (project not yet renamed) |
 | **Neon DB** | `neondb` @ `ep-plain-bird-ap6zr7b3.c-7.us-east-1.aws.neon.tech` (Marketplace-connected; branching per env) |
 | **Typesense Cloud** | cluster `vm8gj01ubsi7hyxep` (Server v30.2), host `vm8gj01ubsi7hyxep-1.a2.typesense.net`, collection `practitioners`, dashboard https://cloud.typesense.org (rebuilt 2026-06-24; prior cluster `1rt8fj5i9epv2s6mp` terminated) |
 

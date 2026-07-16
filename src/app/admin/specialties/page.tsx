@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { ArrowLeft, Check, X, Sparkles, GitMerge, ArrowUpCircle } from 'lucide-react';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
@@ -16,10 +17,9 @@ export const dynamic = 'force-dynamic';
 
 export default async function AdminSpecialtiesPage() {
   const session = await auth();
-  // ⚠️ TEMP — LOCAL TESTING ONLY: admin gate disabled (matches /admin/*). REVERT BEFORE PUSH.
-  // if (!session?.user || session.user.role !== 'ADMIN') {
-  //   redirect('/auth/signin?callbackUrl=/admin/specialties');
-  // }
+  if (!session?.user || session.user.role !== 'ADMIN') {
+    redirect('/auth/signin?callbackUrl=/admin/specialties');
+  }
 
   const [pendingAliases, proposed, activeCanonicals, parents] = await Promise.all([
     prisma.specialtyAlias.findMany({
@@ -190,7 +190,7 @@ export default async function AdminSpecialtiesPage() {
         </section>
 
         <p className="text-center text-xs text-muted-foreground">
-          Signed in as {session?.user?.email ?? 'TEST BYPASS'}
+          Signed in as {session.user.email}
         </p>
       </div>
     </main>

@@ -1,8 +1,8 @@
 # Quick Start — User Flows (Natural Health Pros)
 
-Prod: **https://hhe-directory.vercel.app** (naturalhealthpros.com pending DNS). Brand: Theme D "Midnight Navy".
+Prod: **https://naturalhealthpros.com** (LIVE over HTTPS since 2026-07-15) · also **https://hhe-directory.vercel.app** (default `.vercel.app`, project not yet renamed). Brand: Theme D "Midnight Navy".
 
-> **Auth note:** authorization gates are currently **OFF** for pilot testing (see `docs/AUTH-GATES-DISABLED-REVERT.md`) — `/admin/*`, any `/edit`, and `/onboarding` are reachable without sign-in. Magic-link (Resend) is still the sign-in **method** when you do onboard. Re-enable the gates before public launch.
+> **Auth note:** authorization gates are **ON** (re-enabled 2026-07-16 for public launch). `/admin/*` requires an **ADMIN** session; `/practitioners/*/edit` requires sign-in **+ ownership** (or admin); `/onboarding` requires a **valid invitation matching your email**. Sign-in is magic-link (Resend) sent from `agent@naturalhealthpros.com`. The public directory (`/search`, practitioner profiles) needs no sign-in.
 
 ---
 

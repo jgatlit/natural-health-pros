@@ -2,11 +2,13 @@
 
 > **Why this exists**: On 2026-07-10, driving a live test of the invite-resend feature (PR #20), creating/resending an invitation to a non-owner address returned **HTTP 500**. Root cause: `EMAIL_FROM = "HHE Directory <onboarding@resend.dev>"` uses Resend's **shared sandbox sender**, which only delivers to the account owner's own verified address — Resend returns 403 for any other recipient, so `sendInvitationEmail` (`src/lib/email.ts`) throws. This was **latent** because the 12 pilot invitations were DB-seeded (`invitedBy = system`, no email ever attempted). Verifying a real sending domain lifts the restriction. This runbook adds + verifies the domain and rewires `EMAIL_FROM`.
 
-**Status**: ⏳ NOT YET EXECUTED — ⛔ blocked on Amy's (client) Cloudflare domain-admin auth (`tsk_2395b0d2`, → Jonathan); the DKIM/SPF records need zone access she controls. Engineering detail: `tsk_196d0a58`. Fold into the launch-bundle Cloudflare session (`tsk_1d2b5c90`).
+**Status**: ✅ EXECUTED + VERIFIED 2026-07-15. The earlier "blocked on Amy's (client) Cloudflare domain-admin auth" framing was a **phantom blocker** — the `naturalhealthpros.com` zone is in Jonathan's own Cloudflare account (zone id `3ec2cb56dd0ad83824440b2e802ff73c`, editable via the VPS agent `ssh vps:~/apps/cloudflare/`); Amy never gated it. Domain verified, `EMAIL_FROM` rewired to `agent@naturalhealthpros.com`, and **prod redeployed 2026-07-15** — magic-link + invite email are LIVE and inbox-delivering. See Execution Log.
 **Owner**: operator (jgatlit / Jonathan). **Est. execution time**: ~15–30 min (mostly DNS propagation wait).
 
 ### Execution Log
-- _(pending — record cluster/domain id, region, and verified timestamp here on execution)_
+- **2026-07-15**: Domain added to Resend via the dashboard's auto-Cloudflare integration (records written directly to the CF zone) — domain id `fe0df6cf-38bd-442f-8657-5f57a40d3fd4`, region `us-east-1`. Records (all grey-cloud/DNS-only): MX `send` → `feedback-smtp.us-east-1.amazonses.com`; TXT `send` → `"v=spf1 include:amazonses.com ~all"`; TXT `resend._domainkey` → `p=…` (single-TXT DKIM variant, not the 3-CNAME variant shown in §2 below). All 3 verified in ~45s.
+- `EMAIL_FROM` set to `"Natural Health Pros <agent@naturalhealthpros.com>"` — note: operator chose sender `agent@`, not the `noreply@` used in the §0/§4 template below — on Vercel (development + preview + production) + local `.env`/`.env.local`. Sender validated live: a direct Resend `POST /emails` from `agent@naturalhealthpros.com` was accepted (no 403).
+- **Production redeploy DONE 2026-07-15** (`vercel redeploy` of the latest prod deployment → picks up the new `EMAIL_FROM`; no code change). Originally deferred to a batched launch deploy (operator option b), but **overtaken by a deliverability finding**: while prod was still on the sandbox sender, a live magic-link test landed in the **Spam** folder (`onboarding@resend.dev` — shared sender, no SPF/DKIM/DMARC alignment with `naturalhealthpros.com`), whereas the verified `agent@naturalhealthpros.com` landed in the **Inbox**. So the redeploy was decoupled and shipped on its own (no gate/rename changes). Confirmed after redeploy: magic-link delivered to inbox from `agent@` and admin sign-in (jgatlit@gmail.com) succeeded end-to-end.
 
 ---
 
@@ -73,6 +75,6 @@ naturalhealthpros.com zone → DNS → Records:
 
 ## 6. Related
 
-- **NextAuth magic-link** — CONFIRMED shares this sender (`src/auth.config.ts:22` uses the same `EMAIL_FROM`), so non-owner practitioners can't sign in until the domain is verified → HARD prereq for the auth-gate re-enable (`tsk_1d2b5c90`, step 2). Order: verify domain → email works → re-enable gates.
-- **Pairs with** the launch-bundle apex DNS cutover — same Cloudflare session. Resend records are independent of the apex A record, so order doesn't matter. ⛔ Both are blocked on Amy's Cloudflare domain-admin auth (`tsk_2395b0d2`).
-- Vault: DNS-config task `tsk_2395b0d2` (→ Jonathan, blocked-on-Amy); engineering escalation `tsk_196d0a58`; runbook artifact `art_6bb222e3`.
+- **NextAuth magic-link** — CONFIRMED shares this sender (`src/auth.config.ts:22` uses the same `EMAIL_FROM`). ✅ **Chain complete**: domain verified → `EMAIL_FROM` rewired to `agent@naturalhealthpros.com` → prod redeployed 2026-07-15 (magic-link confirmed **inbox**-delivering; the old shared sandbox sender was **spam**-foldering sign-in emails) → auth gates re-enabled 2026-07-16 (`tsk_1d2b5c90`). Admin sign-in (jgatlit@gmail.com) verified end-to-end before the gate flip.
+- **Pairs with** the launch-bundle apex DNS cutover — ✅ **both DONE 2026-07-15** (apex cutover + Resend records, same day). The earlier "blocked on Amy's Cloudflare domain-admin auth" framing was a **phantom blocker** — the zone is in Jonathan's own Cloudflare account (`tsk_2395b0d2` complete).
+- Vault: DNS-config task `tsk_2395b0d2` (→ Jonathan; was a phantom "blocked-on-Amy", now complete); Resend/email task `tsk_196d0a58` (DNS + `EMAIL_FROM` + prod redeploy all done 2026-07-15 — complete); runbook artifact `art_6bb222e3`.

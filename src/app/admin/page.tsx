@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { redirect } from 'next/navigation';
 import { Mail, Building2, Webhook, Tags, ChevronRight } from 'lucide-react';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
@@ -11,10 +12,9 @@ export const dynamic = 'force-dynamic';
 
 export default async function AdminIndex() {
   const session = await auth();
-  // ⚠️ TEMP — LOCAL TESTING ONLY: admin gate disabled. REVERT BEFORE PUSH.
-  // if (!session?.user || session.user.role !== 'ADMIN') {
-  //   redirect('/auth/signin?callbackUrl=/admin');
-  // }
+  if (!session?.user || session.user.role !== 'ADMIN') {
+    redirect('/auth/signin?callbackUrl=/admin');
+  }
 
   const [pendingInvites, connectedAccounts, recentWebhooks, pendingSpecialties] = await Promise.all([
     prisma.invitation.count({
@@ -72,7 +72,7 @@ export default async function AdminIndex() {
         <header className="space-y-1">
           <h1 className="text-2xl font-semibold tracking-tight">Admin tools</h1>
           <p className="text-sm text-muted-foreground">
-            Natural Health Pros operator surface · {session?.user?.email ?? 'TEST BYPASS'}
+            Natural Health Pros operator surface · {session.user.email}
           </p>
         </header>
 

@@ -24,10 +24,9 @@ function baseUrl(): string {
 
 async function requireAdmin() {
   const session = await auth();
-  // ⚠️ TEMP — LOCAL TESTING ONLY: admin gate disabled. REVERT BEFORE PUSH.
-  // if (!session?.user || session.user.role !== 'ADMIN') {
-  //   redirect('/auth/signin?callbackUrl=/admin/invites');
-  // }
+  if (!session?.user || session.user.role !== 'ADMIN') {
+    redirect('/auth/signin?callbackUrl=/admin/invites');
+  }
   return session;
 }
 
@@ -51,7 +50,7 @@ export async function createInvitation(formData: FormData): Promise<void> {
   await sendInvitationEmail({
     to: email,
     acceptUrl: `${baseUrl()}/auth/invite-accept/${token}`,
-    invitedByName: session?.user?.name ?? undefined,
+    invitedByName: session.user.name ?? undefined,
   });
 
   if (!existing) {
@@ -59,7 +58,7 @@ export async function createInvitation(formData: FormData): Promise<void> {
       data: {
         token,
         email,
-        invitedById: session?.user?.id ?? null,
+        invitedById: session.user.id,
         expiresAt: new Date(Date.now() + INVITATION_TTL_MS),
       },
     });
@@ -100,7 +99,7 @@ export async function resendInvitation(formData: FormData): Promise<void> {
   await sendInvitationEmail({
     to: invitation.email,
     acceptUrl: `${baseUrl()}/auth/invite-accept/${token}`,
-    invitedByName: session?.user?.name ?? undefined,
+    invitedByName: session.user.name ?? undefined,
   });
 
   await prisma.invitation.update({

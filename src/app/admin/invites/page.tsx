@@ -1,3 +1,4 @@
+import { redirect } from 'next/navigation';
 import { Mail, Send, Trash2, Check, Clock } from 'lucide-react';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
@@ -10,10 +11,9 @@ export const dynamic = 'force-dynamic';
 
 export default async function AdminInvitesPage() {
   const session = await auth();
-  // ⚠️ TEMP — LOCAL TESTING ONLY: admin gate disabled. REVERT BEFORE PUSH.
-  // if (!session?.user || session.user.role !== 'ADMIN') {
-  //   redirect('/auth/signin?callbackUrl=/admin/invites');
-  // }
+  if (!session?.user || session.user.role !== 'ADMIN') {
+    redirect('/auth/signin?callbackUrl=/admin/invites');
+  }
 
   const invitations = await prisma.invitation.findMany({
     orderBy: { createdAt: 'desc' },
@@ -144,7 +144,7 @@ export default async function AdminInvitesPage() {
 
         <Separator />
         <p className="text-center text-xs text-muted-foreground">
-          Admin · {session?.user?.email ?? 'TEST BYPASS'}
+          Admin · {session.user.email}
         </p>
       </div>
     </main>
