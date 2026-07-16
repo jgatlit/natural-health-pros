@@ -3,31 +3,59 @@ date: 2026-05-25
 audience: sales@whop.com (Whop Platforms team)
 channel: outbound email
 from: Jonathan Gudger (aiChemist) <jgatlit@gmail.com>
-purpose: Request access to Whop for Platforms / Connected Accounts API for HHE Directory — a multi-tenant practitioner marketplace.
+purpose: Request access to Whop for Platforms / Connected Accounts API for Natural Health Pros — a multi-tenant practitioner marketplace.
 related artifacts:
-  - Live product: https://hhe-directory.vercel.app
-  - Live search demo: https://hhe-directory.vercel.app/search
+  - Live product: https://naturalhealthpros.com
+  - Live search demo: https://naturalhealthpros.com/search
   - Operator's company entity (internal): aiChemist
   - Client company entity (internal): Holistic Health Educators (HHE)
 ---
+
+> ## ⚠️ DRAFTED 2026-05-25 — REFRESH BEFORE SENDING (reviewed 2026-07-16)
+>
+> URLs and the product name were corrected 2026-07-16 (`naturalhealthpros.com`; the HHE link
+> pointed at an unrelated blog — see PR #29). **The body below still contains claims that are
+> now false.** Fix these before it goes to a vendor:
+>
+> 1. **"Already wired with Cal.com (booking)" — FALSE.** There is no Cal.com API integration.
+>    Booking is **practitioner-owned URLs** (provider-agnostic allowlist: Cal.com / Calendly /
+>    SavvyCal / Acuity). Cal.com's own *Platform* offering was deprecated Dec 2025 — which is
+>    precisely why we went provider-agnostic. Claiming a Cal.com integration overstates the stack.
+> 2. **"18 seeded today; ~20 real practitioners within 6 weeks" — stale.** As of 2026-07-16 there
+>    are **13 real practitioners live** (12 HHE pilot cohort + operator), all comped. The 18 seed
+>    records are gone.
+> 3. **"Phase 2A + 2B (auth + booking) shipped this week" — stale.** Phases 1–3 have shipped:
+>    AI onboarding → generated landing → self-service portal → **live $59/mo listing subscription**.
+> 4. **BIGGEST MISS — bury the lede no longer.** We are *already a live, paying Whop creator
+>    customer*: **Layer X** ($59/mo practitioner listing subscription) runs in production on our own
+>    Whop company `biz_Vpj1G2ryNdPCG0`, with a real `@whop/api` webhook (fail-closed, signature-
+>    validated). That is far stronger evidence of fit + integration competence than "we'd like
+>    access", and the draft predates it entirely. **Lead with it.**
+> 5. **"the existing aiChemist/HHE Whop creator account" — ambiguous and risky.** There are now
+>    **two** Whop companies: the school (`biz_FItvmhBTmW02WG`) and the directory
+>    (`biz_Vpj1G2ryNdPCG0`). Name the directory one explicitly; conflating them misroutes revenue.
+> 6. **Fallback #3 "Practitioner-owned URLs (the path we rolled back)" — wrong.** That path
+>    **shipped** (Wedge 2B) and is the live booking mechanism today. It is not a fallback.
+> 7. Product is now live at **https://naturalhealthpros.com** with auth gates enabled; the
+>    `.vercel.app` URL is legacy.
 
 # Email: Whop for Platforms application
 
 ## Subject
 
-> Whop for Platforms application — HHE Directory (practitioner marketplace, ~20 → 2K sellers)
+> Whop for Platforms application — Natural Health Pros (practitioner marketplace, ~20 → 2K sellers)
 
 ## Body
 
 Hi Whop team,
 
-I'm building **HHE Directory** — a curated practitioner marketplace for graduates of [Holistic Health Educators](https://www.holistichealtheducators.com/)' functional medicine + holistic nutrition + mind-body programs. The product is live at https://hhe-directory.vercel.app (search at https://hhe-directory.vercel.app/search — feel free to click around).
+I'm building **Natural Health Pros** — a curated practitioner marketplace for graduates of [Holistic Health Educators](https://www.holistichealtheducators.com/)' functional medicine + holistic nutrition + mind-body programs. The product is live at https://naturalhealthpros.com (search at https://naturalhealthpros.com/search — feel free to click around).
 
 We're requesting access to **Whop for Platforms / Connected Accounts**. We've confirmed from your docs that this is invite-only and our current creator-account API key returns 401 on `/connected_accounts` — hence the outreach.
 
 ### What we're building (one paragraph)
 
-Patients discover HHE-trained practitioners via search → click into a Linktree-style profile → book an intro consult → pay for ongoing programs (memberships, packages, custom invoices). HHE Directory is the platform; each practitioner is an independent seller with their own pricing and offerings. We want Whop to handle the payment routing, KYC, and tax compliance so each practitioner can onboard once and receive direct payouts. HHE may take a small platform fee per transaction (open — depends on what's typical for your Platforms customers).
+Patients discover HHE-trained practitioners via search → click into a Linktree-style profile → book an intro consult → pay for ongoing programs (memberships, packages, custom invoices). Natural Health Pros is the platform; each practitioner is an independent seller with their own pricing and offerings. We want Whop to handle the payment routing, KYC, and tax compliance so each practitioner can onboard once and receive direct payouts. HHE may take a small platform fee per transaction (open — depends on what's typical for your Platforms customers).
 
 ### Volume + technical readiness
 
@@ -44,13 +72,13 @@ Patients discover HHE-trained practitioners via search → click into a Linktree
 3. Fee structure — what's the platform-side economics on Connected Accounts?
 4. Whether the existing aiChemist/HHE Whop creator account can be upgraded to a Platforms account, or whether a fresh setup is needed
 
-Happy to jump on a 15-minute call. Demo of the live product is two clicks (https://hhe-directory.vercel.app/search → click any practitioner → see the Linktree-style profile that's waiting for the Browse-offerings + Request-invoice surfaces to become real via Whop).
+Happy to jump on a 15-minute call. Demo of the live product is two clicks (https://naturalhealthpros.com/search → click any practitioner → see the Linktree-style profile that's waiting for the Browse-offerings + Request-invoice surfaces to become real via Whop).
 
 Thanks,
 **Jonathan Gudger**
 aiChemist
 jgatlit@gmail.com
-[HHE Directory live](https://hhe-directory.vercel.app)
+[Natural Health Pros live](https://naturalhealthpros.com)
 
 ---
 
@@ -60,7 +88,7 @@ jgatlit@gmail.com
 - [ ] Operator: confirm the volume projections match what you'd tell Amy (this email is independent outreach but the numbers should be consistent with the 5/28 demo conversation)
 - [ ] Operator: edit the "Engineering capacity" line if you want to attribute differently (Jonathan vs Blake vs HHE-side eng)
 - [ ] Send from `jgatlit@gmail.com` OR a domain you control if HHE has one set up — sales reps trust domain-matched senders
-- [ ] Reply window: Whop sales typically responds within 1-3 business days. If silence after 5 business days, follow up once with subject `Re: Whop for Platforms application — HHE Directory` + one-line bump.
+- [ ] Reply window: Whop sales typically responds within 1-3 business days. If silence after 5 business days, follow up once with subject `Re: Whop for Platforms application — Natural Health Pros` + one-line bump.
 
 ## What NOT to do
 
