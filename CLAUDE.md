@@ -80,7 +80,8 @@ After `vercel env pull .env.local`, also `cp .env.local .env` for Prisma CLI to 
 
 - `git push origin main` → auto-deploys via Vercel GitHub App (verified 2026-05-24)
 - Migration flow: `vercel env pull .env.local && cp .env.local .env && npm run db:migrate:dev --name <name>` → commit `prisma/migrations/` → push
-- Migrations do NOT auto-apply on deploy (build runs `prisma generate && next build` only). Consider adding `prisma migrate deploy &&` to build script when Phase 1 starts adding regular migrations — safe given Neon branching per env.
+- Migrations **DO** auto-apply on deploy — build is `prisma migrate deploy && prisma generate && next build`. This makes expand/contract mandatory: the migration applies during build while the PREVIOUS deploy still serves traffic, so a migration must never break the currently-live code (add the column now, drop the old one a release later).
+- **Git auto-deploy is not guaranteed.** A merge normally deploys within seconds via the Vercel GitHub App, but on 2026-07-16 the merge of PR #34 produced no deploy at all — nothing queued, no error. Always verify new code is actually live (hit a route that only exists in the new commit; a 404 means it never shipped). `vercel --prod --yes` from a clean `main` is the fallback.
 
 ## What's next
 
