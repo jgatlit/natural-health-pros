@@ -1,6 +1,7 @@
 'use server';
 
 import { revalidatePath } from 'next/cache';
+import { redirect } from 'next/navigation';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
 import { indexAllPractitioners } from '@/lib/practitioner-indexer';
@@ -8,10 +9,9 @@ import { syncSpecialtySynonyms } from '@/lib/typesense-synonyms';
 
 async function authorizeAdmin() {
   const session = await auth();
-  // ⚠️ TEMP — LOCAL TESTING ONLY: admin gate disabled (matches /admin/*). REVERT BEFORE PUSH.
-  // if (!session?.user || session.user.role !== 'ADMIN') {
-  //   redirect('/auth/signin?callbackUrl=/admin/specialties');
-  // }
+  if (!session?.user || session.user.role !== 'ADMIN') {
+    redirect('/auth/signin?callbackUrl=/admin/specialties');
+  }
   return session;
 }
 

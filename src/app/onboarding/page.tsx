@@ -36,23 +36,24 @@ export default async function OnboardingPage({ searchParams }: Props) {
     redirect('/auth/signin?callbackUrl=/onboarding');
   }
 
-  // ⚠️ TEMP — invitation + email-match gates disabled (operator request 2026-07-09).
-  // The invite is now OPTIONAL so any signed-in user can onboard for testing.
-  // Re-enable per docs/AUTH-GATES-DISABLED-REVERT.md.
   const token = searchParams.invitation;
-  const invitation = token
-    ? await prisma.invitation.findUnique({ where: { token } })
-    : null;
-  // if (!token) redirect('/');
-  // if (!invitation || invitation.expiresAt < new Date() ||
-  //     (invitation.acceptedAt && invitation.acceptedByUserId !== session.user.id)) {
-  //   redirect('/auth/error?error=Verification');
-  // }
-  // if (session.user.email?.toLowerCase() !== invitation.email.toLowerCase()) {
-  //   redirect('/auth/error?error=AccessDenied');
-  // }
+  if (!token) {
+    redirect('/');
+  }
 
-  const contactEmail = invitation?.email ?? session.user.email ?? 'practitioner@example.com';
+  const invitation = await prisma.invitation.findUnique({ where: { token } });
+  if (
+    !invitation ||
+    invitation.expiresAt < new Date() ||
+    (invitation.acceptedAt && invitation.acceptedByUserId !== session.user.id)
+  ) {
+    redirect('/auth/error?error=Verification');
+  }
+
+  // Confirm the signed-in email matches the invitation.
+  if (session.user.email?.toLowerCase() !== invitation.email.toLowerCase()) {
+    redirect('/auth/error?error=AccessDenied');
+  }
 
   // Idempotent: reuse the practitioner record if it already exists (pre-filled case),
   // else create a blank one to fill in.
@@ -62,10 +63,10 @@ export default async function OnboardingPage({ searchParams }: Props) {
   });
 
   if (!practitioner) {
-    const slug = await generateUniqueSlug(contactEmail);
+    const slug = await generateUniqueSlug(invitation.email);
     const displayName =
       session.user.name?.trim() ||
-      contactEmail
+      invitation.email
         .split('@')[0]
         .split(/[^a-z]+/i)
         .filter(Boolean)
@@ -84,16 +85,14 @@ export default async function OnboardingPage({ searchParams }: Props) {
     });
   }
 
-  // Mark invitation accepted (only when an invite was actually used).
-  if (invitation) {
-    await prisma.invitation.update({
-      where: { id: invitation.id },
-      data: {
-        acceptedAt: invitation.acceptedAt ?? new Date(),
-        acceptedByUserId: session.user.id,
-      },
-    });
-  }
+  // Mark invitation accepted (idempotent on already-accepted).
+  await prisma.invitation.update({
+    where: { id: invitation.id },
+    data: {
+      acceptedAt: invitation.acceptedAt ?? new Date(),
+      acceptedByUserId: session.user.id,
+    },
+  });
 
   // Push the (possibly sparse) record into Typesense so search reflects them immediately.
   await indexPractitioner(practitioner.id).catch((err) =>

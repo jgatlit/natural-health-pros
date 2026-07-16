@@ -6,34 +6,28 @@ import { authConfig } from '@/auth.config';
 // so this Edge Function stays under Vercel's 1 MB limit.
 const { auth } = NextAuth(authConfig);
 
-// ⚠️ TEMP — ALL AUTH GATES DISABLED for seamless HHE admin + practitioner testing
-// (operator request 2026-07-09). Magic-link sign-in is retained as the auth *method*;
-// only the authorization *gates* are off. Re-enable on explicit operator request —
-// full steps in docs/AUTH-GATES-DISABLED-REVERT.md. To restore, replace the body below
-// with the commented original.
-export default auth(() => {
-  // --- ORIGINAL GATES (restore to re-enable) ---
-  // const { pathname } = req.nextUrl;
-  // const session = req.auth;
-  // // Admin routes require Role.ADMIN
-  // if (pathname.startsWith('/admin')) {
-  //   if (!session?.user) {
-  //     const signinUrl = new URL('/auth/signin', req.nextUrl);
-  //     signinUrl.searchParams.set('callbackUrl', pathname);
-  //     return NextResponse.redirect(signinUrl);
-  //   }
-  //   if (session.user.role !== 'ADMIN') {
-  //     return NextResponse.redirect(new URL('/auth/error?error=AccessDenied', req.nextUrl));
-  //   }
-  // }
-  // // Practitioner edit + onboarding require an authenticated session
-  // if (pathname.match(/^\/practitioners\/[^/]+\/edit/) || pathname.startsWith('/onboarding')) {
-  //   if (!session?.user) {
-  //     const signinUrl = new URL('/auth/signin', req.nextUrl);
-  //     signinUrl.searchParams.set('callbackUrl', pathname);
-  //     return NextResponse.redirect(signinUrl);
-  //   }
-  // }
+export default auth((req) => {
+  const { pathname } = req.nextUrl;
+  const session = req.auth;
+  // Admin routes require Role.ADMIN
+  if (pathname.startsWith('/admin')) {
+    if (!session?.user) {
+      const signinUrl = new URL('/auth/signin', req.nextUrl);
+      signinUrl.searchParams.set('callbackUrl', pathname);
+      return NextResponse.redirect(signinUrl);
+    }
+    if (session.user.role !== 'ADMIN') {
+      return NextResponse.redirect(new URL('/auth/error?error=AccessDenied', req.nextUrl));
+    }
+  }
+  // Practitioner edit + onboarding require an authenticated session
+  if (pathname.match(/^\/practitioners\/[^/]+\/edit/) || pathname.startsWith('/onboarding')) {
+    if (!session?.user) {
+      const signinUrl = new URL('/auth/signin', req.nextUrl);
+      signinUrl.searchParams.set('callbackUrl', pathname);
+      return NextResponse.redirect(signinUrl);
+    }
+  }
   return NextResponse.next();
 });
 
