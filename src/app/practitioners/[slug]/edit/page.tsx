@@ -429,7 +429,9 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
 
         <SubscriptionSection
           status={practitioner.subscriptionStatus}
-          comped={practitioner.comped}
+          trialEndsAt={practitioner.trialEndsAt}
+          isAdmin={isAdmin}
+          isComplete={missing.length === 0}
           checkoutUrl={process.env.WHOP_PLATFORM_CHECKOUT_URL ?? null}
           priceLabel="$59/mo"
         />

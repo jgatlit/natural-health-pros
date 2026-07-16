@@ -1,11 +1,26 @@
-import { CheckCircle2, Clock, CreditCard, Sparkles } from 'lucide-react';
+import { CheckCircle2, Clock, CreditCard, ShieldCheck, Sparkles } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 
 type Props = {
   status: 'NONE' | 'ACTIVE' | 'PAST_DUE' | 'CANCELED';
-  comped: boolean;
+  /**
+   * 90-day pilot clock (docs/superpowers/specs/2026-07-16-pilot-trial-design.md).
+   * null = pre-trial (operator-seeded, never onboarded) — still listed, quiet.
+   * future = trial running. past = expired. Set only by genuine onboarding.
+   */
+  trialEndsAt: Date | null;
+  /** Admins are exempt from the trial clock and the paywall entirely — staff, not customers. */
+  isAdmin: boolean;
+  /**
+   * isProfileComplete() — the OTHER half of the listing gate. isListed() is
+   * `isProfileComplete() && (paying || trialing || admin)`, so billing state alone never
+   * proves someone is visible. Without this the card claims "you appear in directory search"
+   * to a practitioner whose incomplete-profile banner, on this same page, correctly tells
+   * them they're hidden from it.
+   */
+  isComplete: boolean;
   /** Whop checkout URL for our $59/mo product; null until provisioned (Layer X wiring). */
   checkoutUrl: string | null;
   priceLabel: string;
@@ -13,12 +28,111 @@ type Props = {
 
 /**
  * Layer X — the practitioner's platform-listing subscription (they pay us to be listed).
- * Comped pilots are listed for free. When not active/comped, this shows the Subscribe CTA
- * (or "coming soon" until the Whop checkout URL is set). Distinct from PaymentsSection,
- * which is Layer Y (the practitioner accepting payments from their own patients).
+ * Listing state follows the 90-day trial clock, not the retired `comped` flag: `trialEndsAt`
+ * null is pre-trial (still listed, kept quiet), a future date is a running trial (the $59/mo
+ * anchor lives here so the trial doesn't read as "free"), a past date is expired (subscribe to
+ * restore — nothing is ever deleted). ACTIVE keeps its existing copy; PAST_DUE stays listed
+ * through Whop's dunning grace and must never say "delisted". Admins are exempt outright — no
+ * countdown, no paywall CTA. Distinct from PaymentsSection, which is Layer Y (the practitioner
+ * accepting payments from their own patients).
+ *
+ * Every claim about being *visible* is gated on `isComplete`, because this card only knows the
+ * billing half of isListed(). Keep it that way: the profile-completeness banner on the same
+ * page owns the visibility message, and two cards disagreeing on one screen destroys trust in
+ * both.
  */
-export function SubscriptionSection({ status, comped, checkoutUrl, priceLabel }: Props) {
-  const listed = comped || status === 'ACTIVE';
+export function SubscriptionSection({
+  status,
+  trialEndsAt,
+  isAdmin,
+  isComplete,
+  checkoutUrl,
+  priceLabel,
+}: Props) {
+  const now = Date.now();
+
+  let badge: React.ReactNode;
+  let description: React.ReactNode;
+  let showCta = false;
+  let ctaLabel = `Subscribe · ${priceLabel}`;
+  let disabledCtaLabel = 'Subscribe · Coming soon';
+
+  // Billing entitles you to a listing; it doesn't produce one. When the profile is incomplete
+  // the entitlement is real but unused, so this card states the entitlement and stays silent
+  // about visibility — the completeness banner above it owns that message and the fix.
+  const visible = isComplete;
+
+  if (isAdmin) {
+    badge = (
+      <Badge variant="outline" className="gap-1 text-[10px] uppercase tracking-wider">
+        <ShieldCheck className="h-3 w-3" aria-hidden />
+        Admin
+      </Badge>
+    );
+    description =
+      "You're exempt from the listing subscription as an admin — no trial clock, no billing.";
+  } else if (status === 'ACTIVE') {
+    badge = (
+      <Badge variant="default" className="gap-1 text-[10px] uppercase tracking-wider">
+        <CheckCircle2 className="h-3 w-3" aria-hidden />
+        Active
+      </Badge>
+    );
+    description = visible
+      ? `Your ${priceLabel} listing subscription is active — you appear in directory search.`
+      : `Your ${priceLabel} listing subscription is active. Complete your profile above to appear in directory search.`;
+  } else if (status === 'PAST_DUE') {
+    badge = (
+      <Badge variant="destructive" className="text-[10px] uppercase tracking-wider">
+        Past due
+      </Badge>
+    );
+    description = visible
+      ? "Your payment is past due — you're still listed during Whop's grace period. Update your payment to keep your listing active."
+      : 'Your payment is past due. Update your payment to keep your listing active.';
+    showCta = true;
+    ctaLabel = 'Update payment';
+    disabledCtaLabel = 'Update payment · Coming soon';
+  } else if (trialEndsAt === null) {
+    badge = (
+      <Badge variant="outline" className="text-[10px] uppercase tracking-wider">
+        {visible ? 'Listed' : 'Not listed'}
+      </Badge>
+    );
+    description = visible
+      ? 'Your profile is listed in the Natural Health Pros directory.'
+      : 'Your listing is free — complete your profile above to appear in the directory.';
+  } else if (trialEndsAt.getTime() > now) {
+    const daysRemaining = Math.max(1, Math.ceil((trialEndsAt.getTime() - now) / 86_400_000));
+    const trialEndsAtLabel = trialEndsAt.toLocaleDateString('en-US', {
+      month: 'long',
+      day: 'numeric',
+      year: 'numeric',
+    });
+    badge = (
+      <Badge variant="secondary" className="gap-1 text-[10px] uppercase tracking-wider">
+        <Sparkles className="h-3 w-3" aria-hidden />
+        {daysRemaining} day{daysRemaining === 1 ? '' : 's'} left
+      </Badge>
+    );
+    description = (
+      <>
+        Your 90-day pilot · <span className="font-semibold text-primary">{priceLabel} value</span> ·
+        free until {trialEndsAtLabel}.
+      </>
+    );
+    showCta = true;
+  } else {
+    badge = (
+      <Badge variant="destructive" className="text-[10px] uppercase tracking-wider">
+        Pilot ended
+      </Badge>
+    );
+    description = visible
+      ? "Your pilot ended — subscribe to return to the directory. Your profile and everything you've built are safe: nothing is ever deleted, and one click restores your listing."
+      : "Your pilot ended — subscribe to rejoin the directory. Your profile and everything you've built are safe: nothing is ever deleted.";
+    showCta = true;
+  }
 
   return (
     <Card className="space-y-4 p-6 sm:p-8">
@@ -29,37 +143,13 @@ export function SubscriptionSection({ status, comped, checkoutUrl, priceLabel }:
         <div className="flex-1">
           <div className="flex items-center justify-between gap-2">
             <h2 className="text-sm font-semibold">Directory listing</h2>
-            {comped ? (
-              <Badge variant="secondary" className="gap-1 text-[10px] uppercase tracking-wider">
-                <Sparkles className="h-3 w-3" aria-hidden />
-                Complimentary
-              </Badge>
-            ) : status === 'ACTIVE' ? (
-              <Badge variant="default" className="gap-1 text-[10px] uppercase tracking-wider">
-                <CheckCircle2 className="h-3 w-3" aria-hidden />
-                Active
-              </Badge>
-            ) : status === 'PAST_DUE' ? (
-              <Badge variant="destructive" className="text-[10px] uppercase tracking-wider">
-                Past due
-              </Badge>
-            ) : (
-              <Badge variant="outline" className="text-[10px] uppercase tracking-wider">
-                Not listed
-              </Badge>
-            )}
+            {badge}
           </div>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            {comped
-              ? 'Your listing is complimentary during the pilot — you appear in the directory at no charge.'
-              : listed
-                ? `Your ${priceLabel} listing subscription is active — you appear in directory search.`
-                : `List your practice in the Natural Health Pros directory for ${priceLabel}. You appear in search once your profile is complete and subscribed.`}
-          </p>
+          <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
         </div>
       </div>
 
-      {!comped && status !== 'ACTIVE' && (
+      {showCta && (
         <>
           <Separator />
           {checkoutUrl ? (
@@ -69,7 +159,7 @@ export function SubscriptionSection({ status, comped, checkoutUrl, priceLabel }:
               rel="noopener noreferrer"
               className="inline-flex h-10 w-full items-center justify-center rounded-md bg-primary text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
             >
-              {status === 'PAST_DUE' ? 'Update payment' : `Subscribe · ${priceLabel}`}
+              {ctaLabel}
             </a>
           ) : (
             <button
@@ -78,7 +168,7 @@ export function SubscriptionSection({ status, comped, checkoutUrl, priceLabel }:
               className="inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-md border bg-muted/40 text-sm font-medium text-muted-foreground"
             >
               <Clock className="h-3.5 w-3.5" aria-hidden />
-              Subscribe · Coming soon
+              {disabledCtaLabel}
             </button>
           )}
         </>
