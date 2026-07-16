@@ -21,7 +21,7 @@ related artifacts:
 
 Hi Whop team,
 
-I'm building **HHE Directory** — a curated practitioner marketplace for graduates of [Holistic Health Educators](https://holistichealthhq.com)' functional medicine + holistic nutrition + mind-body programs. The product is live at https://hhe-directory.vercel.app (search at https://hhe-directory.vercel.app/search — feel free to click around).
+I'm building **HHE Directory** — a curated practitioner marketplace for graduates of [Holistic Health Educators](https://www.holistichealtheducators.com/)' functional medicine + holistic nutrition + mind-body programs. The product is live at https://hhe-directory.vercel.app (search at https://hhe-directory.vercel.app/search — feel free to click around).
 
 We're requesting access to **Whop for Platforms / Connected Accounts**. We've confirmed from your docs that this is invite-only and our current creator-account API key returns 401 on `/connected_accounts` — hence the outreach.
 
