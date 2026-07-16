@@ -53,27 +53,36 @@ async function sendBrandedVerificationRequest(params: {
   const isInvite = invitation !== null;
   const invitedBy = invitation?.invitedBy?.name ?? null;
 
+  // TRANSACTIONAL SHAPE, deliberately plain. An earlier, prettier version of this mail —
+  // promo subject ("You're invited to join…"), a product pitch, and a big styled CTA button —
+  // landed in Gmail's PROMOTIONS tab, while the minimal Auth.js default it replaced reached the
+  // primary inbox from the same domain. Gmail classified it correctly: it looked like marketing.
+  // An invite nobody opens is worse than an ugly one, so: action-first subject, no pitch, a
+  // plain link with the URL visible, no button, no card. Do not "improve" the styling here
+  // without re-testing which tab it lands in.
   const subject = isInvite
-    ? "You're invited to join Natural Health Pros"
+    ? 'Sign in to claim your Natural Health Pros profile'
     : 'Sign in to Natural Health Pros';
-  const heading = isInvite
-    ? `${invitedBy ?? 'An HHE admin'} invited you to claim your practitioner profile.`
-    : 'Sign in to Natural Health Pros';
-  const blurb = isInvite
-    ? 'Natural Health Pros is a curated directory for graduates of Holistic Health Educators programs. One click signs you in and takes you straight to building your page.'
-    : 'Click below to sign in. This link expires in 24 hours.';
-  const cta = isInvite ? 'Accept your invitation' : 'Sign in';
+  const line = isInvite
+    ? `${invitedBy ?? 'An HHE admin'} invited you to claim your practitioner profile on Natural Health Pros.`
+    : 'Here is your sign-in link for Natural Health Pros.';
 
-  const text = [heading.replace(/&rsquo;/g, "'"), '', blurb, '', cta + ':', url, '', 'This link expires in 24 hours.', '', "If you weren't expecting this email, you can ignore it."].join('\n');
-  const html = `
-    <div style="font-family: system-ui, -apple-system, sans-serif; max-width: 480px; margin: 0 auto; padding: 24px; color: #1a1a1a;">
-      <h2 style="font-size: 18px; margin: 0 0 16px 0;">${heading}</h2>
-      <p style="font-size: 14px; line-height: 1.6; color: #555;">${blurb}</p>
-      <p style="margin: 24px 0;">
-        <a href="${url}" style="background:#2C4A6E;color:#fff;padding:12px 20px;border-radius:8px;text-decoration:none;font-size:14px;display:inline-block;">${cta}</a>
-      </p>
-      <p style="font-size:12px;color:#888;">This link expires in 24 hours. If you weren't expecting this email, you can ignore it.</p>
-    </div>`;
+  const text = [
+    line,
+    '',
+    'Sign in:',
+    url,
+    '',
+    'This link expires in 24 hours and can only be used once.',
+    "If you weren't expecting this email, you can ignore it.",
+  ].join('\n');
+
+  const html = `<div style="font-family: -apple-system, system-ui, sans-serif; font-size: 15px; line-height: 1.6; color: #1a1a1a;">
+<p>${line}</p>
+<p>Sign in: <a href="${url}">${url}</a></p>
+<p>This link expires in 24 hours and can only be used once.</p>
+<p style="color:#666;">If you weren't expecting this email, you can ignore it.</p>
+</div>`;
 
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
