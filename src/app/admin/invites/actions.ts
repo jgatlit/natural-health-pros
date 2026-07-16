@@ -12,9 +12,6 @@ function newToken(): string {
   return randomBytes(24).toString('base64url');
 }
 
-// (baseUrl() removed: Auth.js now builds the magic-link URL itself via signIn(), so this
-// action no longer constructs any absolute URLs.)
-
 async function requireAdmin() {
   const session = await auth();
   if (!session?.user || session.user.role !== 'ADMIN') {
@@ -44,7 +41,15 @@ async function sendInviteMagicLink(email: string, invitationToken: string): Prom
       redirect: false,
     });
     return typeof res === 'string' ? !/[?&]error=/.test(res) : true;
-  } catch {
+  } catch (e) {
+    // Auth.js DOES rethrow here for AuthError subclasses on the `raw` path (isAuthError &&
+    // isRaw && !isRedirect). The notable case: send-token.js runs
+    // `Promise.all([sendRequest, createToken])`, so if Resend succeeds while the adapter's
+    // VerificationToken write fails, we land here having ALREADY delivered a real email whose
+    // link is dead. Rolling the invitation back is still correct (the invite genuinely didn't
+    // work) — but it must not vanish silently, or that's undiagnosable from the admin's
+    // generic "send-failed" banner.
+    console.error('[invite-send-failed]', { email }, e);
     return false;
   }
 }
@@ -66,8 +71,15 @@ export async function createInvitation(formData: FormData): Promise<void> {
 
   // Persist BEFORE sending — the inverse of the old order, and deliberately so: the emailed
   // link now lands on /onboarding?invitation=<token>, whose gate resolves that row, so it must
-  // already exist when the recipient clicks. PR #21's invariant (a rejected send must leave no
-  // orphaned invitation) is preserved by rolling the row back on failure instead.
+  // already exist when the recipient clicks. PR #21's invariant (a rejected send leaves no
+  // orphaned row) is re-established by rolling back on failure instead of by ordering.
+  //
+  // Precisely: that holds for the Invitation table only. Auth.js's send-token.js runs
+  // `Promise.all([sendRequest, createToken])`, writing its VerificationToken in PARALLEL with
+  // the send — so a rejected send can still leave an undelivered token row we neither see nor
+  // own. Not exploitable (its plaintext existed only in the email that never arrived) and it
+  // expires on its own; it's the unavoidable cost of letting Auth.js own token minting rather
+  // than forging tokens ourselves.
   let createdId: string | null = null;
   if (!existing) {
     const row = await prisma.invitation.create({
@@ -83,7 +95,14 @@ export async function createInvitation(formData: FormData): Promise<void> {
 
   const sent = await sendInviteMagicLink(email, token);
   if (!sent) {
-    if (createdId) await prisma.invitation.delete({ where: { id: createdId } }).catch(() => {});
+    if (createdId) {
+      // Log before swallowing: send-failed AND rollback-failed is the ONLY path where the
+      // no-orphaned-invitation guarantee actually breaks, so it must leave a trace — the
+      // admin just sees a generic banner either way.
+      await prisma.invitation
+        .delete({ where: { id: createdId } })
+        .catch((e) => console.error('[invite-rollback-failed] create', { email, createdId }, e));
+    }
     redirect('/admin/invites?error=send-failed');
   }
 
@@ -134,9 +153,11 @@ export async function resendInvitation(formData: FormData): Promise<void> {
 
   const sent = await sendInviteMagicLink(invitation.email, token);
   if (!sent) {
+    // See createInvitation: a failed rollback is the one case that leaves the row diverged
+    // from what was delivered, so it must be traceable rather than silently swallowed.
     await prisma.invitation
       .update({ where: { id }, data: { token: prevToken, expiresAt: prevExpires } })
-      .catch(() => {});
+      .catch((e) => console.error('[invite-rollback-failed] resend', { email: invitation.email, id }, e));
     redirect('/admin/invites?error=send-failed');
   }
 

@@ -13,12 +13,33 @@ import { authConfig } from '@/auth.config';
 // imported by middleware, so anything added there lands in the Edge bundle (1 MB limit — see
 // gotcha_edge_middleware_1mb_auth_split). Auth.js mints + stores the token itself; we never
 // touch its hashing, so an Auth.js upgrade can't silently break invites.
-function inviteIsTarget(url: string): boolean {
+/**
+ * Resolve the REAL invitation backing this magic link, or null.
+ *
+ * Deliberately does NOT trust the callbackUrl alone. `/auth/signin?callbackUrl=…` is a public,
+ * unauthenticated form and Auth.js only validates that callbackUrl is same-origin — not its
+ * shape. So `?callbackUrl=/onboarding?invitation=anything` is attacker-controllable, and
+ * branding off it alone would let anyone make our verified sending domain deliver a curated
+ * "You're invited" email to any inbox (phishing-adjacent; no compromise, but not ours to hand
+ * out). Requiring a pending, unexpired, email-matched Invitation row makes the branding
+ * unforgeable — an attacker can't conjure one without admin access.
+ */
+async function resolveInvitation(email: string, url: string) {
   try {
     const cb = new URL(url).searchParams.get('callbackUrl') ?? '';
-    return /\/onboarding\?invitation=/.test(decodeURIComponent(cb));
+    const match = decodeURIComponent(cb).match(/\/onboarding\?invitation=([^&#]+)/);
+    if (!match) return null;
+    const invitation = await prisma.invitation.findUnique({
+      where: { token: match[1] },
+      include: { invitedBy: { select: { name: true } } },
+    });
+    if (!invitation) return null;
+    if (invitation.acceptedAt) return null;
+    if (invitation.expiresAt <= new Date()) return null;
+    if (invitation.email.toLowerCase() !== email.toLowerCase()) return null;
+    return invitation;
   } catch {
-    return false;
+    return null;
   }
 }
 
@@ -28,13 +49,15 @@ async function sendBrandedVerificationRequest(params: {
   provider: { apiKey?: string; from?: string };
 }): Promise<void> {
   const { identifier: to, url, provider } = params;
-  const isInvite = inviteIsTarget(url);
+  const invitation = await resolveInvitation(to, url);
+  const isInvite = invitation !== null;
+  const invitedBy = invitation?.invitedBy?.name ?? null;
 
   const subject = isInvite
     ? "You're invited to join Natural Health Pros"
     : 'Sign in to Natural Health Pros';
   const heading = isInvite
-    ? 'You&rsquo;re invited to claim your practitioner profile.'
+    ? `${invitedBy ?? 'An HHE admin'} invited you to claim your practitioner profile.`
     : 'Sign in to Natural Health Pros';
   const blurb = isInvite
     ? 'Natural Health Pros is a curated directory for graduates of Holistic Health Educators programs. One click signs you in and takes you straight to building your page.'
