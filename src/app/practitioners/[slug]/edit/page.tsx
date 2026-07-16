@@ -44,6 +44,11 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
       whopProducts: { where: { archived: false }, orderBy: { createdAt: 'desc' } },
       bookingLinks: { orderBy: { sortOrder: 'asc' } },
       caseStudies: { orderBy: { createdAt: 'desc' } },
+      // The PROFILE OWNER's role — the subject of the billing exemption, and not the same
+      // person as the viewer. Read from the DB, never from the session: isListed() gates on
+      // this exact value server-side, and session.user.role is a JWT cache refreshed only at
+      // sign-in (30-day token, issue #24), so the two can disagree for a month.
+      user: { select: { role: true } },
     },
   });
   if (!practitioner) notFound();
@@ -59,8 +64,13 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
   const missing = allFields.filter((f) => !completeness[f.key]);
 
   const isOwner = practitioner.userId === session.user.id;
-  const isAdmin = session.user.role === 'ADMIN';
-  if (!isOwner && !isAdmin) {
+  // Two different people, deliberately kept apart: isViewerAdmin is who is LOOKING (access
+  // control + the "Signed in as" footer), ownerIsAdmin is whose PROFILE this is (the billing
+  // exemption). An admin may open any practitioner's dashboard, so conflating them told Amy
+  // that every pilot she inspected was "exempt from the listing subscription".
+  const isViewerAdmin = session.user.role === 'ADMIN';
+  const ownerIsAdmin = practitioner.user.role === 'ADMIN';
+  if (!isOwner && !isViewerAdmin) {
     redirect('/auth/error?error=AccessDenied');
   }
 
@@ -430,7 +440,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
         <SubscriptionSection
           status={practitioner.subscriptionStatus}
           trialEndsAt={practitioner.trialEndsAt}
-          isAdmin={isAdmin}
+          isAdmin={ownerIsAdmin}
           isComplete={missing.length === 0}
           checkoutUrl={process.env.WHOP_PLATFORM_CHECKOUT_URL ?? null}
           priceLabel="$59/mo"
@@ -458,7 +468,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
 
         <p className="text-center text-xs text-muted-foreground">
           Signed in as {session.user.email}
-          {isAdmin && ' · Admin'}
+          {isViewerAdmin && ' · Admin'}
         </p>
       </div>
     </main>

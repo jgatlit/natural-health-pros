@@ -20,7 +20,16 @@ export default async function AdminInvitesPage() {
     take: 50,
     include: {
       invitedBy: { select: { name: true, email: true } },
-      acceptedByUser: { select: { practitioner: { select: { trialEndsAt: true } } } },
+      acceptedByUser: {
+        select: {
+          // role + subscriptionStatus, not just the date: they OVERRIDE the clock in
+          // isListed(), so a label read off trialEndsAt alone calls a paying subscriber
+          // "trial expired" and an exempt admin "pre-trial" — and this is the screen with
+          // the Reset button on it.
+          role: true,
+          practitioner: { select: { trialEndsAt: true, subscriptionStatus: true } },
+        },
+      },
     },
   });
 
@@ -83,6 +92,20 @@ export default async function AdminInvitesPage() {
                 const trialDaysLeft = trialEndsAt
                   ? Math.ceil((trialEndsAt.getTime() - now.getTime()) / (24 * 60 * 60 * 1000))
                   : null;
+                // Same precedence as isListed(): admin and a live subscription both outrank
+                // the clock, so say so instead of reporting a stale countdown underneath them.
+                const trialLabel =
+                  inv.acceptedByUser?.role === 'ADMIN'
+                    ? 'admin · exempt'
+                    : practitioner?.subscriptionStatus === 'ACTIVE'
+                    ? 'subscribed'
+                    : practitioner?.subscriptionStatus === 'PAST_DUE'
+                    ? 'past due'
+                    : trialEndsAt === null
+                    ? 'pre-trial'
+                    : trialDaysLeft !== null && trialDaysLeft > 0
+                    ? `${trialDaysLeft}d left`
+                    : 'trial expired';
                 return (
                   <li key={inv.id} className="flex items-center gap-3 px-5 py-3">
                     <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted">
@@ -103,11 +126,7 @@ export default async function AdminInvitesPage() {
                     )}
                     {status === 'accepted' && practitioner && (
                       <span className="whitespace-nowrap text-[10px] text-muted-foreground">
-                        {trialEndsAt === null
-                          ? 'pre-trial'
-                          : trialDaysLeft !== null && trialDaysLeft > 0
-                          ? `${trialDaysLeft}d left`
-                          : 'trial expired'}
+                        {trialLabel}
                       </span>
                     )}
                     {status === 'pending' && (
