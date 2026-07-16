@@ -96,6 +96,15 @@ export default async function PractitionerPage({ params, searchParams }: PagePro
 
             {/* Scrollable narrative */}
             <div className="min-w-0 space-y-6">
+              {/* Hook sits at the top of the narrative column, directly above whoIHelp. The
+                  credential line (headline) stays with the identity rail on the left, so the two
+                  read as distinct registers rather than two titles stacked together. */}
+              {p.tagline && (
+                <p className="font-serif text-2xl leading-snug tracking-tight text-primary">
+                  {p.tagline}
+                </p>
+              )}
+
               {p.whoIHelp && (
                 <p className="text-lg leading-relaxed text-foreground">{p.whoIHelp}</p>
               )}

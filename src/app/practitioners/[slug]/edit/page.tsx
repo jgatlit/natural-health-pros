@@ -242,6 +242,19 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
             </Field>
 
             <Field
+              label="Tagline"
+              hint="One short hook shown above “Who you help” on your public page (e.g. 'Root-cause work for women navigating perimenopause'). Optional — leave blank and it simply won't show. When generated, it only ever compresses your own words."
+            >
+              <input
+                type="text"
+                name="tagline"
+                maxLength={70}
+                defaultValue={practitioner.tagline ?? ''}
+                className="h-10 w-full rounded-md border bg-card px-3 text-sm outline-none ring-ring/30 focus-visible:ring-2"
+              />
+            </Field>
+
+            <Field
               label="Bio"
               hint="Short, plain-English description. What you do, who you work with, what makes you HHE-style."
             >

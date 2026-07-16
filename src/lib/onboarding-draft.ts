@@ -31,6 +31,9 @@ export type DraftCaseStudy = {
 
 export type ProfileDraft = {
   headline: string;
+  /** Short hook rendered above whoIHelp. Null when the source has no usable one — see the
+   *  extractive rule in the tool schema; we never manufacture a claim to fill this. */
+  tagline: string | null;
   whoIHelp: string;
   bio: string;
   modalities: string[];
@@ -45,6 +48,7 @@ export type DraftInput = {
   /** Existing values to extend rather than discard (whoIHelp is already LLM-synthesized in intake). */
   existing?: {
     headline?: string | null;
+    tagline?: string | null;
     whoIHelp?: string | null;
     bio?: string | null;
     rawLabels?: string[];
@@ -89,6 +93,20 @@ const DRAFT_TOOL: Anthropic.Tool = {
     additionalProperties: false,
     properties: {
       headline: { type: 'string', description: 'Credentials / professional title line (≤ 90 chars).' },
+      tagline: {
+        type: ['string', 'null'],
+        description:
+          'Short hook (≤ 70 chars, hard limit) shown above the "who I help" paragraph. ' +
+          'GROUNDED, not verbatim: every idea in it must already be stated in the source — never ' +
+          'introduce an outcome, benefit, promise or condition the practitioner did not claim. ' +
+          'Within that limit you SHOULD reword. Plain English a patient would say out loud: if ' +
+          "the source's punchiest phrase is industry jargon, insider shorthand or a coined term " +
+          '(e.g. "slideware", "biohacking stack"), restate that same idea in ordinary words — do ' +
+          'NOT import the jargon just because it is theirs. Must read as a distinct line from ' +
+          'headline (their credential/title), not a restatement of it. Practitioner\'s voice — ' +
+          'second person or imperative, never third person. If the source supports no honest ' +
+          'hook, return null; never invent one.',
+      },
       whoIHelp: {
         type: 'string',
         description: 'Plain-English "who I help and how" paragraph — the matching signal.',
@@ -129,7 +147,7 @@ const DRAFT_TOOL: Anthropic.Tool = {
         },
       },
     },
-    required: ['headline', 'whoIHelp', 'bio', 'modalities', 'specialties', 'caseStudies'],
+    required: ['headline', 'tagline', 'whoIHelp', 'bio', 'modalities', 'specialties', 'caseStudies'],
   },
 };
 
@@ -146,6 +164,7 @@ async function llmDraft(input: DraftInput): Promise<ProfileDraft> {
     `Practitioner name: ${input.displayName}`,
     input.existing?.whoIHelp ? `Existing "who I help" (extend, don't discard): ${input.existing.whoIHelp}` : '',
     input.existing?.headline ? `Existing headline: ${input.existing.headline}` : '',
+    input.existing?.tagline ? `Existing tagline (extend, don't discard): ${input.existing.tagline}` : '',
     input.existing?.bio ? `Existing bio: ${input.existing.bio}` : '',
     input.existing?.rawLabels?.length ? `Existing specialty phrasings: ${input.existing.rawLabels.join('; ')}` : '',
     '',
@@ -159,6 +178,7 @@ async function llmDraft(input: DraftInput): Promise<ProfileDraft> {
     '',
     `Draft warm, specific, plain-English copy. Keep the practitioner's own wording in each specialty rawLabel.`,
     `Only include caseStudies that are actually stated in the source — never invent outcomes.`,
+    `Tagline: GROUNDED, not verbatim. Every idea must already be in the source — never invent a benefit, outcome or promise. But DO reword into plain English a patient would say out loud: if their punchiest phrase is jargon or insider shorthand, say the same thing in ordinary words rather than importing the term. Distinct from the headline. Their voice, never third person. Max 70 chars. Null if the source supports no honest hook.`,
     `Call emit_profile_draft with the result.`,
   ]
     .filter(Boolean)
@@ -193,6 +213,11 @@ function templateDraft(input: DraftInput): ProfileDraft {
   const headline =
     input.existing?.headline?.trim() ||
     `${input.displayName} · Holistic Health Practitioner`;
+
+  // No LLM here, so there is no way to compress the source into a hook without inventing one —
+  // which the extractive rule forbids. Carry an existing tagline through; otherwise leave null
+  // and let the field simply not render.
+  const tagline = input.existing?.tagline?.trim() || null;
 
   const whoIHelp =
     input.existing?.whoIHelp?.trim() ||
@@ -233,9 +258,10 @@ function templateDraft(input: DraftInput): ProfileDraft {
     new Set(input.canonicalCatalog.filter((c) => contains(source, c.name)).map((c) => c.name)),
   );
 
-  // Template never fabricates outcomes.
+  // Template never fabricates outcomes — and, for the same reason, never a tagline: `tagline`
+  // is only ever carried through from an existing value here, else null.
   return normalizeDraft(
-    { headline, whoIHelp, bio, modalities, specialties, caseStudies: [] },
+    { headline, tagline, whoIHelp, bio, modalities, specialties, caseStudies: [] },
     input,
   );
 }
@@ -309,8 +335,13 @@ function normalizeDraft(raw: Partial<ProfileDraft>, input: DraftInput): ProfileD
     new Set(arr<string>(raw.modalities).map((m) => str(m)).filter(Boolean)),
   );
 
+  const taglineRaw = str(raw.tagline).trim();
+
   return {
     headline: str(raw.headline) || `${input.displayName} · Holistic Health Practitioner`,
+    // Preserve the model's null. An empty string means "no usable hook" just as much as null
+    // does, and persisting '' would render an empty line — normalise both to null.
+    tagline: taglineRaw || null,
     whoIHelp: str(raw.whoIHelp),
     bio: str(raw.bio),
     modalities,

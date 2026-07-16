@@ -147,6 +147,7 @@ export async function updatePractitioner(slug: string, formData: FormData): Prom
   const displayName = String(formData.get('displayName') ?? '').trim();
   const bio = String(formData.get('bio') ?? '').trim();
   const headline = String(formData.get('headline') ?? '').trim() || null;
+  const tagline = String(formData.get('tagline') ?? '').trim() || null;
   const whoIHelp = String(formData.get('whoIHelp') ?? '').trim() || null;
   const websiteUrl = normalizeWebsiteUrl(String(formData.get('websiteUrl') ?? ''));
   const telehealth = formData.get('telehealth') === 'on' || formData.get('telehealth') === 'true';
@@ -235,6 +236,7 @@ export async function updatePractitioner(slug: string, formData: FormData): Prom
         bio: bio || null,
         photoUrl,
         headline,
+        tagline,
         whoIHelp,
         websiteUrl,
         telehealth,
@@ -350,6 +352,7 @@ export async function generateDraftAction(slug: string, formData: FormData): Pro
       select: {
         displayName: true,
         headline: true,
+        tagline: true,
         whoIHelp: true,
         bio: true,
         specialties: { select: { rawLabel: true } },
@@ -368,6 +371,7 @@ export async function generateDraftAction(slug: string, formData: FormData): Pro
     rawSource,
     existing: {
       headline: practitioner.headline,
+      tagline: practitioner.tagline,
       whoIHelp: practitioner.whoIHelp,
       bio: practitioner.bio,
       rawLabels: practitioner.specialties
@@ -400,6 +404,7 @@ export async function generateDraftAction(slug: string, formData: FormData): Pro
       where: { id: target.id },
       data: {
         headline: draft.headline || null,
+        tagline: draft.tagline || null,
         whoIHelp: draft.whoIHelp || null,
         bio: draft.bio || null,
         searchText: buildSearchText([
@@ -498,7 +503,7 @@ export async function submitOnboarding(slug: string, formData: FormData): Promis
   const [existing, catalog] = await Promise.all([
     prisma.practitioner.findUnique({
       where: { id: target.id },
-      select: { headline: true, whoIHelp: true, bio: true, specialties: { select: { rawLabel: true } } },
+      select: { headline: true, tagline: true, whoIHelp: true, bio: true, specialties: { select: { rawLabel: true } } },
     }),
     prisma.specialty.findMany({
       where: { status: { in: ['ACTIVE', 'PROPOSED'] } },
@@ -513,6 +518,7 @@ export async function submitOnboarding(slug: string, formData: FormData): Promis
     rawSource: draftSource,
     existing: {
       headline: existing?.headline ?? null,
+      tagline: existing?.tagline ?? null,
       whoIHelp: existing?.whoIHelp ?? null,
       bio: existing?.bio ?? null,
       rawLabels: (existing?.specialties ?? [])
@@ -551,6 +557,7 @@ export async function submitOnboarding(slug: string, formData: FormData): Promis
       data: {
         displayName,
         headline: draft.headline || null,
+        tagline: draft.tagline || null,
         whoIHelp: draft.whoIHelp || null,
         bio: draft.bio || null,
         cityId,
