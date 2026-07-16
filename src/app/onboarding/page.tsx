@@ -30,6 +30,10 @@ async function generateUniqueSlug(email: string): Promise<string> {
 
 const withSpecialties = { specialties: { include: { specialty: true } } } as const;
 
+// docs/superpowers/specs/2026-07-16-pilot-trial-design.md — "Pilot" is a 90-day trial, not a
+// permanent comp. Keep in sync with scripts/backfill-trial-dates.ts (mirrors this constant).
+const TRIAL_DAYS = 90;
+
 export default async function OnboardingPage({ searchParams }: Props) {
   const session = await auth();
   if (!session?.user?.id) {
@@ -74,14 +78,17 @@ export default async function OnboardingPage({ searchParams }: Props) {
         .join(' ') ||
       'New Practitioner';
 
-    // comped: an HHE invitation IS the pilot grant. Reaching this line proves it — the
-    // invitation-required, validity and email-match gates above all passed, so this user was
-    // vouched for by an admin. Without it they'd inherit the schema default (comped: false) and
-    // land behind the $59/mo Layer X paywall: profile complete, work done, silently absent from
-    // the directory. That happened to Amy (the client) on her own directory. Invite ⇒ pilot,
-    // until an operator decides otherwise per-practitioner.
+    // An HHE invitation grants a 90-day pilot — not a permanent comp. Reaching this line proves
+    // the grant is earned: the invitation-required, validity and email-match gates above all
+    // passed, so this user was vouched for by an admin. The clock starts HERE, at genuine
+    // onboarding, and only here — never inferred from a seed/import date (see the design doc:
+    // the 12 pilots' acceptedAt is the 2026-05-29 import date, not a real onboarding; anchoring
+    // the clock there would put them 48 days into a 90-day trial for a product they've never
+    // opened). `comped` is deprecated in favor of this clock — deliberately omitted here.
+    const trialEndsAt = new Date();
+    trialEndsAt.setUTCDate(trialEndsAt.getUTCDate() + TRIAL_DAYS);
     practitioner = await prisma.practitioner.create({
-      data: { userId: session.user.id, slug, displayName, acceptedAt: new Date(), comped: true },
+      data: { userId: session.user.id, slug, displayName, acceptedAt: new Date(), trialEndsAt },
       include: withSpecialties,
     });
 

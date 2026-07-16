@@ -4,6 +4,8 @@ import type {
   Specialty,
   PractitionerSpecialty,
   SubscriptionStatus,
+  Role,
+  Prisma,
 } from '@prisma/client';
 import { prisma } from './prisma';
 import { getTypesenseAdmin, TYPESENSE_COLLECTION } from './typesense-server';
@@ -12,6 +14,7 @@ type SpecialtyWithParent = Specialty & { parent: Specialty | null };
 type PractitionerForIndex = Practitioner & {
   city: City | null;
   specialties: (PractitionerSpecialty & { specialty: SpecialtyWithParent })[];
+  user: { role: Role };
 };
 
 export type PractitionerDoc = {
@@ -70,17 +73,63 @@ export function isProfileComplete(p: Parameters<typeof profileCompletenessSignal
 }
 
 /**
- * Listing gate (Layer X): a profile is publicly discoverable only when it's complete AND
- * the practitioner is paying (subscriptionStatus ACTIVE) or comped (pilots). Direct profile
- * URLs still resolve for everyone — this only controls /search + recently-joined visibility.
+ * Listing gate (Layer X + 90-day trial clock — see
+ * docs/superpowers/specs/2026-07-16-pilot-trial-design.md): a profile is publicly
+ * discoverable only when it's complete AND one of:
+ *   - subscriptionStatus is ACTIVE or PAST_DUE (Whop's dunning window — grace for
+ *     payers, so a failed card doesn't delist someone instantly)
+ *   - trialEndsAt is null (pre-trial, operator-seeded, never onboarded — the 12
+ *     existing pilots) or still in the future (trial running)
+ *   - the owning user is ADMIN (staff/client are not customers; read server-side
+ *     from the DB so the stale-JWT gap can't affect listing)
+ * Direct profile URLs still resolve for everyone — this only controls /search +
+ * recently-joined + the home page's featured list.
+ *
+ * `comped` is DEPRECATED and no longer read here — see the schema comment on that column.
  */
 export function isListed(
   p: Parameters<typeof profileCompletenessSignals>[0] & {
     subscriptionStatus: SubscriptionStatus;
-    comped: boolean;
+    trialEndsAt: Date | null;
+    user: { role: Role };
   },
 ): boolean {
-  return isProfileComplete(p) && (p.comped || p.subscriptionStatus === 'ACTIVE');
+  const trialActive = p.trialEndsAt === null || p.trialEndsAt > new Date();
+  return (
+    isProfileComplete(p) &&
+    (p.subscriptionStatus === 'ACTIVE' ||
+      p.subscriptionStatus === 'PAST_DUE' ||
+      trialActive ||
+      p.user.role === 'ADMIN')
+  );
+}
+
+/**
+ * The same rule as isListed(), expressed as a Prisma `where` clause so callers can
+ * filter inside a query instead of fetching every practitioner and filtering in memory
+ * (the home page's featured + count queries). Single source of truth: consumers import
+ * this rather than re-deriving the OR — isListed() and listedWhere() must never drift, in code OR in time.
+ */
+export function listedWhere(): Prisma.PractitionerWhereInput {
+  // MUST be a function, not a module-level const. `new Date()` in a const is evaluated once,
+  // at module load, and then frozen — and Vercel's Fluid Compute reuses function instances
+  // across requests, so the module stays resident and the trial cutoff would never advance.
+  // Every practitioner whose trial expired after boot would linger on the home page while
+  // isListed() (which calls new Date() per invocation) correctly dropped them from Typesense.
+  // That is exactly the drift this pair exists to prevent — just in time rather than in code.
+  return {
+    displayName: { not: '' },
+    cityId: { not: null },
+    bio: { not: null },
+    specialties: { some: {} },
+    OR: [
+      { subscriptionStatus: 'ACTIVE' },
+      { subscriptionStatus: 'PAST_DUE' },
+      { trialEndsAt: null },
+      { trialEndsAt: { gt: new Date() } },
+      { user: { role: 'ADMIN' } },
+    ],
+  };
 }
 
 export function toTypesenseDoc(p: PractitionerForIndex): PractitionerDoc {
@@ -122,6 +171,7 @@ export function toTypesenseDoc(p: PractitionerForIndex): PractitionerDoc {
 const PRACTITIONER_INCLUDE = {
   city: true,
   specialties: { include: { specialty: { include: { parent: true } } } },
+  user: { select: { role: true } },
 } as const;
 
 export async function indexPractitioner(id: string): Promise<void> {

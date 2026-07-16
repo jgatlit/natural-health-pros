@@ -4,6 +4,10 @@
     {
       "path": "/api/health/search",
       "schedule": "*/15 * * * *"
+    },
+    {
+      "path": "/api/cron/trial-sweep",
+      "schedule": "0 14 * * *"
     }
   ]
 }

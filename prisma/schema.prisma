@@ -27,10 +27,11 @@ model User {
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
 
-  accounts        Account[]
-  sessions        Session[]
-  practitioner    Practitioner?
-  invitationsSent Invitation[]  @relation("InvitedBy")
+  accounts            Account[]
+  sessions            Session[]
+  practitioner        Practitioner?
+  invitationsSent     Invitation[]  @relation("InvitedBy")
+  invitationsAccepted Invitation[]  @relation("AcceptedBy")
 }
 
 enum Role {
@@ -148,9 +149,17 @@ model Practitioner {
   whopKycCompletedAt DateTime?
   whopProducts       WhopProduct[]
 
-  // Layer X — platform subscription (practitioner pays $59/mo to be listed; pilots comped)
+  // Layer X — platform subscription (practitioner pays $59/mo to be listed; pilots trial for 90 days)
   subscriptionStatus SubscriptionStatus @default(NONE)
+  /// DEPRECATED — superseded by trialEndsAt + the ADMIN exemption (see
+  /// docs/superpowers/specs/2026-07-16-pilot-trial-design.md). No longer read by isListed().
+  /// Column retained one release so the live deployment does not break the moment the
+  /// migration applies (expand/contract); drop it in a follow-up once nothing reads it.
   comped             Boolean            @default(false)
+  /// 90-day pilot clock. null = pre-trial (operator-seeded, never onboarded) and still listed;
+  /// future = trial running; past = expired. Set ONLY by genuine onboarding — never inferred
+  /// from a seed date. Admins are exempt from it entirely.
+  trialEndsAt        DateTime?
   whopMembershipId   String?            @unique // membership on our own $59/mo Whop product
 
   // Invite-only model (5/15 Amy reframe)
@@ -306,6 +315,9 @@ model Invitation {
   expiresAt        DateTime
   acceptedAt       DateTime?
   acceptedByUserId String?
+  /// Relation added so /admin/invites can reach the practitioner behind an accepted invite
+  /// (for the Reset-trial action). Previously a bare String with no relation.
+  acceptedByUser   User?     @relation("AcceptedBy", fields: [acceptedByUserId], references: [id])
   createdAt        DateTime  @default(now())
 
   @@index([email])

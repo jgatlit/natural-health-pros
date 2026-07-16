@@ -5,8 +5,11 @@ import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { auth, signIn } from '@/auth';
 import { prisma } from '@/lib/prisma';
+import { indexPractitioner } from '@/lib/practitioner-indexer';
 
 const INVITATION_TTL_MS = 7 * 24 * 60 * 60 * 1000;
+const TRIAL_DAYS = 90;
+const TRIAL_MS = TRIAL_DAYS * 24 * 60 * 60 * 1000;
 
 function newToken(): string {
   return randomBytes(24).toString('base64url');
@@ -160,6 +163,45 @@ export async function resendInvitation(formData: FormData): Promise<void> {
       .catch((e) => console.error('[invite-rollback-failed] resend', { email: invitation.email, id }, e));
     redirect('/admin/invites?error=send-failed');
   }
+
+  revalidatePath('/admin/invites');
+}
+
+/**
+ * Grants 90 more free-listing days from now. Reachable only on an ACCEPTED invitation: the
+ * `acceptedByUser` relation is how this row reaches the practitioner it made — an unaccepted
+ * invite has nobody to reset (see docs/superpowers/specs/2026-07-16-pilot-trial-design.md).
+ */
+export async function resetTrial(formData: FormData): Promise<void> {
+  await requireAdmin();
+  const id = String(formData.get('id') ?? '');
+  if (!id) return;
+
+  const invitation = await prisma.invitation.findUnique({
+    where: { id },
+    include: { acceptedByUser: { select: { practitioner: { select: { id: true } } } } },
+  });
+  if (!invitation) redirect('/admin/invites?error=not-found');
+
+  const practitionerId = invitation.acceptedByUser?.practitioner?.id;
+  if (!practitionerId) redirect('/admin/invites?error=not-found');
+
+  await prisma.practitioner.update({
+    where: { id: practitionerId },
+    data: { trialEndsAt: new Date(Date.now() + TRIAL_MS) },
+  });
+
+  // Reindex is REQUIRED, not housekeeping. isListed() gates Typesense at write time, so
+  // flipping this date in SQL alone does nothing to search — and the daily trial-sweep can't
+  // clean up after us here, because it only visits practitioners whose trial has already
+  // LAPSED (trialEndsAt < now). A freshly reset date is in the future, so it is invisible to
+  // that sweep forever. Without this call, resetting an expired pilot brings them back on the
+  // home page (which evaluates listedWhere() per query) and tells them "90 days left" on their
+  // dashboard, while leaving them permanently absent from /search — the one surface the
+  // subscription is actually sold on.
+  await indexPractitioner(practitionerId).catch((err) =>
+    console.error('Typesense reindex failed after trial reset:', { practitionerId, err }),
+  );
 
   revalidatePath('/admin/invites');
 }

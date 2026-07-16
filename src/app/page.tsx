@@ -1,7 +1,7 @@
 import Link from 'next/link';
 import { Search, ArrowRight, ShieldCheck, Sparkles } from 'lucide-react';
-import type { Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { listedWhere } from '@/lib/practitioner-indexer';
 import { Avatar, AvatarFallback } from '@/components/ui/avatar';
 import { Badge } from '@/components/ui/badge';
 import { Card } from '@/components/ui/card';
@@ -17,20 +17,10 @@ function initials(name: string) {
     .join('');
 }
 
-// Discovery gate: complete AND (comped OR subscribed) — mirrors the indexer's isListed / the
-// Typesense /search filter, so the home page never features an unpaid, unlisted practitioner.
-const LISTED_WHERE: Prisma.PractitionerWhereInput = {
-  displayName: { not: '' },
-  cityId: { not: null },
-  bio: { not: null },
-  specialties: { some: {} },
-  OR: [{ comped: true }, { subscriptionStatus: 'ACTIVE' }],
-};
-
 async function getFeaturedPractitioners() {
   return prisma.practitioner.findMany({
     take: 4,
-    where: LISTED_WHERE,
+    where: listedWhere(),
     orderBy: { acceptedAt: 'desc' },
     include: {
       city: true,
@@ -40,7 +30,7 @@ async function getFeaturedPractitioners() {
 }
 
 async function getCompletePractitionerCount() {
-  return prisma.practitioner.count({ where: LISTED_WHERE });
+  return prisma.practitioner.count({ where: listedWhere() });
 }
 
 export default async function Home() {

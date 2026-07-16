@@ -1,11 +1,11 @@
 import { redirect } from 'next/navigation';
-import { Mail, Send, Trash2, Check, Clock } from 'lucide-react';
+import { Mail, Send, Trash2, Check, Clock, RotateCcw } from 'lucide-react';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
-import { createInvitation, revokeInvitation, resendInvitation } from './actions';
+import { createInvitation, revokeInvitation, resendInvitation, resetTrial } from './actions';
 
 export const dynamic = 'force-dynamic';
 
@@ -18,7 +18,10 @@ export default async function AdminInvitesPage() {
   const invitations = await prisma.invitation.findMany({
     orderBy: { createdAt: 'desc' },
     take: 50,
-    include: { invitedBy: { select: { name: true, email: true } } },
+    include: {
+      invitedBy: { select: { name: true, email: true } },
+      acceptedByUser: { select: { practitioner: { select: { trialEndsAt: true } } } },
+    },
   });
 
   const now = new Date();
@@ -75,6 +78,11 @@ export default async function AdminInvitesPage() {
                   : expired
                   ? 'expired'
                   : 'pending';
+                const practitioner = inv.acceptedByUser?.practitioner;
+                const trialEndsAt = practitioner?.trialEndsAt ?? null;
+                const trialDaysLeft = trialEndsAt
+                  ? Math.ceil((trialEndsAt.getTime() - now.getTime()) / (24 * 60 * 60 * 1000))
+                  : null;
                 return (
                   <li key={inv.id} className="flex items-center gap-3 px-5 py-3">
                     <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted">
@@ -92,6 +100,15 @@ export default async function AdminInvitesPage() {
                         <Check className="h-3 w-3" />
                         Accepted
                       </Badge>
+                    )}
+                    {status === 'accepted' && practitioner && (
+                      <span className="whitespace-nowrap text-[10px] text-muted-foreground">
+                        {trialEndsAt === null
+                          ? 'pre-trial'
+                          : trialDaysLeft !== null && trialDaysLeft > 0
+                          ? `${trialDaysLeft}d left`
+                          : 'trial expired'}
+                      </span>
                     )}
                     {status === 'pending' && (
                       <Badge variant="default" className="gap-1 text-[10px]">
@@ -120,6 +137,19 @@ export default async function AdminInvitesPage() {
                           className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
                         >
                           <Send className="h-3.5 w-3.5" />
+                        </button>
+                      </form>
+                    )}
+                    {status === 'accepted' && practitioner && (
+                      <form action={resetTrial}>
+                        <input type="hidden" name="id" value={inv.id} />
+                        <button
+                          type="submit"
+                          aria-label={`Reset trial for ${inv.email}`}
+                          title="Reset trial — 90 days from today"
+                          className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
+                        >
+                          <RotateCcw className="h-3.5 w-3.5" />
                         </button>
                       </form>
                     )}
