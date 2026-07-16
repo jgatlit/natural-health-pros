@@ -109,6 +109,7 @@ model Practitioner {
 
   // V1 pilot — rich landing-page fields (Amy 5/28; LLM-onboarding normalizes these)
   headline               String? // credentials / professional title line under the name
+  tagline                String? // short hook above the whoIHelp paragraph; extractive-only (compressed from the practitioner's own words, never an invented claim). Optional — NOT a completeness signal.
   whoIHelp               String?  @db.Text // "who/how I help" block + matching signal (LLM-synthesized when source blank)
   photoUrl               String? // Vercel Blob URL; Avatar falls back to initials when null
   websiteUrl             String? // external site (classified out of overloaded col-D)

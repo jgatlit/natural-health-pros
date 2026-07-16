@@ -151,12 +151,12 @@ export default async function Home() {
             </div>
             <Separator />
             <p className="text-xs text-muted-foreground">
-              Looking for HHE programs? Visit{' '}
+              Looking for Holistic Health Educators certification &amp; training programs? Visit{' '}
               <a
-                href="https://holistichealthhq.com"
+                href="https://www.holistichealtheducators.com/"
                 className="underline-offset-2 hover:underline"
               >
-                holistichealthhq.com
+                holistichealtheducators.com
               </a>
               .
             </p>

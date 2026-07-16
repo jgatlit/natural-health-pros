@@ -25,7 +25,7 @@ export type RouteMeta = {
 export const ROUTE_META: Record<string, RouteMeta> = {
   '/': {
     description:
-      '<strong>Landing.</strong> Hero, "Find a practitioner you can trust", "Browse the directory" CTA → /search, recently-joined practitioner cards (4), invite-only directory note, link to holistichealthhq.com.',
+      '<strong>Landing.</strong> Hero, "Find a practitioner you can trust", "Browse the directory" CTA → /search, recently-joined practitioner cards (4), invite-only directory note, link to holistichealtheducators.com (the HHE school).',
     audience: 'public',
     status: 'live',
   },

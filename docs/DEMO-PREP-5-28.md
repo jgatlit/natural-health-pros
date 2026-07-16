@@ -67,7 +67,7 @@
 | **"How fast does new info show up?"** | Phase 1 today: practitioner edits → search index in <2 seconds (app-layer reindex on save). Phase 2 moves to a cron-driven mark-and-sweep for batch resilience. |
 | **"Can someone search by insurance / fee / availability?"** | Schema supports range facets — already demonstrated with "years in practice" (4-22yr slider). Adding fee range or insurance accepted is a schema field + UI line. Phase 2 ready. |
 | **"What happens when we hit 500 practitioners? 2,000?"** | Stack tested for that scale. Typesense Cloud (current tier) handles it; if RAM pressure shows up at 2K, one-click tier-up in their dashboard. Cost ceiling: ~$50/mo until revenue justifies more. |
-| **"Is this competing with holistichealthhq.com?"** | No. Landing page links to it. HHE Directory is the *practitioner-finding* surface; holistichealthhq is the *program-marketing* surface. They feed each other. |
+| ~~**"Is this competing with holistichealthhq.com?"**~~ ⚠️ **WRONG — see correction below** | ~~No. Landing page links to it. HHE Directory is the *practitioner-finding* surface; holistichealthhq is the *program-marketing* surface. They feed each other.~~ |
 | **"What about payments / booking?"** | Phase 2A + 2B shipped 5/25: practitioner-side onboarding + booking is real (any scheduling provider — Cal.com, Calendly, etc.). Phase 2C (payments) is the open item. Operator-confirmed direction: Whop for Platforms / Connected Accounts (centralized multi-tenant routing — HHE platform, practitioners as connected sellers, optional platform fee). **Blocker**: Whop Platforms API is invite-only — need Blake/Amy alignment on (1) Whop as the right primitive vs alternatives, and (2) who emails sales@whop.com to apply. Worth raising in the meeting if Amy asks. |
 | **"Who do I show this to next?"** | Anyone HHE-trained you'd want listed. Cost to add: 1 invite email, 5-minute profile completion. Phase 2 makes that real; Phase 1 today just needs your approval to proceed. |
 
@@ -124,3 +124,18 @@
 - Phase 1 plan: `docs/PHASE-1-PLAN.md`
 - Seed strategy memory: `~/.claude/projects/-home-jgatlit-projects-HHE-HHE-directory/memory/pattern_seed_strategy.md`
 - Decisions-JSON (5/15 scope lock): `~/Downloads/practicenear-decisions-2026-05-15.json`
+
+---
+
+## ⚠️ Correction (2026-07-16) — the `holistichealthhq.com` Q&A above was factually wrong
+
+The struck-through row above is preserved as a point-in-time record of what was prepped for the 5/28 demo. **The premise was false.**
+
+- **`holistichealthhq.com` is NOT Holistic Health Educators.** It's "Holistic Health HQ" — an unrelated consumer wellness blog (*"fitness hacks… better sleep… LATEST BLOGS"*). It has no connection to HHE, and is arguably a competing consumer surface.
+- **The real school is `holistichealtheducators.com`** — *"comprehensive Holistic Health Coach Certifications, Therapeutic Nutritional Counselor Certifications…"*.
+
+**How it happened:** the homepage link was added 2026-05-24 (`a2dbd58`, the first landing build) on the untested assumption that `holistichealthhq.com` was HHE's marketing site. That assumption was then *rationalised* into the Q&A above rather than verified, and carried unexamined through the Natural Health Pros rebrand. The correct domain never appeared anywhere in the repo. It shipped for ~7 weeks.
+
+**Fixed 2026-07-16**: the homepage now links to `https://www.holistichealtheducators.com/` with the label expanded from "HHE programs" to "Holistic Health Educators certification & training programs".
+
+**Lesson (same shape as the "blocked on Amy" phantom):** a claim written down confidently is not a verified claim. Check the premise — especially one that points third-party traffic off a client's own product.
