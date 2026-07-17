@@ -28,23 +28,39 @@ Work stopped mid-stream to chase a Vercel deploy problem (§0b). Everything belo
 
 **Production is healthy and on the latest commit.** Verified by deployment ID → git SHA, not by status code. Two separate things were conflated; only one is a real defect.
 
-### 🔴 REAL: every preview build fails — Neon's 10-branch cap (needs operator, 2 min)
+### ✅ FIXED 2026-07-16 21:30 — preview builds were dead for 9 days on Neon's 10-branch cap
 
-100% of preview deployments have failed since **07-16 07:39** — `errorCode: BUILD_FAILED`, `errorMessage: "Resource provisioning failed"`, build duration **0ms** (dies before building; no logs exist to read).
+**Resolved and verified.** Every preview deployment failed from **07-16 07:39** to **07-16 21:29** — `errorCode: BUILD_FAILED`, `errorMessage: "Resource provisioning failed"`, build **0ms** (dies before building, so no logs exist — don't go looking for them).
 
-**Root cause, confirmed:** Neon Free allows **max 10 branches per project, including main** ([Neon docs](https://neon.com/docs/guides/ai-agent-integration)). The Vercel↔Neon integration sets `deployments.required: true` for `["preview","production"]`, so every preview must provision a branch. Exactly **9** distinct git branches ever got a successful preview; 9 + `main` = **10 = the cap**. The 11th (`docs/post-launch-sync`) failed, and so has every one of the 12 branches since. Production is unaffected — it reuses `main` and never needs a new branch.
+**Root cause:** Neon Free allows **max 10 branches per project, including main**. The Vercel↔Neon integration sets `deployments.required: true` for `["preview","production"]`, so every preview must provision a branch. The project sat at **exactly 10** (`main` + 9 preview branches from long-merged PRs), so the 11th could never be created. Production was never affected — it reuses `main` and needs no new branch, which is exactly why this hid for nine days behind all-green prod deploys.
 
-**Fix** — delete the stale preview branches (all their PRs are long merged) in Neon project `late-leaf-76985577`. Free, instant, no plan change. ⚠️ They were never auto-cleaned on merge — unless that's fixed this recurs every ~9 PRs.
+**Why it never self-healed — the deadlock:** Neon's obsolete-branch cleanup runs *"the next time a preview deployment is created."* At the cap, no preview deployment can be created — so the cleanup that would free the cap can never run. It cannot recover without manual intervention.
 
-**Which Neon account?** Not a personal one. This project is **Vercel-owned** via the native integration: `ownership: "owned"`, `externalResourceId: late-leaf-76985577`, billed through Vercel (`free_v3`, scope `installation`), `capabilities.sso: true`. Vercel creates its own Neon *organization*, and Neon's docs say an API key **is required for Vercel-Managed Integration users** — so plain `neonctl auth` (interactive OAuth) is the wrong path and can land in a different account.
+**What was done:** deleted the 9 stale preview branches via the Neon API (guarded to refuse any non-`preview/*` or default branch). `main` untouched; prod data verified intact (14 practitioners / 15 users / 0 trial clocks). Proved the fix with a throwaway `test/preview-build-canary` branch → preview built **READY** in ~90s and Neon provisioned `preview/test/preview-build-canary` on demand; canary then deleted. **Now 1/10 branches, 9 slots free.**
 
-1. Vercel dashboard → **Storage** → `hhe-directory-neon` → *Open in Neon* (SSO) → create an API key.
-2. Verify the account is correct **before deleting anything**:
+### ⚠️ It WILL recur in ~9 PRs unless cleanup is automated
+
+We use the **Vercel-Managed** (native) integration, where Neon only deletes a preview branch when the **Vercel deployment** is deleted — and Vercel retains deployments indefinitely. So branches accumulate permanently by default. Options:
+
+1. **GitHub Action on PR close** (Neon's documented answer for this setup):
+   ```yaml
+   name: Cleanup Neon preview branch
+   on: { pull_request: { types: [closed] } }
+   jobs:
+     delete-branch:
+       runs-on: ubuntu-latest
+       steps:
+         - uses: neondatabase/delete-branch-action@v3
+           with:
+             project_id: ${{ vars.NEON_PROJECT_ID }}
+             branch: preview/${{ github.head_ref }}
+             api_key: ${{ secrets.NEON_API_KEY }}
    ```
-   NEON_API_KEY=<key> neonctl projects list     # MUST list late-leaf-76985577
-   NEON_API_KEY=<key> neonctl branches list --project-id late-leaf-76985577
-   ```
-   If `late-leaf-76985577` is absent → wrong account/org; stop. Prod's endpoint is `ep-plain-bird-ap6zr7b3` — cross-check it.
+   Needs repo secret `NEON_API_KEY` (use a **project-scoped** key, not a personal one) + var `NEON_PROJECT_ID=late-leaf-76985577`. **Operator decision — not done.**
+2. Or periodically delete obsolete branches by hand (Neon Console → Branches).
+3. Do **not** disable per-preview branching: preview builds run `prisma migrate deploy`, so they'd migrate **production**.
+
+**Neon account facts** (settled): the project is Vercel-owned (`ownership: "owned"`, billed via Vercel `free_v3`) but the org **is attached to the personal Neon account** `jgatlit@gmail.com` → org `org-damp-leaf-73810463` ("Vercel: jgatlit-5754's projects", `managed_by=vercel`), containing exactly one project, `late-leaf-76985577` (`hhe-directory-neon`). Prod = branch `main` = endpoint `ep-plain-bird-ap6zr7b3` = db `neondb`. Neon's docs: Vercel-Managed users must use an **API key** (`napi_…`), not interactive `neonctl auth`; keys live under **Settings → API keys** after switching to the org (project-scoped keys are the least-privilege choice). Branch management is control-plane — a psql session or `postgresql://…npg_…` connection string **cannot** do it.
 
 **Ruled out:** the Vercel project rename happened the same morning and is pure coincidence — the branch count disproves it.
 
