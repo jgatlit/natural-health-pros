@@ -43,6 +43,15 @@ export function createSearchAdapter() {
       // bio (≥20 chars) + ≥1 specialty in public discovery. Direct profile URLs
       // still work for incomplete profiles — they're just hidden from search.
       filter_by: 'isComplete:=true',
+      // Typesense defaults per_page to 10 and we never overrode it, so /search silently
+      // truncated: the facet said "Virtual Practice 13" and the header said "14
+      // practitioners" while the list rendered 10, with no pagination widget on the page to
+      // reach the rest. They were unreachable, not just unshown. 24 comfortably covers the
+      // whole directory at pilot scale (14 now, ~20-50 planned) so the common case is one
+      // page and no scrolling; beyond that SearchResults auto-loads on scroll. Typesense
+      // caps per_page at 250 — don't raise this to "just fetch everything", the infinite
+      // scroll is what keeps it correct as the cohort grows.
+      per_page: 24,
     },
   });
 }
