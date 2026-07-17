@@ -2,6 +2,45 @@
 
 > **Written 2026-07-16**, immediately post-launch. Read this first. Everything below was verified live, not assumed.
 
+## 0a. PARKED 2026-07-16 evening — read this first
+
+Work stopped mid-stream to chase a Vercel deploy problem (§0b). Everything below is merged, deployed and verified live unless stated.
+
+**Shipped this session (all live on prod, browser-verified):**
+
+| PR | What | Notes |
+|---|---|---|
+| #34 `2ece314` | "Pilot" = 90-day trial (`trialEndsAt`), admin-exempt, `/api/cron/trial-sweep` warns T-14/T-3/T-0 **and delists** | Spec: `docs/superpowers/specs/2026-07-16-pilot-trial-design.md` |
+| #35 `18d97a3` | The billing exemption belongs to the profile **owner**, not the viewer | Amy was being told every pilot she opened was "exempt, no billing" |
+| #36 `604c4d5` | `/search` truncated at 10 with no way to reach the rest | `per_page: 24` + `useInfiniteHits` |
+
+**Current data state (verified):** 14 practitioners, 14 indexed in Typesense, **0 trial clocks running** (everyone correctly pre-trial), 2 admins (Amy, jgatlit).
+
+**Parked / not started:**
+1. **DROP COLUMN `comped`** — contract phase of #34's expand/contract. Nothing reads or writes it now (grep-verified). Safe to drop in a standalone migration; remember the `DROP INDEX "Practitioner_searchText_trgm_idx"` hand-strip (see `gotcha_prisma_migrate_dev_broken` — it has now fired 4×).
+2. **Resend the 12 expired pilot invites** (§1) — still the thing gating the whole cohort. ⛔ Sends real email to real practitioners; needs explicit operator go.
+3. **Demo/user documentation** — requested earlier, never scoped. Open question for the operator: demo script vs practitioner-facing guide vs both?
+4. **e2e onboarding tests** (§1) and **landing page** (§2) — unchanged.
+5. `livingaligned.love` returns 200 with no `<title>`; Gayle has no live `websiteUrl`. Needs human eyes, not code.
+6. Scratchpad `.s` file contains an AUTH_SECRET — clean up.
+
+## 0b. 🔴 Vercel deploy health — ACTIVE INVESTIGATION
+
+**Do not trust "merged" to mean "deployed" on this project right now.** Observed 2026-07-16 evening:
+
+- Auto-deploy fired for #33 in **3 seconds** (merge 13:04:29 → deploy 13:04:32), then **did not fire at all** for #34 or #35 — nothing queued, no error. Deployed both by CLI.
+- Later a **burst** of deployments appeared at ~19:52, apparently a flushed webhook backlog.
+- A deploy sat at `● Initializing` for **~12 minutes** with zero build progress, then completed on its own.
+- Meanwhile a **stale, pre-fix deployment held the production alias** — prod served old code and still returned 200 everywhere. Status codes could not detect this.
+- Preview builds have been failing with `Resource provisioning failed` (pre-existing, unproven cause).
+
+**How to check what is ACTUALLY live** (status codes are useless here):
+```bash
+curl -s https://naturalhealthpros.com/ | grep -o 'dpl=dpl_[A-Za-z0-9]*' | head -1   # what the apex serves
+vercel inspect https://natural-health-pros-<id>-ai-chemist.vercel.app | grep dpl_    # map deploy -> dpl id
+```
+`vercel ls --prod` **does not list CLI-created production deployments** — it showed a 6h-old deploy as "newest" while a newer one was live. Don't diagnose from it.
+
 ## 0. Where we are
 
 Public launch is **complete** (2026-07-16):
