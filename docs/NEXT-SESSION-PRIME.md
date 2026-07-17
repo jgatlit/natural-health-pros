@@ -34,11 +34,17 @@ Work stopped mid-stream to chase a Vercel deploy problem (§0b). Everything belo
 
 **Root cause, confirmed:** Neon Free allows **max 10 branches per project, including main** ([Neon docs](https://neon.com/docs/guides/ai-agent-integration)). The Vercel↔Neon integration sets `deployments.required: true` for `["preview","production"]`, so every preview must provision a branch. Exactly **9** distinct git branches ever got a successful preview; 9 + `main` = **10 = the cap**. The 11th (`docs/post-launch-sync`) failed, and so has every one of the 12 branches since. Production is unaffected — it reuses `main` and never needs a new branch.
 
-**Fix** — delete the stale preview branches (all their PRs are long merged) in Neon project `late-leaf-76985577`. `neonctl` is installed but unauthenticated; auth is an interactive browser flow, so the operator runs:
-```
-! neonctl auth          # then: neonctl branches list --project-id late-leaf-76985577
-```
-Free, instant, no plan change. ⚠️ They were never auto-cleaned on merge — unless that's fixed this recurs every ~9 PRs.
+**Fix** — delete the stale preview branches (all their PRs are long merged) in Neon project `late-leaf-76985577`. Free, instant, no plan change. ⚠️ They were never auto-cleaned on merge — unless that's fixed this recurs every ~9 PRs.
+
+**Which Neon account?** Not a personal one. This project is **Vercel-owned** via the native integration: `ownership: "owned"`, `externalResourceId: late-leaf-76985577`, billed through Vercel (`free_v3`, scope `installation`), `capabilities.sso: true`. Vercel creates its own Neon *organization*, and Neon's docs say an API key **is required for Vercel-Managed Integration users** — so plain `neonctl auth` (interactive OAuth) is the wrong path and can land in a different account.
+
+1. Vercel dashboard → **Storage** → `hhe-directory-neon` → *Open in Neon* (SSO) → create an API key.
+2. Verify the account is correct **before deleting anything**:
+   ```
+   NEON_API_KEY=<key> neonctl projects list     # MUST list late-leaf-76985577
+   NEON_API_KEY=<key> neonctl branches list --project-id late-leaf-76985577
+   ```
+   If `late-leaf-76985577` is absent → wrong account/org; stop. Prod's endpoint is `ep-plain-bird-ap6zr7b3` — cross-check it.
 
 **Ruled out:** the Vercel project rename happened the same morning and is pure coincidence — the branch count disproves it.
 
