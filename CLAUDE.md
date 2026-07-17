@@ -81,7 +81,12 @@ After `vercel env pull .env.local`, also `cp .env.local .env` for Prisma CLI to 
 - `git push origin main` → auto-deploys via Vercel GitHub App (verified 2026-05-24)
 - Migration flow: `vercel env pull .env.local && cp .env.local .env && npm run db:migrate:dev --name <name>` → commit `prisma/migrations/` → push
 - Migrations **DO** auto-apply on deploy — build is `prisma migrate deploy && prisma generate && next build`. This makes expand/contract mandatory: the migration applies during build while the PREVIOUS deploy still serves traffic, so a migration must never break the currently-live code (add the column now, drop the old one a release later).
-- **Git auto-deploy is not guaranteed.** A merge normally deploys within seconds via the Vercel GitHub App, but on 2026-07-16 the merge of PR #34 produced no deploy at all — nothing queued, no error. Always verify new code is actually live (hit a route that only exists in the new commit; a 404 means it never shipped). `vercel --prod --yes` from a clean `main` is the fallback.
+- **Git auto-deploy works, but can be SLOW — don't mistake slow for broken.** Usually a merge deploys within seconds (PR #35: merge 19:09:14 → deploy 19:09:18). But on 2026-07-16 PR #34's deploy took **~10 minutes to start**, and another sat at `● Initializing` for **~12 minutes** before building normally. Both eventually succeeded on their own. Wait ~15 min before concluding anything is wrong; a CLI `vercel --prod --yes` fired impatiently just races the git deploy and creates duplicate production deployments.
+- **Verify what is actually LIVE, never infer it from status codes.** While a slow deploy is in flight the previous deployment keeps serving — the site returns 200 everywhere while running old code. Compare deployment IDs instead:
+  ```bash
+  curl -s https://naturalhealthpros.com/ | grep -o 'dpl_[A-Za-z0-9]*' | head -1   # what the apex serves
+  ```
+  then match it against the deployment's git SHA via the REST API (`/v13/deployments/<dpl_id>` → `meta.githubCommitSha`). Note `vercel ls --prod` is unreliable for this: it has shown a 6h-old deploy as "newest" while a newer one was live.
 
 ## What's next
 

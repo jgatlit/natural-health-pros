@@ -24,22 +24,36 @@ Work stopped mid-stream to chase a Vercel deploy problem (§0b). Everything belo
 5. `livingaligned.love` returns 200 with no `<title>`; Gayle has no live `websiteUrl`. Needs human eyes, not code.
 6. Scratchpad `.s` file contains an AUTH_SECRET — clean up.
 
-## 0b. 🔴 Vercel deploy health — ACTIVE INVESTIGATION
+## 0b. Vercel deploy health — DIAGNOSED 2026-07-16
 
-**Do not trust "merged" to mean "deployed" on this project right now.** Observed 2026-07-16 evening:
+**Production is healthy and on the latest commit.** Verified by deployment ID → git SHA, not by status code. Two separate things were conflated; only one is a real defect.
 
-- Auto-deploy fired for #33 in **3 seconds** (merge 13:04:29 → deploy 13:04:32), then **did not fire at all** for #34 or #35 — nothing queued, no error. Deployed both by CLI.
-- Later a **burst** of deployments appeared at ~19:52, apparently a flushed webhook backlog.
-- A deploy sat at `● Initializing` for **~12 minutes** with zero build progress, then completed on its own.
-- Meanwhile a **stale, pre-fix deployment held the production alias** — prod served old code and still returned 200 everywhere. Status codes could not detect this.
-- Preview builds have been failing with `Resource provisioning failed` (pre-existing, unproven cause).
+### 🔴 REAL: every preview build fails — Neon's 10-branch cap (needs operator, 2 min)
 
-**How to check what is ACTUALLY live** (status codes are useless here):
-```bash
-curl -s https://naturalhealthpros.com/ | grep -o 'dpl=dpl_[A-Za-z0-9]*' | head -1   # what the apex serves
-vercel inspect https://natural-health-pros-<id>-ai-chemist.vercel.app | grep dpl_    # map deploy -> dpl id
+100% of preview deployments have failed since **07-16 07:39** — `errorCode: BUILD_FAILED`, `errorMessage: "Resource provisioning failed"`, build duration **0ms** (dies before building; no logs exist to read).
+
+**Root cause, confirmed:** Neon Free allows **max 10 branches per project, including main** ([Neon docs](https://neon.com/docs/guides/ai-agent-integration)). The Vercel↔Neon integration sets `deployments.required: true` for `["preview","production"]`, so every preview must provision a branch. Exactly **9** distinct git branches ever got a successful preview; 9 + `main` = **10 = the cap**. The 11th (`docs/post-launch-sync`) failed, and so has every one of the 12 branches since. Production is unaffected — it reuses `main` and never needs a new branch.
+
+**Fix** — delete the stale preview branches (all their PRs are long merged) in Neon project `late-leaf-76985577`. `neonctl` is installed but unauthenticated; auth is an interactive browser flow, so the operator runs:
 ```
-`vercel ls --prod` **does not list CLI-created production deployments** — it showed a 6h-old deploy as "newest" while a newer one was live. Don't diagnose from it.
+! neonctl auth          # then: neonctl branches list --project-id late-leaf-76985577
+```
+Free, instant, no plan change. ⚠️ They were never auto-cleaned on merge — unless that's fixed this recurs every ~9 PRs.
+
+**Ruled out:** the Vercel project rename happened the same morning and is pure coincidence — the branch count disproves it.
+
+### 🟡 NOT a defect: auto-deploy is slow, not broken
+
+Earlier notes in this repo claimed auto-deploy "didn't fire". **That was wrong** — it fired, slowly. Measured: PR #35 merge 19:09:14 → deploy 19:09:18 (**4s**); PR #34 merge 18:53:35 → deploy **19:03:11 (~10 min)**; one deploy sat `● Initializing` **~12 min** then built fine. All succeeded unaided. Waiting 4 minutes and CLI-deploying just races the git deploy and creates duplicate production deployments. **Wait ~15 min.**
+
+### How to check what is ACTUALLY live (status codes are useless)
+
+While a slow deploy is in flight the PREVIOUS deployment keeps serving — 200 everywhere, old code. This genuinely fooled a full health check.
+```bash
+curl -s https://naturalhealthpros.com/ | grep -o 'dpl_[A-Za-z0-9]*' | head -1   # what the apex serves
+vercel whoami   # refresh CLI token first, then GET /v13/deployments/<dpl_id> -> meta.githubCommitSha
+```
+`vercel ls --prod` is **not** authoritative — it showed a 6h-old deploy as "newest" while a newer one was live.
 
 ## 0. Where we are
 
