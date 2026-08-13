@@ -272,3 +272,122 @@ describe('delivery semantics (money-safety)', () => {
     expect(mocks.update).not.toHaveBeenCalled();
   });
 });
+
+/**
+ * Regression: these are VERBATIM payloads captured from production deliveries for Sarah
+ * Schindler's connected company (biz_xExE1eUWG4ZMeR, 2026-08-11). Every pre-existing fixture in
+ * this file invents a company reference INSIDE `data`; Whop actually puts `company_id` on the
+ * ENVELOPE, as a sibling of `data`/`type`. Because handleEvent() was called with only `data`,
+ * resolution returned null and every one of these events silently no-opped — logged, marked
+ * processedAt, error null, practitioner row untouched. Sarah stayed on "not_started" and kept
+ * being sent back through a KYC flow she had already passed.
+ */
+describe('envelope-level company_id (real production payload shape)', () => {
+  const SARAH_CO = 'biz_xExE1eUWG4ZMeR';
+
+  it('resolves identity_profile.approved from a THIN data payload via envelope company_id', async () => {
+    mocks.findUnique.mockResolvedValueOnce(
+      fakePractitioner({ id: 'prac_sarah', whopCompanyId: SARAH_CO }),
+    );
+    const req = signedRequest({
+      id: 'msg_LqbB5y5u65IdO0gEOvwuaifs',
+      type: 'identity_profile.approved',
+      data: { id: 'idpf_L366QzEEVUnVH' },
+      timestamp: '2026-08-11T17:25:25.114Z',
+      company_id: SARAH_CO,
+      api_version: 'v1',
+    });
+    const res = await POST(req as unknown as NextRequest);
+
+    expect(res.status).toBe(200);
+    expect(mocks.findUnique).toHaveBeenCalledWith({ where: { whopCompanyId: SARAH_CO } });
+    expect(mocks.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'prac_sarah' } }),
+    );
+  });
+
+  it('resolves payout_account.status_updated via envelope company_id and records the status', async () => {
+    mocks.findUnique.mockResolvedValueOnce(
+      fakePractitioner({ id: 'prac_sarah', whopCompanyId: SARAH_CO }),
+    );
+    const req = signedRequest({
+      id: 'msg_ffKfNrMY8Gy33f2w5avqsHq4',
+      type: 'payout_account.status_updated',
+      // Note: this payload has a FAT data object, but still carries no company reference
+      // anywhere inside it — so this event type has never once resolved in production.
+      data: {
+        id: 'poact_SeAGBkatzxjJ',
+        email: 'sarah@wild-rooted.com',
+        status: 'connected',
+        latest_verification: { id: 'verf_48hAxWVQSjOhf', status: 'approved' },
+      },
+      timestamp: '2026-08-11T17:25:35.441Z',
+      company_id: SARAH_CO,
+      api_version: 'v1',
+    });
+    const res = await POST(req as unknown as NextRequest);
+
+    expect(res.status).toBe(200);
+    expect(mocks.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'prac_sarah' },
+        data: expect.objectContaining({ whopPayoutStatus: 'connected' }),
+      }),
+    );
+  });
+
+  it('prefers the envelope company_id over a linked_companies[0] guess', async () => {
+    // linked_companies is an ARRAY and reads back EMPTY for API-key callers (verified against
+    // /identity_profiles live, 2026-08-13). Guessing [0] can attribute an event to the wrong
+    // practitioner; the envelope names the company Whop is actually notifying about.
+    mocks.findUnique.mockResolvedValueOnce(
+      fakePractitioner({ id: 'prac_sarah', whopCompanyId: SARAH_CO }),
+    );
+    const req = signedRequest({
+      type: 'identity_profile.approved',
+      data: { id: 'idpf_x', linked_companies: [{ id: 'biz_SOMEONE_ELSE' }] },
+      company_id: SARAH_CO,
+    });
+    await POST(req as unknown as NextRequest);
+
+    expect(mocks.findUnique).toHaveBeenCalledWith({ where: { whopCompanyId: SARAH_CO } });
+  });
+});
+
+describe('unattributable events must not look healthy', () => {
+  it('records an error on the audit row when no practitioner resolves', async () => {
+    mocks.findUnique.mockResolvedValue(null); // nothing matches this company
+    const req = signedRequest({
+      type: 'identity_profile.approved',
+      data: { id: 'idpf_orphan' },
+      company_id: 'biz_unknown_to_us',
+    });
+    await POST(req as unknown as NextRequest);
+
+    expect(mocks.update).not.toHaveBeenCalled();
+    expect(mocks.eventUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          processedAt: expect.any(Date),
+          error: expect.stringContaining('biz_unknown_to_us'),
+        }),
+      }),
+    );
+  });
+
+  it('leaves error null when the handler actually applied a change', async () => {
+    mocks.findUnique.mockResolvedValueOnce(
+      fakePractitioner({ id: 'prac_ok', whopCompanyId: 'biz_ok' }),
+    );
+    const req = signedRequest({
+      type: 'identity_profile.approved',
+      data: { id: 'idpf_ok' },
+      company_id: 'biz_ok',
+    });
+    await POST(req as unknown as NextRequest);
+
+    expect(mocks.eventUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ error: null }) }),
+    );
+  });
+});

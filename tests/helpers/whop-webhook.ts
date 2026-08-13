@@ -32,7 +32,10 @@ export function signWebhook(
 
 /** Build a signed POST Request for the v1 webhook route. */
 export function signedRequest(
-  event: { type: string; data: Record<string, unknown> },
+  // Envelope-level fields (company_id, id, timestamp, api_version) are part of the real Whop
+  // delivery and are load-bearing for practitioner resolution — the helper must not model the
+  // event as { type, data } only, or fixtures silently can't express the shape production sends.
+  event: { type: string; data: Record<string, unknown>; [key: string]: unknown },
   opts: { secret?: string; id?: string; timestamp?: number } = {},
 ): Request {
   const body = JSON.stringify(event);
