@@ -354,6 +354,66 @@ describe('envelope-level company_id (real production payload shape)', () => {
   });
 });
 
+/**
+ * Reconciliation can only poll a practitioner it has Whop ids for, and the webhook is the only
+ * place those ids can be learned: the REST list endpoints return the profiles, but
+ * linked_companies reads back empty for parent-company API keys, so a listed profile cannot be
+ * attributed to one of our practitioners. Drop the id here and the cron is permanently blind.
+ */
+describe('captures Whop resource ids for reconciliation', () => {
+  it('stores the idpf_ id off identity_profile.approved', async () => {
+    mocks.findUnique.mockResolvedValueOnce(
+      fakePractitioner({ id: 'prac_s', whopCompanyId: 'biz_s', whopIdentityProfileId: null }),
+    );
+    const req = signedRequest({
+      type: 'identity_profile.approved',
+      data: { id: 'idpf_L366QzEEVUnVH' },
+      company_id: 'biz_s',
+    });
+    await POST(req as unknown as NextRequest);
+
+    expect(mocks.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ whopIdentityProfileId: 'idpf_L366QzEEVUnVH' }),
+      }),
+    );
+  });
+
+  it('stores the poact_ id off payout_account.status_updated', async () => {
+    mocks.findUnique.mockResolvedValueOnce(
+      fakePractitioner({ id: 'prac_s', whopCompanyId: 'biz_s', whopPayoutAccountId: null }),
+    );
+    const req = signedRequest({
+      type: 'payout_account.status_updated',
+      data: { id: 'poact_SeAGBkatzxjJ', status: 'connected' },
+      company_id: 'biz_s',
+    });
+    await POST(req as unknown as NextRequest);
+
+    expect(mocks.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({ whopPayoutAccountId: 'poact_SeAGBkatzxjJ' }),
+      }),
+    );
+  });
+
+  it('does not confuse the two id types', async () => {
+    mocks.findUnique.mockResolvedValueOnce(
+      fakePractitioner({ id: 'prac_s', whopCompanyId: 'biz_s' }),
+    );
+    const req = signedRequest({
+      type: 'identity_profile.approved',
+      data: { id: 'idpf_abc' },
+      company_id: 'biz_s',
+    });
+    await POST(req as unknown as NextRequest);
+
+    const data = mocks.update.mock.calls[0][0].data as Record<string, unknown>;
+    expect(data.whopIdentityProfileId).toBe('idpf_abc');
+    expect(data.whopPayoutAccountId).toBeUndefined();
+  });
+});
+
 describe('unattributable events must not look healthy', () => {
   it('records an error on the audit row when no practitioner resolves', async () => {
     mocks.findUnique.mockResolvedValue(null); // nothing matches this company

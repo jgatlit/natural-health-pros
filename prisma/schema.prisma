@@ -155,10 +155,19 @@ model Practitioner {
   /// value from Whop would make the enum write throw inside a webhook handler, and Whop retries
   /// only 3 times over ~70s before dropping the event permanently.
   whopPayoutStatus      String    @default("not_started")
-  /// THE gate for public checkout. Authoritative only via identity_profile.* webhooks — the REST
-  /// payout-account object exposes status but not this boolean, so it cannot be polled reliably.
+  /// THE gate for public checkout. Corrected 2026-08-13: the previous note here claimed this
+  /// boolean "cannot be polled reliably" because the payout-account object omits it. It is in
+  /// fact returned by GET /identity_profiles/{id}, alongside `status` and `payout_status` — so
+  /// the reconciliation cron CAN verify it, provided whopIdentityProfileId below is populated.
   whopPayoutsEnabled    Boolean   @default(false)
+  /// `idpf_…`. Learned from identity_profile.* webhooks (envelope company_id → data.id) — that
+  /// pairing is the ONLY way to build the mapping, because linked_companies reads back empty
+  /// for parent-company API keys, so the profile list cannot be attributed to a company.
   whopIdentityProfileId String?
+  /// `poact_…`. GET /payout_accounts keys on THIS id, not the company id — passing biz_… always
+  /// 404s (verified live 2026-08-13 against both connected accounts). Learned from
+  /// payout_account.status_updated. Without it, payout status cannot be polled at all.
+  whopPayoutAccountId   String?   @unique
   whopCompanyCreatedAt  DateTime?
   whopProducts       WhopProduct[]
 

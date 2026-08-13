@@ -109,7 +109,7 @@ export const ROUTE_META: Record<string, RouteMeta> = {
   },
   '/admin/whop-webhooks': {
     description:
-      '<strong>Webhook event log.</strong> Last 100 WhopWebhookEvent rows ordered by receivedAt desc. Empty today; lists the 8 expected event types (company.created, account.verified, payment.succeeded, payout.paid, etc.) in a &lt;details&gt; element while empty.',
+      '<strong>Webhook event log.</strong> Last 100 WhopWebhookEvent rows ordered by receivedAt desc, with the <code>error</code> column surfacing events that ran but could not be attributed to a practitioner. While empty it lists the event types actually observed in production (<code>identity_profile.*</code>, <code>payout_account.status_updated</code>, <code>payment.succeeded</code>) in a &lt;details&gt; element. The old list advertised <code>account.verified</code>, which Whop has never delivered.',
     audience: 'admin',
     status: 'scaffold',
   },
@@ -127,14 +127,26 @@ export const ROUTE_META: Record<string, RouteMeta> = {
   },
   '/api/whop/onboarding/return': {
     description:
-      '<strong>Whop KYC return redirect.</strong> Auth + ownership gated. Best-effort ONLY — it fires the moment the practitioner submits the hosted form, before the provider approves, so it never sets <code>whopPayoutsEnabled</code>; the <code>identity_profile.approved</code> webhook is authoritative. Opportunistically refreshes <code>whopPayoutStatus</code>, and a failed refresh is non-fatal.',
-    audience: 'auth',
+      '<strong>Whop KYC return redirect.</strong> DELIBERATELY UNAUTHENTICATED and side-effect-free. Whop&rsquo;s callback is a client-side navigation that fetches this URL cross-origin (no cookies possible), and Sumsub&rsquo;s &ldquo;continue on your phone&rdquo; handoff means the practitioner may finish on a device with no session at all — so a cookie here is a coin flip, not a boundary. Redirects an authenticated owner to their payments section; everyone else (unknown slug, someone else&rsquo;s slug, no session) gets the identical redirect to <code>/verification-submitted</code>. Payout state is owned entirely by the <code>identity_profile.*</code> webhook plus <code>/api/cron/whop-reconcile</code>.',
+    audience: 'public',
     status: 'live',
   },
   '/api/whop/onboarding/refresh': {
     description:
-      '<strong>Whop account-link refresh.</strong> Auth + ownership gated. Whop redirects here when a short-lived account link expires mid-flow; re-mints a fresh <code>account_onboarding</code> link and bounces straight back into the hosted KYC form.',
+      '<strong>Whop account-link refresh.</strong> Auth + ownership gated, and STAYS gated — it mints a link carrying payout scopes (create/delete destination, withdraw funds), so an open version would hand anyone a privileged link for any connected account. Whop redirects here when a short-lived account link expires mid-flow; re-mints a fresh <code>account_onboarding</code> link. An unauthenticated hit bounces to sign-in with a callback to the practitioner&rsquo;s own payments section rather than back to this route.',
     audience: 'auth',
+    status: 'live',
+  },
+  '/api/cron/whop-reconcile': {
+    description:
+      '<strong>Whop payout drift sweep.</strong> The safety net behind the <code>identity_profile.*</code> webhook, which Whop drops permanently after 3 retries (~70s). Reads <code>GET /identity_profiles/{idpf_…}</code> — the only endpoint exposing <code>status</code>, <code>payout_status</code> and <code>payouts_enabled</code> together — and keys completion on <code>status: approved</code>. ONE-WAY: it may OPEN the payout gate, never close it, because a parent-company API key is known to under-report (<code>linked_companies</code> reads empty here but arrives populated on the webhook). Revocation stays with <code>identity_profile.rejected</code>/<code>needs_action</code>. Reports connected accounts that have NO stored Whop ids — the signature of a webhook that never resolved. Bearer <code>CRON_SECRET</code> when set.',
+    audience: 'api',
+    status: 'live',
+  },
+  '/verification-submitted': {
+    description:
+      '<strong>Public KYC return landing.</strong> Where <code>/api/whop/onboarding/return</code> sends anyone it cannot positively identify as the owner. Deliberately generic — no name, slug or status — so it renders identically for the practitioner who just finished, a stale link, and a stranger, which is what lets the return route stay unauthenticated without leaking whether a practitioner exists. ⚠️ The path is load-bearing: middleware gates on <code>startsWith(&apos;/onboarding&apos;)</code>, a PREFIX match, so naming this <code>/onboarding-complete</code> would auth-gate it and reintroduce the dead end it exists to remove.',
+    audience: 'public',
     status: 'live',
   },
   '/api/auth/[...nextauth]': {

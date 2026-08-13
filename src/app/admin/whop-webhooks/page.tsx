@@ -66,30 +66,34 @@ export default async function WhopWebhooksPage() {
                 <summary className="cursor-pointer text-muted-foreground hover:text-foreground">
                   Expected event types
                 </summary>
+                {/*
+                  Corrected 2026-08-13. This list previously advertised `account.verified` —
+                  "KYC complete" — which Whop has never once delivered. The event types below
+                  are the ones actually observed in production deliveries. Keying anything off
+                  a "verified" signal is a dead end: the company object's `verified` boolean
+                  reads false for every company we own, platform company included, because it
+                  is the Whop marketplace badge and not a payout gate. `status: 'approved'` on
+                  the identity profile is the real completion signal.
+                */}
                 <ul className="mt-2 space-y-0.5 text-muted-foreground">
                   <li>
-                    <code>company.created</code> — sub-merchant created
+                    <code>identity_profile.approved</code> — ID check passed (
+                    <code>status: approved</code>)
                   </li>
                   <li>
-                    <code>account.verified</code> — KYC complete
+                    <code>identity_profile.rejected</code> — ID check failed
                   </li>
                   <li>
-                    <code>account.rejected</code> — KYC failed
+                    <code>identity_profile.needs_action</code> — more info required
+                  </li>
+                  <li>
+                    <code>identity_profile.updated</code> — profile fields changed
+                  </li>
+                  <li>
+                    <code>payout_account.status_updated</code> — payout readiness changed
                   </li>
                   <li>
                     <code>payment.succeeded</code> — patient paid
-                  </li>
-                  <li>
-                    <code>payment.failed</code> — checkout failed
-                  </li>
-                  <li>
-                    <code>payout.scheduled</code> — funds queued
-                  </li>
-                  <li>
-                    <code>payout.paid</code> — funds settled
-                  </li>
-                  <li>
-                    <code>refund.created</code> — refund issued (Phase 2.5)
                   </li>
                 </ul>
               </details>

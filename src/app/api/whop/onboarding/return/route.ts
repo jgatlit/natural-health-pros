@@ -2,67 +2,63 @@ import { NextRequest } from 'next/server';
 import { redirect } from 'next/navigation';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
-import { getPayoutStatus } from '@/lib/whop';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/**
- * Auth + ownership gate for this redirect target (not a webhook — a real browser hit).
- * Merges "no such practitioner" and "not your practitioner" into the same `/` outcome so a
- * hit can't distinguish an unknown slug from someone else's — mirrors the shape of
- * authorizeForSlug in practitioners/[slug]/edit/actions.ts (IDOR discipline), scoped to this
- * route's own redirect targets.
- */
-async function authorizeForSlug(slug: string) {
-  const session = await auth();
-  if (!session?.user?.id) {
-    const callbackUrl = `/api/whop/onboarding/return?slug=${encodeURIComponent(slug)}`;
-    redirect(`/auth/signin?callbackUrl=${encodeURIComponent(callbackUrl)}`);
-  }
-  const practitioner = await prisma.practitioner.findUnique({
-    where: { slug },
-    select: { id: true, userId: true, whopCompanyId: true },
-  });
-  const isOwner = practitioner?.userId === session.user.id;
-  const isAdmin = session.user.role === 'ADMIN';
-  if (!practitioner || (!isOwner && !isAdmin)) {
-    redirect('/');
-  }
-  return practitioner;
-}
+/** Public, non-disclosing landing. Deliberately NOT under /onboarding — see the note below. */
+const PUBLIC_LANDING = '/verification-submitted';
 
 /**
- * Whop lands the practitioner here the instant they finish the hosted KYC form — that fires
- * BEFORE the provider has actually approved anything. The authoritative signal is the
- * identity_profile.approved webhook, which lands independently (possibly later, possibly
- * never if it's dropped after Whop's retry window). So this route treats itself as
- * best-effort only: it never flips whopPayoutsEnabled, and only opportunistically refreshes
- * whopPayoutStatus from a read so the UI isn't stuck on "not_started" while the webhook is
- * in flight.
+ * Where Whop drops the practitioner after the hosted KYC form.
+ *
+ * DELIBERATELY UNAUTHENTICATED, and it must stay that way.
+ *
+ * This used to require a session and bounce to /auth/signin when there wasn't one. That is a
+ * dead end for two reasons, one of them structural:
+ *
+ *   1. Whop's callback is a Next.js CLIENT-SIDE navigation, so it appends `_rsc=` and fetches
+ *      this URL instead of navigating to it. A cross-origin fetch sends no cookies unless
+ *      `credentials:'include'`, and SameSite=Lax blocks them cross-site even then — so that
+ *      path can NEVER be authenticated. (Today it is CORS-blocked first and Next falls back to
+ *      a hard navigation, which is the only reason the flow works at all.)
+ *   2. Whop's KYC is Sumsub, whose standard flow offers "continue on your phone" for ID
+ *      capture. A practitioner who finishes on their phone has no session cookie there, ever.
+ *
+ * So the cookie is a coin flip on which device someone finished on — not a security boundary.
+ * The real boundary is elsewhere: payout state is owned by the identity_profile.* webhook
+ * (server-to-server, signed, no browser involved) with a reconciliation cron behind it. This
+ * route carries ZERO state responsibility; a practitioner who never comes back at all still
+ * ends up correct.
+ *
+ * Three properties make it safe to open up:
+ *   - NO WRITES. The previous opportunistic getPayoutStatus() refresh is gone. It was also dead
+ *     code — it queried by company id, which always 404s (see lib/whop.ts). Reconciliation now
+ *     lives in /api/cron/whop-reconcile where it can be authorized and rate-limited.
+ *   - NO DISCLOSURE. Every non-owner outcome — unknown slug, someone else's slug, no session —
+ *     returns the identical redirect, preserving the merged not-found/unauthorized discipline
+ *     used by authorizeForSlug in practitioners/[slug]/edit/actions.ts.
+ *   - REPLAY-HARMLESS. This URL is embedded in Whop's account-link JWT and sits in the address
+ *     bar, so it must be low-privilege. A pure redirect is.
  */
 export async function GET(request: NextRequest): Promise<Response> {
   const slug = request.nextUrl.searchParams.get('slug');
-  if (!slug) redirect('/');
 
-  const practitioner = await authorizeForSlug(slug);
-
-  if (practitioner.whopCompanyId) {
-    try {
-      const { status } = await getPayoutStatus(practitioner.whopCompanyId);
-      if (status !== null) {
-        await prisma.practitioner.update({
-          where: { id: practitioner.id },
-          data: { whopPayoutStatus: status },
-        });
+  // The session is CONSULTED to offer a nicer landing, never REQUIRED to proceed.
+  let ownerTarget: string | null = null;
+  if (slug) {
+    const session = await auth().catch(() => null);
+    if (session?.user?.id) {
+      const practitioner = await prisma.practitioner
+        .findUnique({ where: { slug }, select: { userId: true } })
+        .catch(() => null);
+      const isOwner = practitioner?.userId === session.user.id;
+      const isAdmin = session.user.role === 'ADMIN';
+      if (practitioner && (isOwner || isAdmin)) {
+        ownerTarget = `/practitioners/${slug}/edit?whop=pending#payments`;
       }
-    } catch (e) {
-      // Deliberately non-fatal. This read is a cosmetic head-start on a status the
-      // identity_profile webhook owns anyway, so a transient API failure must not tell a
-      // practitioner who just completed KYC successfully that something went wrong.
-      console.error('whop onboarding return: status refresh failed (continuing):', e);
     }
   }
 
-  redirect(`/practitioners/${slug}/edit?whop=pending#payments`);
+  redirect(ownerTarget ?? PUBLIC_LANDING);
 }

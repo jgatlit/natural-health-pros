@@ -105,6 +105,29 @@ function unresolved(type: string, data: Record<string, unknown>, envelope?: V1Ev
   return message;
 }
 
+/**
+ * Capture Whop's own resource ids as they float past.
+ *
+ * The webhook is the ONLY place the (company → idpf_/poact_) mapping can be learned. The REST
+ * list endpoints return the profiles but `linked_companies` reads back empty for parent-company
+ * API keys, so a listed profile cannot be attributed to one of our practitioners. Miss it here
+ * and reconciliation has nothing to poll.
+ */
+function idCapture(
+  practitioner: Practitioner,
+  data: Record<string, unknown>,
+): Prisma.PractitionerUpdateInput {
+  const out: Prisma.PractitionerUpdateInput = {};
+  const id = asString(data.id);
+  if (id?.startsWith('idpf_') && practitioner.whopIdentityProfileId !== id) {
+    out.whopIdentityProfileId = id;
+  }
+  if (id?.startsWith('poact_') && practitioner.whopPayoutAccountId !== id) {
+    out.whopPayoutAccountId = id;
+  }
+  return out;
+}
+
 async function handleEvent(
   type: string,
   data: Record<string, unknown>,
@@ -115,6 +138,7 @@ async function handleEvent(
       const practitioner = await resolvePractitioner(data, envelope);
       if (!practitioner) return unresolved(type, data, envelope);
       await updatePayoutState(practitioner.id, {
+        ...idCapture(practitioner, data),
         whopPayoutsEnabled: true,
         whopPayoutStatus: 'connected',
         whopKycCompletedAt: new Date(),
@@ -126,6 +150,7 @@ async function handleEvent(
       const practitioner = await resolvePractitioner(data, envelope);
       if (!practitioner) return unresolved(type, data, envelope);
       await updatePayoutState(practitioner.id, {
+        ...idCapture(practitioner, data),
         whopPayoutsEnabled: false,
         whopPayoutStatus: 'verification_failed',
         whopKycStatus: 'REJECTED',
@@ -136,6 +161,7 @@ async function handleEvent(
       const practitioner = await resolvePractitioner(data, envelope);
       if (!practitioner) return unresolved(type, data, envelope);
       await updatePayoutState(practitioner.id, {
+        ...idCapture(practitioner, data),
         whopPayoutsEnabled: false,
         whopPayoutStatus: 'action_required',
         whopKycStatus: 'PENDING',
@@ -145,7 +171,7 @@ async function handleEvent(
     case 'identity_profile.updated': {
       const practitioner = await resolvePractitioner(data, envelope);
       if (!practitioner) return unresolved(type, data, envelope);
-      const update: Prisma.PractitionerUpdateInput = {};
+      const update: Prisma.PractitionerUpdateInput = idCapture(practitioner, data);
       if (typeof data.payouts_enabled === 'boolean') update.whopPayoutsEnabled = data.payouts_enabled;
       const payoutStatus = asString(data.payout_status);
       if (payoutStatus) update.whopPayoutStatus = payoutStatus;
@@ -156,7 +182,7 @@ async function handleEvent(
     case 'payout_account.status_updated': {
       const practitioner = await resolvePractitioner(data, envelope);
       if (!practitioner) return unresolved(type, data, envelope);
-      const update: Prisma.PractitionerUpdateInput = {};
+      const update: Prisma.PractitionerUpdateInput = idCapture(practitioner, data);
       const status = asString(data.status);
       if (status) update.whopPayoutStatus = status;
       if (typeof data.payouts_enabled === 'boolean') update.whopPayoutsEnabled = data.payouts_enabled;

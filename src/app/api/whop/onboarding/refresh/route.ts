@@ -17,7 +17,16 @@ export const dynamic = 'force-dynamic';
 async function authorizeForSlug(slug: string) {
   const session = await auth();
   if (!session?.user?.id) {
-    const callbackUrl = `/api/whop/onboarding/refresh?slug=${encodeURIComponent(slug)}`;
+    // UNLIKE the return route, this one STAYS gated: it mints an account link carrying payout
+    // scopes (create/update/delete_destination, withdraw_funds), so an open version would let
+    // anyone request a privileged link for any practitioner's connected account.
+    //
+    // The callback used to point back at this API route, which re-mints a link the moment
+    // sign-in completes — a confusing bounce straight back out to Whop. Sending them to their
+    // own payments section instead lands them somewhere they can see their status and choose
+    // to continue, which is also the right destination if their link expired because they
+    // walked away mid-flow.
+    const callbackUrl = `/practitioners/${slug}/edit#payments`;
     redirect(`/auth/signin?callbackUrl=${encodeURIComponent(callbackUrl)}`);
   }
   const practitioner = await prisma.practitioner.findUnique({

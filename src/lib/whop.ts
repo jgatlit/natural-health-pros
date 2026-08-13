@@ -185,23 +185,75 @@ export async function createAccountLink(params: {
 /**
  * Reconciliation read for payout readiness.
  *
- * Deliberately conservative: the REST payout-account object exposes only the calculated `status`.
- * The authoritative `payouts_enabled` boolean is delivered on identity_profile.* webhooks — a
- * `connected` status paired with `payouts_enabled: false` is an active restriction, and this
- * endpoint cannot see the difference. Use this to catch dropped webhooks, not as the gate.
+ * ⚠️ Takes the `poact_…` PAYOUT ACCOUNT id, not the company id.
+ *
+ * This previously took a companyId, and the 404 branch below explained it away as "a company
+ * with no payout account yet — the normal pre-KYC state, verified against the platform company
+ * 2026-07-29". That verification was run against a company that genuinely had no payout account,
+ * so it could not distinguish "none exists" from "wrong id type". Confirmed live 2026-08-13:
+ * `GET /payout_accounts/biz_8RDm3wyLlTRUPy` 404s while `GET /payout_accounts/poact_RdNctOwjkAMu`
+ * returns 200 `connected` — for the SAME account. Every call this function ever made 404'd, so
+ * the dropped-webhook reconciliation silently reported "nothing to see" for every practitioner.
  */
-export async function getPayoutStatus(companyId: string): Promise<{ status: WhopPayoutStatus | null }> {
+export async function getPayoutStatus(
+  payoutAccountId: string,
+): Promise<{ status: WhopPayoutStatus | null }> {
   try {
-    const account = await client('read payout status').payoutAccounts.retrieve(companyId);
+    const account = await client('read payout status').payoutAccounts.retrieve(payoutAccountId);
     return { status: (account.status as WhopPayoutStatus | null) ?? null };
   } catch (e) {
-    // A company with no payout account yet 404s ("This PayoutAccount was not found") — that is
-    // the normal pre-KYC state, not an error. Verified against the platform company 2026-07-29.
+    // Now an honest 404: with a correct poact_ id, not-found really does mean no such account.
     if (e && typeof e === 'object' && 'status' in e && (e as { status: number }).status === 404) {
       return { status: null };
     }
     throw e;
   }
+}
+
+/** What GET /identity_profiles/{id} actually returns for the fields that gate payouts. */
+export type WhopIdentityProfile = {
+  /** Identity-verification outcome. `approved` is THE signal that KYC is complete. */
+  status: string | null;
+  payoutStatus: WhopPayoutStatus | null;
+  payoutsEnabled: boolean | null;
+};
+
+/**
+ * Read the identity profile — the only endpoint that exposes all three payout-gating fields at
+ * once (`status`, `payout_status`, `payouts_enabled`).
+ *
+ * Rebased onto `status: 'approved'` deliberately. There is no usable "verified" signal to key
+ * off: the company object's `verified` boolean reads false for every company we own, including
+ * the platform company that has been live since June — it is the Whop marketplace badge, not a
+ * payout gate. `status: 'approved'` is the field that actually reflects a completed ID check.
+ *
+ * ⚠️ `payouts_enabled` read here may under-report. `linked_companies` demonstrably reads back
+ * empty for parent-company API keys while arriving populated on the webhook for the same
+ * profile, so parent-key reads are known to omit fields. Treat a `false` from this endpoint as
+ * "unconfirmed", never as authority to REVOKE a gate the webhook has opened.
+ */
+export async function getIdentityProfile(profileId: string): Promise<WhopIdentityProfile | null> {
+  const base = process.env.WHOP_API_BASE ?? 'https://api.whop.com/api/v1';
+  if (!isWhopPlatformsReady()) throw new WhopNotConfigured('read identity profile');
+
+  const res = await fetch(`${base}/identity_profiles/${encodeURIComponent(profileId)}`, {
+    headers: { Authorization: `Bearer ${process.env.WHOP_COMPANY_API_KEY}` },
+  });
+  if (res.status === 404) return null;
+  if (!res.ok) {
+    throw new Error(`Whop identity_profiles/${profileId} failed (${res.status})`);
+  }
+  const body = (await res.json()) as {
+    status?: unknown;
+    payout_status?: unknown;
+    payouts_enabled?: unknown;
+  };
+  return {
+    status: typeof body.status === 'string' ? body.status : null,
+    payoutStatus:
+      typeof body.payout_status === 'string' ? (body.payout_status as WhopPayoutStatus) : null,
+    payoutsEnabled: typeof body.payouts_enabled === 'boolean' ? body.payouts_enabled : null,
+  };
 }
 
 /** List our connected accounts — the roster behind /admin/connected-accounts. */
