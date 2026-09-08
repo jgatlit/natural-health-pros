@@ -128,6 +128,11 @@ export default auth(async (req) => {
 });
 
 export const config = {
-  // Avoid running middleware on static assets + Next internals
-  matcher: ['/((?!api|_next/static|_next/image|favicon.ico).*)'],
+  // Avoid running middleware on static assets + Next internals.
+  //
+  // `.well-known` is excluded deliberately, not for tidiness. It serves Whop's Apple Pay
+  // domain-association file, which Apple requires be "served with the correct content (no
+  // modifications)". The pass-through branch runs stampAttribution(), so leaving the path
+  // matched would put a cookie-writing wrapper in front of a file Apple fetches and compares.
+  matcher: ['/((?!api|_next/static|_next/image|favicon.ico|\\.well-known).*)'],
 };
