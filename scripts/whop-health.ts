@@ -148,9 +148,58 @@ async function dbChecks(prisma: PrismaClient): Promise<void> {
   }
 }
 
+/**
+ * Apple Pay domain association — the file that lets wallets render in EMBEDDED checkout.
+ *
+ * Whop serves one platform-wide file (it carries a `pspId` and no merchant id), and we mirror
+ * it at our apex so any connected account can register naturalhealthpros.com without a DNS
+ * repoint. Two silent failure modes make this worth a check rather than a one-time setup note:
+ *
+ *   1. The file 404s (never deployed, or a routing/middleware change swallowed `.well-known`).
+ *   2. Whop ROTATES the file. Apple then stops matching, Apple Pay quietly disappears from
+ *      checkout, and nothing anywhere throws — the buyer just sees one fewer button.
+ *
+ * Neither is visible from the UI, from logs, or from a 200. Byte-compare is the only oracle.
+ */
+const APPLE_PAY_PATH = '/.well-known/apple-developer-merchantid-domain-association';
+const WHOP_APPLE_PAY_SOURCE =
+  'https://whop.com/.well-known/apple-platform-integrator/apple-developer-merchantid-domain-association';
+
+async function applePayChecks(): Promise<void> {
+  const ours = await fetch(`${BASE}${APPLE_PAY_PATH}`)
+    .then(async (r) => ({ status: r.status, body: r.ok ? await r.text() : null }))
+    .catch(() => ({ status: 0, body: null }));
+
+  record(
+    'apple pay domain file served',
+    ours.status === 200 && !!ours.body,
+    ours.status === 200 ? `HTTP 200, ${ours.body?.length ?? 0} bytes` : `HTTP ${ours.status} (expect 200)`,
+  );
+  if (!ours.body) return;
+
+  // Upstream unreachable is not OUR failure — mirror the drift check and skip rather than
+  // reporting a red that a Whop outage would cause.
+  const theirs = await fetch(WHOP_APPLE_PAY_SOURCE)
+    .then(async (r) => (r.ok ? await r.text() : null))
+    .catch(() => null);
+  if (theirs === null) {
+    record('apple pay file matches Whop', true, 'skipped — Whop source unreachable');
+    return;
+  }
+
+  record(
+    'apple pay file matches Whop',
+    ours.body === theirs,
+    ours.body === theirs
+      ? 'byte-identical to Whop platform-integrator file'
+      : `DRIFT — Whop rotated the file; re-copy it (ours ${ours.body.length}b, theirs ${theirs.length}b)`,
+  );
+}
+
 (async () => {
   console.log(`Whop health · ${BASE}\n`);
   await httpChecks();
+  await applePayChecks();
 
   const prisma = new PrismaClient();
   try {
