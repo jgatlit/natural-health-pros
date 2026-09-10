@@ -1,5 +1,27 @@
 # Standalone primer — full resolution for vaultless sessions
 
+> ⚠️ **STATUS RE-VERIFIED 2026-09-04 by `/process-inbox` (automated run) — three of this primer's blockers have since SHIPPED. Read this before acting on anything below.**
+> This primer was written 2026-09-03 20:07, *before* that evening's merges. Its "NOT YET MERGED" /
+> "Not yet built" claims are **stale**. Verified against `git branch --contains` and `git log` in
+> this repo, not inherited from any handoff:
+>
+> | Primer claim | Verified state 2026-09-04 | Evidence |
+> |---|---|---|
+> | `feat/booking-offerings-redundancy-fix` (`dd566a4`) **NOT YET MERGED** | ✅ **MERGED to `main`** 2026-09-03 | PR #110, merge `1cd0bb6`; `git branch --contains dd566a4` lists `main` |
+> | "manage your Whop account" button — **Not yet built** | ✅ **BUILT** 2026-09-03 | `daaf444` *feat(payments): add a plain external link to the practitioner's full Whop account* |
+> | Publish / Accept Payments labeling confusion | ✅ **CONSOLIDATED into one step** 2026-09-03 | PR #111, `627fddb`; also recorded in the vault entity's Progress Log |
+>
+> Shipped after this primer and not described anywhere in it: **PR #112 / #113** — practitioner-survey
+> submissions now email Jonathan/Amy/Sarah automatically (`108c0f8`, `be419e3`, both 2026-09-04).
+>
+> **Still genuinely open — do NOT treat as covered by the above:** the **"two pink buttons"** styling
+> bug Amy raised at the close of the call. Nothing in `dd566a4`, `daaf444` or PR #111 was scoped at
+> simultaneous hero/bold styling on multiple Booking Links. Open question 1 below stands verbatim.
+>
+> ⚠️ **Merge ≠ deploy.** Containment in `main` is what was verified here. Production liveness was
+> **not** checked (no `dpl_` id confirmed this run) — the project's own "Verify what is actually LIVE"
+> rule still applies before telling Amy or Sarah a fix is live. Today is the launch date.
+
 Canonical meeting note lives at `~/vault/300 Entities/Meetings/2026-09-03 HHE Amy Sarah Jonathan - Booking Flow Live Walkthrough + Practitioner Launch Plan.md`. This primer exists so a session opened directly in this repo (not the vault) has full context without needing wiki-link resolution.
 
 ## Meeting facts
@@ -21,7 +43,7 @@ Canonical meeting note lives at `~/vault/300 Entities/Meetings/2026-09-03 HHE Am
 
 ## Critical cross-reference: this call happened using THIS repo's live dev server
 
-Zoom-API's live source lookup (`GET /api/meeting/<uuid>` on `vps:~/apps/Zoom-API`, Flask :3002) plus operator confirmation ("no other parallel changes were made") establish that the "this morning" / "20 minutes ago" live changes Jonathan narrates on the call are the **same same-day engineering session** that produced this repo's `feat/booking-offerings-redundancy-fix` branch (commit `dd566a4`) — Jonathan was screen-sharing this repo's local dev server mid-implementation. That branch is **NOT YET MERGED to `main`** or deployed to production as of this primer.
+Zoom-API's live source lookup (`GET /api/meeting/<uuid>` on `vps:~/apps/Zoom-API`, Flask :3002) plus operator confirmation ("no other parallel changes were made") establish that the "this morning" / "20 minutes ago" live changes Jonathan narrates on the call are the **same same-day engineering session** that produced this repo's `feat/booking-offerings-redundancy-fix` branch (commit `dd566a4`) — Jonathan was screen-sharing this repo's local dev server mid-implementation. That branch is **NOT YET MERGED to `main`** or deployed to production as of this primer. — ✏️ **SUPERSEDED 2026-09-04: it WAS merged the same evening** (PR #110, merge `1cd0bb6`). Deploy status remains unverified. See the status banner at the top of this file.
 
 **Practical implication:** several of today's call action items are already done in that branch; others are genuinely unbuilt. Do not assume anything is live in production until the branch is merged and a deploy is verified (see project CLAUDE.md's "Verify what is actually LIVE" rule — check `dpl_` id, not status codes).
 
@@ -37,9 +59,9 @@ Zoom-API's live source lookup (`GET /api/meeting/<uuid>` on `vps:~/apps/Zoom-API
 
 - [ ] Jonathan — Provide the practitioner-preferences survey outline to Amy and Sarah by 2026-09-04 at the latest.
 - [ ] Jonathan — Produce a written "getting started" guide/link for Sarah's 2026-09-04 announcement.
-- [ ] Jonathan — Clarify Publish / Accept Payments / Show on Profile labeling — Sarah herself had the wrong mental model of what "Publish" does.
-- [ ] Jonathan — Restore the Offering description on `/book` (regressed live during the call, caught by Amy). **Already fixed** in `feat/booking-offerings-redundancy-fix` (task 3 of that branch's 6-item scope) — needs merge/deploy, not fresh implementation.
-- [ ] Jonathan — Add a "manage your Whop account" button in the edit-page payments section (no in-portal link exists today). **Not yet built.**
+- [x] Jonathan — Clarify Publish / Accept Payments / Show on Profile labeling — Sarah herself had the wrong mental model of what "Publish" does. ✅ **SHIPPED 2026-09-03** — Publish + Accept Payments consolidated into a single step (PR #111, `627fddb`). Verified 2026-09-04. ⚠️ "Show on Profile" was not part of that change — if the mental-model gap persists it is now narrower, not closed.
+- [ ] Jonathan — Restore the Offering description on `/book` (regressed live during the call, caught by Amy). **Already fixed** in `feat/booking-offerings-redundancy-fix` (task 3 of that branch's 6-item scope) — needs merge/deploy, not fresh implementation. — ✅ **MERGED 2026-09-03** (PR #110). Only deploy verification remains.
+- [x] Jonathan — Add a "manage your Whop account" button in the edit-page payments section (no in-portal link exists today). ~~**Not yet built.**~~ ✅ **BUILT 2026-09-03** — `daaf444` *feat(payments): add a plain external link to the practitioner's full Whop account*. Verified 2026-09-04.
 - [ ] Jonathan — **UNRESOLVED, not diagnosed live:** why does Amy's profile show two bold/pink-styled booking-link buttons simultaneously? Raised at the very end of the call, distinct from the content/title redundancy already explained and already partially fixed on the branch. **Needs fresh investigation — do not assume the branch resolves this.**
 - [ ] Jonathan — Verify whether Whop supports a custom bank-statement descriptor (practitioner/business name instead of generic "WAP.com Entertainment"). Explicitly unverified as of the call.
 - [ ] Jonathan — Compile key messaging items + screenshots (Publish/Accept Payments, Whop account management, revenue-share model, tax setting) into a reference doc for Sarah.
@@ -89,6 +111,7 @@ Zoom-API's live source lookup (`GET /api/meeting/<uuid>` on `vps:~/apps/Zoom-API
 1. Is the "two pink buttons" issue the same root cause as the already-fixed offering/link redundancy, or a genuinely separate styling bug (multiple Booking Links independently getting hero/bold treatment)? **Unverified — investigate fresh, do not assume.**
 2. Does Whop support a custom bank-statement descriptor per connected account? **Unverified per Jonathan on the call.**
 3. Is `feat/booking-offerings-redundancy-fix` (commit `dd566a4`) merged to `main` and deployed yet? **Check before assuming any of today's promised fixes are live** — verify by `dpl_` id per the project's own "Verify what is actually LIVE" rule (project CLAUDE.md), not by status code.
+   - ✅ **ANSWERED 2026-09-04 (merge half only):** merged to `main` 2026-09-03 via PR #110, merge commit `1cd0bb6` — confirmed by `git branch --contains dd566a4`. **The deploy half is still unanswered** — no `dpl_` id was checked, so the "verify LIVE" rule still binds before making any claim to Amy or Sarah.
 
 ## Next-step suggestion
 

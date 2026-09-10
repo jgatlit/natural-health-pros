@@ -112,7 +112,14 @@ Authoritative source documents kept in the operator's vault / Downloads (vault i
 - **Holistic Health Educators company entity**: `~/vault/300 Entities/Companies/Holistic Health Educators.md`
 - **Project-side memory** (auto-loaded by Claude at this cwd): `~/.claude/projects/-home-jgatlit-projects-HHE-HHE-directory/memory/MEMORY.md` indexes 4 topic files — CSS bootstrap, seed strategy, Typesense/InstantSearch gotchas, Vercel env provisioning
 - **Vault-side memory pointers**: `reference_practicenear_repo_topology` (broad context) + `reference_neon_vercel_prisma_integration` (deployment gotchas)
-- **2026-09-03 call primer**: [`primers/2026-09-03 HHE Amy Sarah Jonathan - Booking Flow Live Walkthrough + Practitioner Launch Plan - Primer.md`](primers/2026-09-03%20HHE%20Amy%20Sarah%20Jonathan%20-%20Booking%20Flow%20Live%20Walkthrough%20+%20Practitioner%20Launch%20Plan%20-%20Primer.md) — full call notes, validated action items, and the still-open "two pink buttons" bug ahead of the 2026-09-04 practitioner launch
+- **2026-09-03 call primer** ⭐ **LATEST CONTEXT — fold this into working context at session start**: [`primers/2026-09-03 HHE Amy Sarah Jonathan - Booking Flow Live Walkthrough + Practitioner Launch Plan - Primer.md`](primers/2026-09-03%20HHE%20Amy%20Sarah%20Jonathan%20-%20Booking%20Flow%20Live%20Walkthrough%20+%20Practitioner%20Launch%20Plan%20-%20Primer.md) — full call notes, decisions, action items by owner. **Read its 2026-09-04 status banner first**: the primer's body was written pre-merge and its "NOT YET MERGED" / "Not yet built" claims are stale; the banner carries the git-verified corrections.
+
+### Current engagement state (durable — updated 2026-09-04)
+
+- **Practitioner launch is 2026-09-04 (today, as of this line).** Sarah Schindler announces to the **14** currently-listed directory practitioners — headcount grew from the original 12-practitioner pilot roster. Deliverables owed from Jonathan for that announcement: a short Loom overview + a written getting-started guide.
+- **Shipped 2026-09-03/04 and now on `main`**: booking-link/offering redundancy fix + `/book` description restore (PR #110), Publish + Accept Payments consolidated into one step (PR #111), plain external link to the practitioner's full Whop account (`daaf444`), automatic email to Jonathan/Amy/Sarah on every practitioner-survey submission (PRs #112–#113).
+- **Known open, pre-launch**: the **"two pink buttons"** styling bug on Amy's profile (simultaneous hero/bold treatment on multiple Booking Links) — raised at the close of the 09-03 call, never diagnosed, and *not* covered by any of the merges above. Also unverified: whether Whop supports a custom bank-statement descriptor.
+- **Merge is verified; production deploy is not.** Per this file's "Verify what is actually LIVE" rule, confirm a `dpl_` id before telling Amy or Sarah that any of the above is live for practitioners.
 
 ## Working agreements with the operator
 
