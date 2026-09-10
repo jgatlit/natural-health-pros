@@ -5,7 +5,8 @@
 | **Date** | 2026-09-10 |
 | **Scope** | Read-only survey of the applied visual system. No code changed. |
 | **Sources read** | `src/app/globals.css`, `src/app/layout.tsx`, `src/components/ui/*`, `src/components/frontier/*`, `src/app/page.tsx` |
-| **Visual reference** | https://claude.ai/code/artifact/452b8e62-9b1d-4b56-8488-e7bdbdf4a814 — every token rendered from its literal repo value (private artifact, Jonathan's account) |
+| **Visual reference** | https://nobox.teamwork.chem.dev/s/nhp-design-system — every token rendered from its literal repo value. Public, no auth, no expiry; vault artifact `art_6a232a1d92514255a482`. |
+| **Origin** | https://claude.ai/code/artifact/452b8e62-9b1d-4b56-8488-e7bdbdf4a814 (private to Jonathan's account) |
 | **Related memory** | `gotcha_theme_d_dark_and_cta_tier` |
 
 ## The system as it stands
