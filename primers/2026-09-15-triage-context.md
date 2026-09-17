@@ -73,3 +73,32 @@ Five connected accounts exist today, each carrying `metadata.practitioner_id` li
 | `biz_KMWK9qDuFlzQ1s` | Julie Ericson | 2026-09-11 |
 
 So the connected-account architecture is live and Sarah + Amy are both already onboarded — the 50/50 split-checkout test has a real counterparty and is **not blocked on Whop access**. Both read back `verified: false`; payout readiness still needs confirming against a real transaction.
+
+## API version + split checkout — VERIFIED 2026-09-17
+
+**API version `2026-09-15` changes nothing for us.** Payloads for `/companies?parent_company_id=…`,
+`/payments`, `/products` and `/memberships` are byte-identical under `2025-01-01` and `2026-09-15`
+(diffed live). `/plans` 400s and `/checkout_sessions` 404s identically under both. The repo never
+sends `x-api-version`, so it follows whatever the key is pinned to — no code change needed, and no
+capability was gained or lost.
+
+**`account_id`, not `company_id`.** The `⚠️ VERIFY ON FIRST LIVE CALL` warning in `src/lib/whop.ts`
+resolved against the docs: `POST /checkout_configurations` takes `plan.account_id`. `company_id` is
+**not rejected — it is silently ignored**, so the plan lands on the parent company instead of the
+practitioner's. It only surfaced because the application fee then 400s with
+"Application fee amount can only be set for connected accounts". Without a fee it would have
+succeeded and billed the wrong company. Fixed; every Layer Y publish was affected.
+
+**50/50 split checkout is live on Sarah's account** (`biz_xExE1eUWG4ZMeR`): config
+`ch_xTtPtLPZBLvT8Vo`, plan `plan_fg9PBQdmRsCpX`, $10.00 with a $5.00 application fee →
+https://whop.com/checkout/ch_xTtPtLPZBLvT8Vo/
+
+Creation is not settlement. A human still has to pay that link with a real card; only the settled
+transaction proves the money splits both ways and confirms the "full visibility over totals" claim
+made to Amy on 09-14.
+
+**Pricing is parameterised** in `src/lib/pricing-plans.ts` (+ `tests/pricing-plans.test.ts`, env
+block in `.env.example`). Splits are the PLATFORM share in basis points — `platformFeeBps`, never a
+bare "split", because a meeting note's "50/50" never says which side it names. Defaults ($39/mo,
+Plan A 20%, Plan B 50% first session / 0% after) are placeholders standing in for Amy's decision,
+not decisions.

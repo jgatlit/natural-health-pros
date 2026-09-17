@@ -67,9 +67,11 @@ function client(action: string): Whop {
  * `company_id`. Since a future platform fee is a stated requirement, this one call is issued
  * against the documented contract instead of the stale generated type.
  *
- * ⚠️ VERIFY ON FIRST LIVE CALL. If Whop 400s on `company_id`, retry with `account_id` — that is
- * the single most likely failure in this integration, and it cannot be checked without a
- * scoped Company API key.
+ * VERIFIED LIVE 2026-09-17 — the field is `account_id`, and the docs are wrong. `company_id` is
+ * not rejected, it is silently IGNORED: the plan is created on OUR company instead of the
+ * practitioner's. The only symptom is a confusing downstream 400 ("Application fee amount can only
+ * be set for connected accounts") on a company that plainly has a parent. Without a fee present it
+ * would fail silently and bill the wrong company.
  */
 async function whopPost<T>(path: string, body: unknown, action: string): Promise<T> {
   if (!isWhopPlatformsReady()) throw new WhopNotConfigured(action);
@@ -326,7 +328,8 @@ export async function createOfferingCheckout(params: {
     {
       mode: 'payment',
       plan: {
-        company_id: params.companyId,
+        // account_id, NOT company_id — see the whopPost docstring. Verified live 2026-09-17.
+        account_id: params.companyId,
         currency: 'usd',
         plan_type: recurring ? 'renewal' : 'one_time',
         initial_price: price,
