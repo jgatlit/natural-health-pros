@@ -55,3 +55,21 @@
 ## Still-open items from the 09-03 primer
 
 **Resolved 2026-09-17.** The "two pink buttons" styling bug and the Whop bank-statement descriptor are **dropped by operator directive** and no longer tracked. Production deploy state of the 09-03/04 merges is **confirmed live**: naturalhealthpros.com serves `dpl_6A67xkVHEd1bRdWH9uXguNo3axsZ` (commit `278aa86`, PR #117, ready 2026-09-10), which contains PRs #110-#113.
+
+## Whop key + connected accounts — VERIFIED 2026-09-17
+
+The "our key is an App key missing `company:create`" blocker in `docs/PHASE-2C-WHOP-CONNECTED-ACCOUNTS.md` is **stale**. `WHOP_COMPANY_API_KEY` (`apik_SLZY…f8e4`, company key on `biz_Vpj1G2ryNdPCG0`, API version 2025-01-01) works: `GET /api/v1/companies/biz_Vpj1G2ryNdPCG0` → 200, `GET /api/v5/company` → 200. The earlier 400 came from calling the **collection** endpoint `GET /api/v1/companies` with no `parent_company_id` — that shape requires `company:basic:read` and is not how child accounts are listed.
+
+**Correct enumeration:** `GET /api/v1/companies?parent_company_id=biz_Vpj1G2ryNdPCG0`.
+
+Five connected accounts exist today, each carrying `metadata.practitioner_id` linking back to `Practitioner.whopCompanyId`:
+
+| Company | Title | Created |
+|---|---|---|
+| `biz_8RDm3wyLlTRUPy` | Jonathan Gudger \| aiChemist | 2026-07-29 |
+| `biz_xExE1eUWG4ZMeR` | Sarah Schindler | 2026-08-11 |
+| `biz_V9YbXLfAEX9Xam` | Jonathan Gudger | 2026-08-15 |
+| `biz_qVQXpYwtcdCNAm` | Amy Sprouse | 2026-09-02 |
+| `biz_KMWK9qDuFlzQ1s` | Julie Ericson | 2026-09-11 |
+
+So the connected-account architecture is live and Sarah + Amy are both already onboarded — the 50/50 split-checkout test has a real counterparty and is **not blocked on Whop access**. Both read back `verified: false`; payout readiness still needs confirming against a real transaction.
