@@ -3,8 +3,10 @@
  *
  * Adopted on the 2026-09-14 Amy call; every figure below is still OPEN (primers/2026-09-15-
  * triage-context.md). The defaults here are placeholders so the code runs, NOT decisions: Plan A
- * at $39/mo is Jonathan's lean out of $29/$39/$49, and Plan B at 50/50 is the split the first
- * live checkout test exercises. Amy owns the real numbers. Override via env, never by editing a
+ * at $39/mo is Jonathan's lean out of $29/$39/$49, and Plan B is 60/40 on a sourced first session
+ * (operator ruling 2026-09-18 — practitioner 60, platform 40; this is the split Amy's own
+ * break-even math on the 2026-09-14 call assumed). The 50/50 used for the first live checkout test
+ * was the upper end of the range discussed, not the decision. Amy owns the real numbers. Override via env, never by editing a
  * literal into a component — that is how the four previous fee models (5%, 10%+10%, 20%/0%) each
  * ended up hardcoded in a different place.
  *
@@ -75,7 +77,7 @@ export function practitionerPlans(): Record<PlanKey, PractitionerPlan> {
       key: 'PLAN_B',
       label: process.env.PLAN_B_LABEL?.trim() || 'Plan B',
       monthlyFeeUsdCents: envInt('PLAN_B_MONTHLY_FEE_CENTS', 0),
-      firstSessionPlatformFeeBps: envBps('PLAN_B_FIRST_SESSION_FEE_BPS', 5000),
+      firstSessionPlatformFeeBps: envBps('PLAN_B_FIRST_SESSION_FEE_BPS', 4000),
       // Plan B's later sessions are booked privately between practitioner and client. Nothing in
       // the product enforces that today — an open design question from the 09-14 call, not a bug.
       laterSessionPlatformFeeBps: envBps('PLAN_B_LATER_SESSION_FEE_BPS', 0),
@@ -183,7 +185,10 @@ export function planComparison(): {
   // Whole first sessions, not a smooth curve: a practitioner reasons in "two clients a month",
   // not in dollars of gross. The volumes bracket Amy'''s ~$150/mo break-even at a typical session
   // price so the crossover is visible rather than asserted.
-  const sessionPriceCents = envInt('PLAN_COMPARISON_SESSION_PRICE_CENTS', 15_000);
+  // $100, because that is the number Amy reasoned from on 2026-09-14 ("that's a twenty dollar
+  // difference on a hundred dollars") and because HHE's stated standard is first sessions under
+  // $100, promoted hardest at $75 or less (2026-05-28 call).
+  const sessionPriceCents = envInt('PLAN_COMPARISON_SESSION_PRICE_CENTS', 10_000);
   const breakEven = [1, 2, 4, 8].map((count) => {
     const gross = sessionPriceCents * count;
     const a =

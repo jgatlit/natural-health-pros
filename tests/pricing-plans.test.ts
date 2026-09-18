@@ -39,7 +39,7 @@ describe('pricing-plans', () => {
     expect(plans.PLAN_A.monthlyFeeUsdCents).toBe(3900);
     expect(plans.PLAN_A.firstSessionPlatformFeeBps).toBe(2000);
     expect(plans.PLAN_B.monthlyFeeUsdCents).toBe(0);
-    expect(plans.PLAN_B.firstSessionPlatformFeeBps).toBe(5000);
+    expect(plans.PLAN_B.firstSessionPlatformFeeBps).toBe(4000);
     expect(plans.PLAN_B.laterSessionPlatformFeeBps).toBe(0);
   });
 
@@ -62,10 +62,10 @@ describe('pricing-plans', () => {
     expect(() => getPlan('PLAN_A')).toThrow(/non-negative integer/);
   });
 
-  it('splits a first session 50/50 under Plan B', () => {
+  it('splits a sourced first session 60/40 under Plan B — practitioner takes the larger share', () => {
     const args = { plan: 'PLAN_B' as const, priceUsdCents: 15_000, isFirstSession: true };
-    expect(platformFeeCents(args)).toBe(7_500);
-    expect(practitionerNetCents(args)).toBe(7_500);
+    expect(platformFeeCents(args)).toBe(6_000);
+    expect(practitionerNetCents(args)).toBe(9_000);
   });
 
   it('takes nothing from a Plan B later session', () => {
@@ -85,8 +85,8 @@ describe('pricing-plans', () => {
 
   it('rounds the fee down so the half-cent goes to the practitioner', () => {
     const args = { plan: 'PLAN_B' as const, priceUsdCents: 4_501, isFirstSession: true };
-    expect(platformFeeCents(args)).toBe(2_250);
-    expect(practitionerNetCents(args)).toBe(2_251);
+    expect(platformFeeCents(args)).toBe(1_800);
+    expect(practitionerNetCents(args)).toBe(2_701);
   });
 
   it('never charges a fee on a free or unpriced session', () => {
@@ -94,7 +94,7 @@ describe('pricing-plans', () => {
   });
 
   it('formats splits for display', () => {
-    expect(formatBpsAsPercent(5_000)).toBe('50%');
+    expect(formatBpsAsPercent(4_000)).toBe('40%');
     expect(formatBpsAsPercent(2_000)).toBe('20%');
     expect(formatBpsAsPercent(1_250)).toBe('12.50%');
   });

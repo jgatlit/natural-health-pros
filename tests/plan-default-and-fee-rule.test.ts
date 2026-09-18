@@ -29,7 +29,7 @@ describe('plan default + once-vs-ongoing fee rule', () => {
   });
 
   it("charges Plan B's first-session split once and never again", () => {
-    expect(sessionFeeBps({ plan: 'PLAN_B', claim: 'NONE' })).toBe(5_000);
+    expect(sessionFeeBps({ plan: 'PLAN_B', claim: 'NONE' })).toBe(4_000);
     expect(sessionFeeBps({ plan: 'PLAN_B', claim: 'LIVE' })).toBe(0);
     // The promise was "book them privately after that" — a lapsed ledger row must not re-charge.
     expect(sessionFeeBps({ plan: 'PLAN_B', claim: 'EXPIRED' })).toBe(0);
@@ -44,7 +44,7 @@ describe('plan default + once-vs-ongoing fee rule', () => {
 
   it('can be flipped back to recurring for Plan B if the term ever changes', () => {
     process.env.PLAN_B_FIRST_SESSION_FEE_ONCE = 'false';
-    expect(sessionFeeBps({ plan: 'PLAN_B', claim: 'EXPIRED' })).toBe(5_000);
+    expect(sessionFeeBps({ plan: 'PLAN_B', claim: 'EXPIRED' })).toBe(4_000);
   });
 
   it('never charges on a free session', () => {
@@ -52,6 +52,6 @@ describe('plan default + once-vs-ongoing fee rule', () => {
   });
 
   it('rounds down in the practitioner favour', () => {
-    expect(sessionFeeCents({ plan: 'PLAN_B', claim: 'NONE', priceUsdCents: 4_501 })).toBe(2_250);
+    expect(sessionFeeCents({ plan: 'PLAN_B', claim: 'NONE', priceUsdCents: 4_501 })).toBe(1_800);
   });
 });
