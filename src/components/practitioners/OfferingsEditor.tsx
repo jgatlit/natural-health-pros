@@ -289,7 +289,7 @@ function PublishRow({
     <p className="border-t pt-3 text-xs text-muted-foreground">
       Set up payouts to sell this online — see{' '}
       <a href="#payments" className="font-medium underline underline-offset-2 hover:text-foreground">
-        Patient payments
+        Client payments
       </a>{' '}
       below. Bookings still work via your booking link either way.
     </p>

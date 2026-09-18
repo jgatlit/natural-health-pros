@@ -4,6 +4,7 @@ import { ArrowLeft, Check, AlertCircle, X, Sparkles } from 'lucide-react';
 import { auth } from '@/auth';
 import { QUALIFICATIONS_HEADING } from '@/lib/profile-sections';
 import { prisma } from '@/lib/prisma';
+import { monthlyFeeLabel } from '@/lib/pricing-plans';
 import { isWhopPlatformsReady } from '@/lib/whop';
 import { profileCompletenessSignals } from '@/lib/practitioner-indexer';
 import { OFFERING_ORDER, SPECIALTY_ORDER } from '@/lib/practitioner-ordering';
@@ -411,7 +412,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
         {searchParams.error === 'payouts-not-ready' && (
           <Card className="border-destructive/30 bg-destructive/5 p-3">
             <p className="text-xs text-destructive">
-              Set up payouts before publishing an offering — see &ldquo;Patient payments&rdquo;
+              Set up payouts before publishing an offering — see &ldquo;Client payments&rdquo;
               below.
             </p>
           </Card>
@@ -710,7 +711,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
           // which fails silently when someone pays from a different address than their profile.
           subscribeAction={startSubscriptionCheckoutAction}
           fallbackCheckoutUrl={process.env.WHOP_PLATFORM_CHECKOUT_URL ?? null}
-          priceLabel="$49/mo"
+          priceLabel={monthlyFeeLabel('PLAN_A')}
         />
 
         {/* OFFERINGS ABOVE BOOKING LINKS, STACKED FULL-WIDTH — operator ruling 2026-08-27,

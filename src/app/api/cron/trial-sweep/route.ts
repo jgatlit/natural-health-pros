@@ -81,7 +81,7 @@ function warningCopy(offsetDays: number, trialEndsAt: Date, slug: string) {
   const text = [
     `Your free trial listing on Natural Health Pros ends ${when}.`,
     '',
-    'Subscribe to stay listed in directory search ($49/mo):',
+    'Subscribe to stay listed in directory search ($39/mo):',
     manageUrl,
     '',
     'If you do nothing, your profile stays live at its direct link, but stops appearing in directory search once the trial ends.',
@@ -89,7 +89,7 @@ function warningCopy(offsetDays: number, trialEndsAt: Date, slug: string) {
 
   const html = `<div style="font-family: -apple-system, system-ui, sans-serif; font-size: 15px; line-height: 1.6; color: #1a1a1a;">
 <p>Your free trial listing on Natural Health Pros ends ${when}.</p>
-<p>Subscribe to stay listed in directory search ($49/mo): <a href="${manageUrl}">${manageUrl}</a></p>
+<p>Subscribe to stay listed in directory search ($39/mo): <a href="${manageUrl}">${manageUrl}</a></p>
 <p style="color:#666;">If you do nothing, your profile stays live at its direct link, but stops appearing in directory search once the trial ends.</p>
 </div>`;
 

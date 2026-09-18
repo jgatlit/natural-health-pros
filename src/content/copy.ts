@@ -90,7 +90,7 @@ export const getListed = {
   eyebrow: 'For practitioners',
   heading: 'Trained through HHE? Take the listing.',
   body: 'Your listing carries your training, your specialties, your own booking link, and your own prices. You keep the client relationship — Natural Health Pros just makes you findable.',
-  price: '$49',
+  price: '$39',
   interval: 'per month',
   bullets: [
     'A profile page you control, with your photo, bio, and specialties',

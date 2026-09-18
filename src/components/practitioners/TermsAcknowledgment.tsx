@@ -128,7 +128,7 @@ function TermsBody() {
       </Section>
 
       <Section n={7} title="Fees and subscription">
-        Directory listing is billed at <strong>$49/month</strong> following a{' '}
+        Directory listing is billed at <strong>$39/month</strong> following a{' '}
         <strong>90-day trial</strong>, during which no payment is required. Subscriptions may be
         canceled at any time; your profile is never deleted, only unlisted or archived.
       </Section>

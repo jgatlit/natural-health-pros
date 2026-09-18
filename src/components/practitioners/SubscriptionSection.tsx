@@ -40,7 +40,7 @@ type Props = {
 /**
  * Layer X — the practitioner's platform-listing subscription (they pay us to be listed).
  * Listing state follows the 90-day trial clock, not the retired `comped` flag: `trialEndsAt`
- * null is pre-trial (still listed, kept quiet), a future date is a running trial (the $49/mo
+ * null is pre-trial (still listed, kept quiet), a future date is a running trial (the monthly-fee
  * anchor lives here so the trial doesn't read as "free"), a past date is expired (subscribe to
  * restore — nothing is ever deleted). ACTIVE keeps its existing copy; PAST_DUE stays listed
  * through Whop's dunning grace and must never say "delisted". Admins are exempt outright — no
@@ -166,7 +166,7 @@ export function SubscriptionSection({
         </span>
         <div className="flex-1">
           <div className="flex items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold">Directory listing</h2>
+            <h2 className="text-sm font-semibold">Premium Accounts &amp; Directory Listing</h2>
             {badge}
           </div>
           <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>

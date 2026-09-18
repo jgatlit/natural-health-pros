@@ -56,7 +56,7 @@ export function PaymentsSection({
     // practitioner describes a future state that does not exist, which is exactly the class of
     // inaccuracy flagged on the 2026-08-11 call.
     description =
-      "Direct patient payments aren't switched on yet — we're still wiring this up. Your directory listing above isn't affected.";
+      "Direct client payments aren't switched on yet — we're still wiring this up. Your directory listing above isn't affected.";
     cta = (
       <button
         type="button"
@@ -74,7 +74,7 @@ export function PaymentsSection({
       </Badge>
     );
     description =
-      "Accept payments directly from your patients. Whop verifies your identity and handles payouts — funds go straight to your own account, never through us.";
+      "Accept payments directly from your clients. Whop verifies your identity and handles payouts — funds go straight to your own account, never through us.";
     // The ID requirement is surfaced BEFORE the button, not discovered inside the flow. Sarah
     // Schindler hit the identity check mid-call on 2026-08-11 and had to leave to find her
     // licence: "letting them know that you're gonna need your ID… have a driver's license or
@@ -168,7 +168,7 @@ export function PaymentsSection({
         </span>
         <div className="flex-1">
           <div className="flex items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold">Patient payments</h2>
+            <h2 className="text-sm font-semibold">Client payments</h2>
             {badge}
           </div>
           <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>

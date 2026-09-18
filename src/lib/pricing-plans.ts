@@ -110,3 +110,14 @@ export function formatBpsAsPercent(bps: number): string {
   const pct = (bps / BPS_DENOMINATOR) * 100;
   return Number.isInteger(pct) ? `${pct}%` : `${pct.toFixed(2)}%`;
 }
+
+/**
+ * Monthly-fee label for a plan, e.g. "$39/mo". Server-only: it reads env, so never call it from
+ * a client component — pass the string down as a prop, the way the edit page does.
+ */
+export function monthlyFeeLabel(key: PlanKey): string {
+  const cents = getPlan(key).monthlyFeeUsdCents;
+  if (cents <= 0) return 'No monthly fee';
+  const d = cents / 100;
+  return Number.isInteger(d) ? `$${d}/mo` : `$${d.toFixed(2)}/mo`;
+}
