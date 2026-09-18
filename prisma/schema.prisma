@@ -273,6 +273,20 @@ model Practitioner {
 
   bookingIntents BookingIntent[]
 
+  /// Plan A / Plan B — the practitioner's chosen commercial arrangement (2026-09-14 Amy call).
+  ///
+  /// String, not a Prisma enum, for the same reason `whopPayoutStatus` is: a third plan must never
+  /// throw inside a webhook handler and poison the retry.
+  ///
+  /// NULL IS MEANINGFUL AND MUST STAY THE DEFAULT — it means "has not chosen yet", which is true
+  /// of every practitioner listed before this shipped. Defaulting them into a plan would enrol
+  /// people in a commercial term they never agreed to.
+  plan         String?
+  planChosenAt DateTime?
+
+  /// Clients Natural Health Pros introduced to this practitioner — see src/lib/attributed-clients.ts.
+  attributedClients AttributedClient[]
+
   // Wedge 2C — Whop Connected Account (Layer Y: patient → practitioner)
   // whopCompanyId is the practitioner's connected company under WHOP_PARENT_COMPANY_ID.
   // KYC + payouts are handled by Whop's hosted flows; see docs/PHASE-2C-WHOP-CONNECTED-ACCOUNTS.md.
@@ -734,4 +748,44 @@ model City {
   practitioners Practitioner[]
 
   @@unique([slug, state])
+}
+
+/// The attribution ledger: which clients we sourced for a practitioner, and until when.
+///
+/// Emails are stored HASHED ONLY (sha256 over a salted, lowercased address). The ledger needs
+/// equality matching and nothing else, and a plaintext table of "people who saw a holistic health
+/// practitioner" is the most sensitive thing this system could hold.
+model AttributedClient {
+  id String @id @default(cuid())
+
+  practitionerId String
+  practitioner   Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
+
+  /// sha256(salt:lowercased email). Never the address itself. See hashClientEmail().
+  emailHash String
+
+  /// Snapshot of WHY this client counts as ours, copied from the booking intent. Diagnostic only —
+  /// the claim itself is the row's existence plus expiresAt.
+  party  LeadAttributionParty?
+  source String?
+
+  /// The booking that created the claim. Nullable and never updated: a later booking extends the
+  /// window but must not rewrite which one introduced them.
+  firstBookingIntentId String?
+
+  /// When we introduced them. Never moved backwards.
+  attributedAt DateTime @default(now())
+  /// attributedAt + the claim window (1 year, operator decision 2026-09-17). A repeat
+  /// platform-sourced booking pushes this out; nothing else does.
+  expiresAt    DateTime
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// One claim per client per practitioner — the claim is on the RELATIONSHIP, not the transaction.
+  /// This pair is also the read on the critical path of every booking checkout mint.
+  @@unique([practitionerId, emailHash])
+  /// The leakage sweep walks live claims by hash across practitioners.
+  @@index([emailHash])
+  @@index([expiresAt])
 }
