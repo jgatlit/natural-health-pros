@@ -108,6 +108,31 @@ export async function recordAttributedClient(
  * Returns true when the ledger holds a LIVE claim. An expired row is deliberately not deleted —
  * it is history, and the sweep reads it — but it no longer suppresses a first-session fee.
  */
+/**
+ * The three states a client can be in for fee purposes. "NONE" and "EXPIRED" are deliberately
+ * distinct: never-seen means we are introducing them (a first session), while expired means we
+ * introduced them over a year ago and no longer have a claim at all.
+ */
+export type ClaimState = 'NONE' | 'LIVE' | 'EXPIRED';
+
+export async function claimState(
+  db: Db,
+  input: { practitionerId: string; email: string; now?: Date },
+): Promise<ClaimState> {
+  const now = input.now ?? new Date();
+  const row = await db.attributedClient.findUnique({
+    where: {
+      practitionerId_emailHash: {
+        practitionerId: input.practitionerId,
+        emailHash: hashClientEmail(input.email),
+      },
+    },
+    select: { expiresAt: true },
+  });
+  if (!row) return 'NONE';
+  return row.expiresAt > now ? 'LIVE' : 'EXPIRED';
+}
+
 export async function hasLiveAttribution(
   db: Db,
   input: { practitionerId: string; email: string; now?: Date },

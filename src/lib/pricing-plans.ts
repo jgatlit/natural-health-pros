@@ -25,6 +25,19 @@ export type PractitionerPlan = {
   firstSessionPlatformFeeBps: number;
   /** Platform share of every subsequent platform-sourced session, in basis points. */
   laterSessionPlatformFeeBps: number;
+  /**
+   * Is the first-session share charged ONCE per client, forever, or does it recur while the
+   * attribution claim is live?
+   *
+   * Plan B is once. Amy relaying the practitioners' own words, 2026-09-14: "a fifty-fifty split
+   * for the FIRST session if I can book them privately after that", and Jonathan on the same
+   * call: "after that, they're yours." Charging it again a year later because a ledger row
+   * lapsed would break the exact promise that made Plan B acceptable.
+   *
+   * Plan A is not once: its smaller share applies to platform-sourced clients for the length of
+   * the attribution window (the 09-03 model, 20% on NHP-sourced clients for ~12 months).
+   */
+  firstSessionFeeOnce: boolean;
   /** Both plans transact through Whop; kept explicit so no UI can imply otherwise. */
   requiresWhopAccount: true;
 };
@@ -55,6 +68,7 @@ export function practitionerPlans(): Record<PlanKey, PractitionerPlan> {
       monthlyFeeUsdCents: envInt('PLAN_A_MONTHLY_FEE_CENTS', 3900),
       firstSessionPlatformFeeBps: envBps('PLAN_A_FIRST_SESSION_FEE_BPS', 2000),
       laterSessionPlatformFeeBps: envBps('PLAN_A_LATER_SESSION_FEE_BPS', 2000),
+      firstSessionFeeOnce: process.env.PLAN_A_FIRST_SESSION_FEE_ONCE === 'true',
       requiresWhopAccount: true,
     },
     PLAN_B: {
@@ -65,6 +79,7 @@ export function practitionerPlans(): Record<PlanKey, PractitionerPlan> {
       // Plan B's later sessions are booked privately between practitioner and client. Nothing in
       // the product enforces that today — an open design question from the 09-14 call, not a bug.
       laterSessionPlatformFeeBps: envBps('PLAN_B_LATER_SESSION_FEE_BPS', 0),
+      firstSessionFeeOnce: process.env.PLAN_B_FIRST_SESSION_FEE_ONCE !== 'false',
       requiresWhopAccount: true,
     },
   };
@@ -186,4 +201,49 @@ export function planComparison(): {
   });
 
   return { cards, breakEven };
+}
+
+/**
+ * The plan a practitioner is on when they have not chosen one.
+ *
+ * Operator ruling 2026-09-18: Plan B. It is the only safe default — it bills nobody a monthly fee
+ * they never agreed to, and it costs the practitioner nothing until we actually send them work.
+ *
+ * This is resolved at READ time and is NOT written to `Practitioner.plan`. The 14 already-listed
+ * practitioners stay null on purpose (operator, same ruling): null records the truth, which is
+ * that they have not been asked yet, and Sarah's outreach needs to be able to tell them apart
+ * from someone who deliberately picked Plan B.
+ */
+export function effectivePlan(stored: unknown): PlanKey {
+  if (isPlanKey(stored)) return stored;
+  const fallback = process.env.PLAN_DEFAULT;
+  return isPlanKey(fallback) ? fallback : 'PLAN_B';
+}
+
+/**
+ * The platform fee for one session, resolved from the plan and the client's place in the
+ * attribution ledger. This is the ONE place the "once vs ongoing" rule lives.
+ *
+ *   NONE    — we are introducing this client. First-session share.
+ *   LIVE    — introduced inside the window. Plan A keeps taking its smaller share; Plan B takes
+ *             nothing, because the practitioner was promised the split applies once.
+ *   EXPIRED — introduced over a window ago. We no longer have a claim, so we take nothing, on
+ *             either plan. Under Plan B that is also what stops a lapsed row re-charging a
+ *             first-session fee on a client we introduced years ago.
+ */
+export function sessionFeeBps(input: { plan: PlanKey; claim: 'NONE' | 'LIVE' | 'EXPIRED' }): number {
+  const plan = getPlan(input.plan);
+  if (input.claim === 'NONE') return plan.firstSessionPlatformFeeBps;
+  if (input.claim === 'EXPIRED') return plan.firstSessionFeeOnce ? 0 : plan.firstSessionPlatformFeeBps;
+  return plan.laterSessionPlatformFeeBps;
+}
+
+export function sessionFeeCents(input: {
+  plan: PlanKey;
+  claim: 'NONE' | 'LIVE' | 'EXPIRED';
+  priceUsdCents: number;
+}): number {
+  if (input.priceUsdCents <= 0) return 0;
+  const bps = sessionFeeBps(input);
+  return Math.floor((input.priceUsdCents * bps) / 10_000);
 }

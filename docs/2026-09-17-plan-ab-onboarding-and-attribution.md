@@ -119,3 +119,18 @@ attribution ledger in §2 — which is why §2 and §3 should ship together rath
 **Still owed by a human:** Amy decides the real prices/splits (all env-driven); Amy decides the
 Plan B contractual term naming the 12-month attribution; the 14 already-listed practitioners have
 `plan = null` and need an outreach pass — do NOT backfill them into a plan.
+
+## Ruling 2026-09-18 — default plan and the once-vs-ongoing question
+
+- **Unchosen plan = Plan B** (operator). Resolved at read time (`effectivePlan`); the column stays
+  null for existing practitioners so outreach can still tell "never asked" from "chose Plan B".
+- **Plan B's split is charged ONCE per client, not for 12 months.** Transcript evidence
+  (`2026-09-14 Plaud`, 9b65a35d): *"I'd be happy going up to a fifty-fifty split for the first
+  session if I can book them privately after that"* (Amy relaying practitioner feedback, 01:59) and
+  *"After that, after that, they're yours"* (Jonathan, 25:34). A practitioner also floated
+  voluntarily donating back on large follow-on packages (23:48) — explicitly *not* a set amount,
+  i.e. not a recurring claim.
+- **The 12-month window belongs to Plan A**, from the 09-03 model (20% on NHP-sourced clients for
+  ~12 months). Plan A keeps taking its share while the claim is live.
+- Ledger claim state is now three-valued: NONE (introducing them), LIVE (inside the window),
+  EXPIRED (window lapsed). Plan B charges only on NONE; an expired row never re-charges.

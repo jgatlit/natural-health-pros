@@ -8,8 +8,8 @@ import { flowShape, paymentsLive } from '@/lib/booking-flow';
 import { SchedulerStep } from '@/components/booking/SchedulerStep';
 import { recordScheduleSignal } from './actions';
 import { createBookingCheckoutConfig } from '@/lib/whop';
-import { isPlanKey, platformFeeCents } from '@/lib/pricing-plans';
-import { isFirstSession } from '@/lib/attributed-clients';
+import { effectivePlan, sessionFeeCents } from '@/lib/pricing-plans';
+import { claimState } from '@/lib/attributed-clients';
 import { CheckoutStep } from '@/components/booking/CheckoutStep';
 import { headers } from 'next/headers';
 
@@ -139,21 +139,18 @@ export default async function BookingFlowPage({ params }: Props) {
     // A practitioner who has not chosen a plan (`plan` null — every pre-2026-09-18 listing) is
     // charged nothing. Enrolling them in a split they never picked would be worse than collecting
     // late.
-    const planKey = isPlanKey(intent.practitioner.plan) ? intent.practitioner.plan : null;
-    const first = planKey
-      ? await isFirstSession(prisma, {
-          practitionerId: intent.practitionerId,
-          email: intent.email,
-        })
-      : false;
-    const feeCents =
-      planKey && offering!.priceUsdCents > 0
-        ? platformFeeCents({
-            plan: planKey,
-            priceUsdCents: offering!.priceUsdCents,
-            isFirstSession: first,
-          })
-        : 0;
+    // An unchosen plan resolves to Plan B (operator ruling 2026-09-18) rather than to "no fee":
+    // the stored column stays null, but the commercial default is real.
+    const planKey = effectivePlan(intent.practitioner.plan);
+    const claim = await claimState(prisma, {
+      practitionerId: intent.practitionerId,
+      email: intent.email,
+    });
+    const feeCents = sessionFeeCents({
+      plan: planKey,
+      claim,
+      priceUsdCents: offering!.priceUsdCents,
+    });
 
     const minted = await createBookingCheckoutConfig({
       planId: offering!.whopPlanId!,
