@@ -103,3 +103,19 @@ owns, not a default value.
 Fee wiring: `createBookingCheckoutConfig` derives `applicationFeeCents` from
 `platformFeeCents({ plan, priceUsdCents, isFirstSession })`. `isFirstSession` is answered by the
 attribution ledger in §2 — which is why §2 and §3 should ship together rather than in sequence.
+
+## Shipped 2026-09-18
+
+- **Ledger**: `AttributedClient` (hashed email, one claim per practitioner+client, 1-year window
+  via `ATTRIBUTION_CLAIM_WINDOW_DAYS`). `src/lib/attributed-clients.ts`, 12 tests.
+- **Plan columns**: `Practitioner.plan` / `planChosenAt`, nullable, no default, no backfill.
+- **Per-booking fee**: resolved at mint time from plan + `isFirstSession()`. ⚠️ Whop fixes
+  `application_fee_amount` when a PLAN is created, so there is no account-level split switch — a
+  fee-bearing booking mints its own dynamic plan on the connected account. The shared-plan path is
+  kept for the zero-fee case.
+- **Plan choice UI**: `PlanChoice.tsx` at the top of Premium Accounts & Directory Listing.
+- **Leakage sweep**: `npm run whop:leakage`. Advisory only; blind to money outside Whop.
+
+**Still owed by a human:** Amy decides the real prices/splits (all env-driven); Amy decides the
+Plan B contractual term naming the 12-month attribution; the 14 already-listed practitioners have
+`plan = null` and need an outreach pass — do NOT backfill them into a plan.

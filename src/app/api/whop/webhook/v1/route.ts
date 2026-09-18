@@ -1,6 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import type { Practitioner, Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
+import { recordAttributedClient } from '@/lib/attributed-clients';
 import { unwrapWebhook } from '@/lib/whop';
 import { indexPractitioner } from '@/lib/practitioner-indexer';
 
@@ -255,7 +256,14 @@ async function handleEvent(
 
       const intent = await prisma.bookingIntent.findUnique({
         where: { id: intentId },
-        select: { id: true, practitionerId: true, paidAt: true },
+        select: {
+          id: true,
+          practitionerId: true,
+          paidAt: true,
+          email: true,
+          attributionParty: true,
+          attributionSource: true,
+        },
       });
       if (!intent) return `payment.succeeded referenced unknown booking intent ${intentId}`;
 
@@ -279,10 +287,34 @@ async function handleEvent(
       // Never re-writes an already-paid intent: `paidAt: null` is the idempotency guard, so a Whop
       // retry (3x over ~70s) cannot double-record. A zero count here means it was already paid,
       // which is the expected retry path — the unknown-id case was ruled out above.
-      await prisma.bookingIntent.updateMany({
+      const marked = await prisma.bookingIntent.updateMany({
         where: { id: intentId, paidAt: null },
         data: { status: 'PAID', paidAt: new Date() },
       });
+
+      // Record the attribution claim on the SAME transition that records payment, and only once —
+      // `marked.count` is already the idempotency guard, so a Whop retry cannot re-stamp the
+      // window and quietly extend a claim by 70 seconds' worth of retries.
+      //
+      // Never fatal. The webhook has ~70s of retries and then Whop drops the event permanently, so
+      // a ledger write that fails must not cost us the PAID transition, which is the one thing
+      // here that cannot be reconstructed.
+      if (marked.count > 0) {
+        try {
+          await recordAttributedClient(prisma, {
+            practitionerId: intent.practitionerId,
+            email: intent.email,
+            party: intent.attributionParty,
+            source: intent.attributionSource,
+            bookingIntentId: intent.id,
+          });
+        } catch (err) {
+          console.error('v1 webhook: attribution ledger write failed', {
+            intentId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
       return null;
     }
     default:

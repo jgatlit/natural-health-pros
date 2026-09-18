@@ -4,7 +4,8 @@ import { ArrowLeft, Check, AlertCircle, X, Sparkles } from 'lucide-react';
 import { auth } from '@/auth';
 import { QUALIFICATIONS_HEADING } from '@/lib/profile-sections';
 import { prisma } from '@/lib/prisma';
-import { monthlyFeeLabel } from '@/lib/pricing-plans';
+import { isPlanKey, monthlyFeeLabel, planComparison } from '@/lib/pricing-plans';
+import { PlanChoice } from '@/components/practitioners/PlanChoice';
 import { isWhopPlatformsReady } from '@/lib/whop';
 import { profileCompletenessSignals } from '@/lib/practitioner-indexer';
 import { OFFERING_ORDER, SPECIALTY_ORDER } from '@/lib/practitioner-ordering';
@@ -25,6 +26,7 @@ import {
   reorderOfferings as reorderOffering,
   startWhopOnboarding,
   openPayoutPortal,
+  choosePlan,
   startSubscriptionCheckout,
   requestAccountEmailChange,
 } from './actions';
@@ -266,6 +268,8 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
   const startWhopOnboardingAction = startWhopOnboarding.bind(null, params.slug);
   const openPayoutPortalAction = openPayoutPortal.bind(null, params.slug);
   const startSubscriptionCheckoutAction = startSubscriptionCheckout.bind(null, params.slug);
+  const choosePlanAction = choosePlan.bind(null, params.slug);
+  const comparison = planComparison();
   const requestAccountEmailChangeAction = requestAccountEmailChange.bind(null, params.slug);
 
   return (
@@ -699,6 +703,13 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
         {/* Above billing and offerings deliberately: someone holding a slot on this
             practitioner's calendar is the most time-sensitive thing on the page. */}
         <BookingsSection rows={bookingRows} />
+
+        <PlanChoice
+          chosen={isPlanKey(practitioner.plan) ? practitioner.plan : null}
+          plans={comparison.cards}
+          breakEven={comparison.breakEven}
+          chooseAction={choosePlanAction}
+        />
 
         <SubscriptionSection
           status={practitioner.subscriptionStatus}

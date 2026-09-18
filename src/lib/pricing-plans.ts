@@ -121,3 +121,69 @@ export function monthlyFeeLabel(key: PlanKey): string {
   const d = cents / 100;
   return Number.isInteger(d) ? `$${d}/mo` : `$${d.toFixed(2)}/mo`;
 }
+
+/**
+ * Everything the plan-choice UI renders, derived from the config in one place.
+ *
+ * Server-only (it reads env). The UI receives strings, never raw numbers, so no component can
+ * format a price a second way — the bug `formatPrice` in money.ts exists to prevent.
+ */
+export function planComparison(): {
+  cards: {
+    key: PlanKey;
+    label: string;
+    monthlyLabel: string;
+    firstSessionLabel: string;
+    laterSessionLabel: string;
+    suits: string;
+  }[];
+  breakEven: { volumeLabel: string; planACost: string; planBCost: string; better: string }[];
+} {
+  const plans = practitionerPlans();
+  const dollars = (cents: number) =>
+    Number.isInteger(cents / 100) ? `$${cents / 100}` : `$${(cents / 100).toFixed(2)}`;
+
+  const share = (bps: number) =>
+    bps === 0 ? 'We take nothing' : `We take ${formatBpsAsPercent(bps)}`;
+
+  const cards = [
+    {
+      key: 'PLAN_A' as const,
+      label: plans.PLAN_A.label,
+      monthlyLabel: monthlyFeeLabel('PLAN_A'),
+      firstSessionLabel: share(plans.PLAN_A.firstSessionPlatformFeeBps),
+      laterSessionLabel: share(plans.PLAN_A.laterSessionPlatformFeeBps),
+      suits: 'Steadier if we send you regular work, and the simplest option if you have no payment processing of your own.',
+    },
+    {
+      key: 'PLAN_B' as const,
+      label: plans.PLAN_B.label,
+      monthlyLabel: monthlyFeeLabel('PLAN_B'),
+      firstSessionLabel: share(plans.PLAN_B.firstSessionPlatformFeeBps),
+      laterSessionLabel: share(plans.PLAN_B.laterSessionPlatformFeeBps),
+      suits: 'Costs you nothing until we actually send you someone. Suits you if you just want the pipeline.',
+    },
+  ];
+
+  // Whole first sessions, not a smooth curve: a practitioner reasons in "two clients a month",
+  // not in dollars of gross. The volumes bracket Amy'''s ~$150/mo break-even at a typical session
+  // price so the crossover is visible rather than asserted.
+  const sessionPriceCents = envInt('PLAN_COMPARISON_SESSION_PRICE_CENTS', 15_000);
+  const breakEven = [1, 2, 4, 8].map((count) => {
+    const gross = sessionPriceCents * count;
+    const a =
+      plans.PLAN_A.monthlyFeeUsdCents +
+      platformFeeCents({ plan: 'PLAN_A', priceUsdCents: gross, isFirstSession: true });
+    const b =
+      plans.PLAN_B.monthlyFeeUsdCents +
+      platformFeeCents({ plan: 'PLAN_B', priceUsdCents: gross, isFirstSession: true });
+    return {
+      volumeLabel: `${count} × ${dollars(sessionPriceCents)}`,
+      planACost: dollars(a),
+      planBCost: dollars(b),
+      better: a === b ? 'Same' : a < b ? plans.PLAN_A.label : plans.PLAN_B.label,
+    };
+  });
+
+  return { cards, breakEven };
+}

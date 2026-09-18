@@ -8,6 +8,8 @@ import { flowShape, paymentsLive } from '@/lib/booking-flow';
 import { SchedulerStep } from '@/components/booking/SchedulerStep';
 import { recordScheduleSignal } from './actions';
 import { createBookingCheckoutConfig } from '@/lib/whop';
+import { isPlanKey, platformFeeCents } from '@/lib/pricing-plans';
+import { isFirstSession } from '@/lib/attributed-clients';
 import { CheckoutStep } from '@/components/booking/CheckoutStep';
 import { headers } from 'next/headers';
 
@@ -49,7 +51,15 @@ export default async function BookingFlowPage({ params }: Props) {
       name: true,
       status: true,
       practitionerId: true,
-      practitioner: { select: { slug: true, displayName: true, whopPayoutsEnabled: true } },
+      practitioner: {
+        select: {
+          slug: true,
+          displayName: true,
+          whopPayoutsEnabled: true,
+          whopCompanyId: true,
+          plan: true,
+        },
+      },
       email: true,
       whopCheckoutSessionId: true,
       whopCheckoutPurchaseUrl: true,
@@ -64,6 +74,7 @@ export default async function BookingFlowPage({ params }: Props) {
           whopPlanId: true,
           whopCheckoutConfigId: true,
           purchaseUrl: true,
+          priceUsdCents: true,
         },
       },
       bookingLink: { select: { url: true, label: true } },
@@ -121,6 +132,29 @@ export default async function BookingFlowPage({ params }: Props) {
   let intentPurchaseUrl: string | null = intent.whopCheckoutPurchaseUrl;
 
   if (willRenderCheckout && !checkoutConfigId) {
+    // THE FEE IS RESOLVED PER BOOKING, NOT PER OFFERING. Plan B takes a large share of the FIRST
+    // platform-sourced session with a client and nothing afterwards, so the same offering owes a
+    // different fee depending on who is buying — which only the attribution ledger can answer.
+    //
+    // A practitioner who has not chosen a plan (`plan` null — every pre-2026-09-18 listing) is
+    // charged nothing. Enrolling them in a split they never picked would be worse than collecting
+    // late.
+    const planKey = isPlanKey(intent.practitioner.plan) ? intent.practitioner.plan : null;
+    const first = planKey
+      ? await isFirstSession(prisma, {
+          practitionerId: intent.practitionerId,
+          email: intent.email,
+        })
+      : false;
+    const feeCents =
+      planKey && offering!.priceUsdCents > 0
+        ? platformFeeCents({
+            plan: planKey,
+            priceUsdCents: offering!.priceUsdCents,
+            isFirstSession: first,
+          })
+        : 0;
+
     const minted = await createBookingCheckoutConfig({
       planId: offering!.whopPlanId!,
       practitionerId: intent.practitionerId,
@@ -128,6 +162,10 @@ export default async function BookingFlowPage({ params }: Props) {
       bookingIntentId: intent.id,
       slug: params.slug,
       publicToken: intent.publicToken,
+      applicationFeeCents: feeCents,
+      companyId: intent.practitioner.whopCompanyId,
+      title: offering!.title,
+      priceUsdCents: offering!.priceUsdCents,
     })
       // Never fatal — a failed mint degrades to the offering's hosted checkout (§8) rather than
       // stranding a buyer who is ready to pay.

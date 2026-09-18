@@ -34,6 +34,7 @@
     "links:audit": "tsx --env-file=.env scripts/audit-profile-links.ts",
     "test": "vitest run",
     "test:watch": "vitest",
+    "whop:leakage": "tsx --env-file=.env scripts/whop-attribution-sweep.ts",
     "whop:health": "tsx --env-file=.env scripts/whop-health.ts",
     "sessions:revoke": "tsx --env-file=.env scripts/revoke-sessions.ts"
   },

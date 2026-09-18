@@ -392,14 +392,51 @@ export async function createBookingCheckoutConfig(params: {
   slug: string;
   /** The intent's public token — this configuration returns the buyer to their own booking page. */
   publicToken: string;
+  /**
+   * Platform fee for THIS booking, derived from the practitioner's plan and whether the ledger
+   * says this is a first session. 0 (or omitted) keeps the original shared-plan path.
+   */
+  applicationFeeCents?: number;
+  /** The practitioner's connected company — required only when a fee is charged. See below. */
+  companyId?: string | null;
+  title?: string;
+  priceUsdCents?: number;
 }): Promise<{ checkoutConfigId: string; purchaseUrl: string | null }> {
+  const fee = params.applicationFeeCents ?? 0;
+
+  // A fee cannot be attached to an EXISTING plan — Whop fixes `application_fee_amount` when the
+  // plan is created, and the offering's shared plan was created without one. So a fee-bearing
+  // booking mints its own dynamic plan (same shape as publishOffering) instead of referencing
+  // `plan_id`. That is unavoidable rather than wasteful: the fee is per-booking by design, because
+  // Plan B charges only the FIRST session with a given client and the same offering must therefore
+  // produce different fees for different buyers.
+  //
+  // Without `companyId` we cannot mint on the practitioner's account, and minting on ours would
+  // silently bill the wrong company (see the whopPost docstring). In that case we fall back to the
+  // no-fee path rather than take money to the wrong place.
+  const dynamic = fee > 0 && !!params.companyId && !!params.priceUsdCents;
+
   const cfg = await whopPost<{ id: string; purchase_url?: string | null }>(
     '/checkout_configurations',
     {
       mode: 'payment',
+      ...(dynamic && {
+        plan: {
+          account_id: params.companyId,
+          currency: 'usd',
+          plan_type: 'one_time',
+          initial_price: params.priceUsdCents! / 100,
+          application_fee_amount: fee / 100,
+          product: {
+            title: params.title ?? 'Session',
+            external_identifier: `${params.offeringId}-${params.bookingIntentId}`,
+          },
+        },
+      }),
       // Reference the existing plan. `plan: "plan_…"` and `items: [{plan}]` are both rejected
-      // with parameter_invalid — `plan_id` is the accepted spelling (verified live).
-      plan_id: params.planId,
+      // with parameter_invalid — `plan_id` is the accepted spelling (verified live). Omitted when
+      // a fee-bearing dynamic plan is minted above; sending both would be ambiguous.
+      ...(dynamic ? {} : { plan_id: params.planId }),
       // All three ids, explicitly. A per-booking configuration is a NEW object and inherits no
       // metadata from the offering's; only a session merged. Dropping the first two here would
       // make Layer Y payments unattributable to a practitioner, which is how Layer X went wrong.

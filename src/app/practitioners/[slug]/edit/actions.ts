@@ -7,6 +7,7 @@ import type { Prisma } from '@prisma/client';
 import { auth } from '@/auth';
 import { normalizeFraming } from '@/lib/photo-framing';
 import { prisma } from '@/lib/prisma';
+import { isPlanKey } from '@/lib/pricing-plans';
 import { sendEmail, normalizeEmail, escapeHtml } from '@/lib/email';
 import { SITE_URL } from '@/lib/site';
 import { newToken } from '@/lib/tokens';
@@ -1114,6 +1115,30 @@ export async function reorderOfferings(slug: string, formData: FormData): Promis
 // works by throwing, so each action does its Whop/DB work inside try/catch capturing a result
 // or error flag, then calls redirect() AFTER the try/catch — never inside it, or a success
 // would get caught by its own catch and reported back as a failure.
+
+/**
+ * Record the practitioner'''s Plan A / Plan B choice.
+ *
+ * Writes only `plan` + `planChosenAt`, and only for a plan key we recognise — an unrecognised
+ * value is dropped rather than stored, because this column feeds the platform fee on every
+ * subsequent checkout and an unknown plan there would either throw in a webhook or charge nothing
+ * silently.
+ *
+ * Switching plans is allowed and deliberately unguarded: it changes future checkouts only. Fees
+ * already charged were computed at mint time and are not retroactive.
+ */
+export async function choosePlan(slug: string, formData: FormData): Promise<void> {
+  const target = await authorizeForSlug(slug);
+  const plan = formData.get('plan');
+  if (!isPlanKey(plan)) {
+    redirect(`/practitioners/${slug}/edit?plan=error#payments`);
+  }
+  await prisma.practitioner.update({
+    where: { id: target.id },
+    data: { plan, planChosenAt: new Date() },
+  });
+  redirect(`/practitioners/${slug}/edit?plan=saved#payments`);
+}
 
 export async function startSubscriptionCheckout(slug: string): Promise<void> {
   const target = await authorizeForSlug(slug);
