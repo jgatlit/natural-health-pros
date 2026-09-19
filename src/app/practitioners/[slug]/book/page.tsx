@@ -12,6 +12,8 @@ type Props = {
   searchParams: {
     link?: string;
     offering?: string;
+    /** A `ReferralTouch.touchToken` (spec §5.4.5 hop 4). Re-validated server-side at capture. */
+    nhpr?: string;
   };
 };
 
@@ -97,6 +99,10 @@ export default async function BookCapturePage({ params, searchParams }: Props) {
           offeringId={offering?.id ?? null}
           subject={offering?.title ?? bookingLink?.label ?? null}
           subjectDescription={offering?.description ?? null}
+          // Rendered as a hidden field, exactly like the two ids above. The capture action
+          // re-validates it against this practitioner before storing anything — the param is
+          // attacker-supplied, and it decides who receives 20% of the session.
+          referralTouchToken={searchParams.nhpr?.trim() || null}
           start={start}
           advance={recordScheduleSignal}
         />

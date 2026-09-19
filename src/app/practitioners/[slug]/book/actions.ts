@@ -2,6 +2,7 @@
 
 import { headers, cookies } from 'next/headers';
 import { ATTRIBUTION_COOKIE, verifyAttribution } from '@/lib/attribution';
+import { REFERRAL_COOKIE, resolveReferralCarriage } from '@/lib/referral-cookie';
 import { prisma } from '@/lib/prisma';
 import { bookableWhere } from '@/lib/practitioner-indexer';
 import { rateLimit } from '@/lib/rate-limit';
@@ -46,6 +47,7 @@ export async function startBookingIntent(
   };
   const linkId = String(formData.get('bookingLinkId') ?? '').trim();
   const offeringId = String(formData.get('offeringId') ?? '').trim();
+  const referralTouchToken = String(formData.get('referralTouchToken') ?? '').trim();
 
   /**
    * Refuse with an ERROR CODE, never a message.
@@ -177,6 +179,24 @@ export async function startBookingIntent(
       )
     : null;
 
+  // §5.4.5 — THE REFERRAL'S DURABLE CARRIER. After this row exists, the URL param, the cookie and
+  // the Whop metadata are all redundant: this column is what decides who is paid.
+  //
+  // Both inputs are untrusted — the param is attacker-supplied and the cookie is client-supplied —
+  // so the touch is looked up scoped to THIS practitioner and to a referral that has not expired.
+  // A token minted for somebody else resolves to nothing rather than attaching here.
+  //
+  // `carriage` records URL / COOKIE / NONE. §9 test 13 requires the fallback's outcome to be
+  // logged whichever way it goes: an unrecorded NONE cannot be told apart from "nobody referred
+  // them", which is the difference between a broken carriage and an ordinary booking.
+  const referral = await resolveReferralCarriage(prisma, {
+    practitionerId: practitioner.id,
+    paramToken: referralTouchToken || null,
+    cookieValue: cookies().get(REFERRAL_COOKIE)?.value,
+    secret: process.env.AUTH_SECRET,
+    at: new Date(),
+  });
+
   const intent = await prisma.bookingIntent.create({
     data: {
       practitionerId: practitioner.id,
@@ -184,6 +204,8 @@ export async function startBookingIntent(
       entryPoint,
       bookingLinkId: resolvedLinkId,
       offeringId: offering?.id ?? null,
+      referralTouchId: referral.referralTouchId,
+      referralCarriage: referral.carriage,
       attributionParty: attribution?.party ?? null,
       attributionSource: attribution?.source ?? null,
       attribution: attribution

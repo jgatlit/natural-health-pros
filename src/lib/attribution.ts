@@ -192,7 +192,10 @@ export function resolveAttribution(input: {
  * reading it, not a client sending a forged one, and this value decides who is paid.
  */
 
-function b64urlEncode(bytes: Uint8Array): string {
+/** Exported for `referral-cookie.ts`, which signs a different payload with the SAME primitives.
+ *  One encoding and one HMAC construction across both cookies — a second hand-rolled scheme for
+ *  a value that decides who gets paid is exactly the risk not worth taking twice. */
+export function b64urlEncode(bytes: Uint8Array): string {
   let bin = '';
   // Indexed rather than `for…of`: the repo targets an es5 lib, where a typed array is not
   // iterable without --downlevelIteration.
@@ -200,7 +203,7 @@ function b64urlEncode(bytes: Uint8Array): string {
   return btoa(bin).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
 }
 
-function b64urlDecode(s: string): Uint8Array<ArrayBuffer> {
+export function b64urlDecode(s: string): Uint8Array<ArrayBuffer> {
   const padded = s.replace(/-/g, '+').replace(/_/g, '/') + '='.repeat((4 - (s.length % 4)) % 4);
   const bin = atob(padded);
   // Backed by an explicit ArrayBuffer so it satisfies `BufferSource` — a bare Uint8Array is typed

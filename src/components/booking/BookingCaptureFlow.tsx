@@ -19,6 +19,8 @@ type Props = {
   schedulerUrl: string | null;
   bookingLinkId: string | null;
   offeringId: string | null;
+  /** A `ReferralTouch.touchToken` carried in from the profile (§5.4.5 hop 4). */
+  referralTouchToken?: string | null;
   subject: string | null;
   /** §22: the selected Offering's own description, when it has one. Never a fallback string —
       omitted entirely rather than restating the title or label. */
@@ -55,6 +57,7 @@ export function BookingCaptureFlow({
   schedulerUrl,
   bookingLinkId,
   offeringId,
+  referralTouchToken,
   subject,
   subjectDescription,
   start,
@@ -195,6 +198,9 @@ export function BookingCaptureFlow({
                 from here. */}
             {bookingLinkId && <input type="hidden" name="bookingLinkId" value={bookingLinkId} />}
             {offeringId && <input type="hidden" name="offeringId" value={offeringId} />}
+            {referralTouchToken && (
+              <input type="hidden" name="referralTouchToken" value={referralTouchToken} />
+            )}
 
             {/* TWO FIELDS. Not four. This is lead capture, NOT intake — the practitioner's own
                 scheduler asks its intake questions on the very next screen and §6 forbids

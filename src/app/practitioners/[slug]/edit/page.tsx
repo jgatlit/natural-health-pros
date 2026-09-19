@@ -29,6 +29,10 @@ import {
   choosePlan,
   startSubscriptionCheckout,
   requestAccountEmailChange,
+  addClients,
+  inviteClients,
+  referClientByEmail,
+  createReferralLinkFor,
 } from './actions';
 import { OfferingsEditor } from '@/components/practitioners/OfferingsEditor';
 import { resolveHeroLink, offeringsForLink, ctaLabelFor } from '@/lib/profile-ctas';
@@ -36,6 +40,13 @@ import { SubscriptionSection } from '@/components/practitioners/SubscriptionSect
 import { PaymentsSection } from '@/components/practitioners/PaymentsSection';
 import { AccountEmailSection } from '@/components/practitioners/AccountEmailSection';
 import { BookingsSection, type BookingRow } from '@/components/practitioners/BookingsSection';
+import { ClientsAndReferralsSection } from '@/components/practitioners/ClientsAndReferralsSection';
+import { loadClientList } from '@/lib/client-list';
+import { referralUrl } from '@/lib/referrals';
+import { crossReferralRates } from '@/lib/referral-fees';
+import { formatBpsAsPercent } from '@/lib/pricing-plans';
+import { loadSettings } from '@/lib/platform-settings';
+import { bookableWhere } from '@/lib/practitioner-indexer';
 import { paymentsLive } from '@/lib/booking-flow';
 import { BookingLinksField } from '@/components/practitioners/BookingLinksField';
 import { SpecialtyComboboxField } from '@/components/practitioners/SpecialtyComboboxField';
@@ -54,10 +65,57 @@ type Props = {
     whop?: string;
     /** Echoed-back concurrency token — see the hidden `profileUpdatedAt` field below. */
     v?: string;
+    /** Clients & referrals outcomes — see CLIENT_NOTICES below. */
+    clients?: string;
+    refer?: string;
+    n?: string;
+    bad?: string;
+    msg?: string;
+    /** A freshly minted referral token, echoed back so the page can render it for copying. */
+    token?: string;
   };
 };
 
 export const dynamic = 'force-dynamic';
+
+/**
+ * Outcome copy for the Clients & Referrals section, resolved from the redirect's query string.
+ *
+ * A FIXED LOOKUP, never the raw parameter. `?msg=` is the one place a server action passes text
+ * back, and it is echoed only after `extractError`, which returns a raw message ONLY for errors
+ * our own code marked `USER:`. Rendering an arbitrary query parameter on an authenticated page
+ * carrying the practitioner's real name is a phishing surface — the booking flow already had to
+ * stop doing exactly that.
+ */
+function clientsAndReferralsNotice(sp: Props['searchParams']): string | null {
+  const n = sp.n ?? '0';
+  const bad = sp.bad ? ` ${sp.bad} could not be read as an email address.` : '';
+  switch (sp.clients) {
+    case 'added':
+      return `Added ${n} to your client list.${bad}`;
+    case 'invited':
+      return `Invited ${n}.${bad}`;
+    case 'empty':
+      return 'Enter at least one email address.';
+    case 'throttled':
+      return 'That is a lot of invitations at once — try again in a little while.';
+  }
+  switch (sp.refer) {
+    case 'sent':
+      return 'Referral sent.';
+    case 'link':
+      return 'Your referral link is ready.';
+    case 'unknown':
+      return 'We could not find that practitioner.';
+    case 'throttled':
+      return 'That is a lot of referrals at once — try again in a little while.';
+    case 'error':
+      // ALREADY DECODED by Next's searchParams parsing. Decoding a second time is both wrong and
+      // throwable — `decodeURIComponent` rejects a bare `%` that is not part of an escape.
+      return sp.msg || 'Could not send that referral.';
+  }
+  return null;
+}
 
 // Named once, referenced everywhere it's needed: the profile form's id and BookingLinksField's
 // `formId` prop (which each of its inputs uses as `form={formId}` to submit with this form despite
@@ -181,6 +239,32 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
       take: 50,
     }),
   ]);
+
+  // ── Clients & referrals (spec v1.4 §5) ─────────────────────────────────────────────────────
+  //
+  // Loaded after the block above rather than inside it because `loadClientList` issues its own
+  // four scoped reads and the term setting is a fifth; folding them in would make the existing
+  // tuple destructuring harder to read for no saving.
+  const [clientRows, referable, { leadAttributionTermMonths }] = await Promise.all([
+    loadClientList(prisma, practitioner.id),
+    // Who this practitioner may refer TO. `bookableWhere()` rather than `listedWhere()`: an
+    // unlisted practitioner is absent from directory search but still bookable, so referring to
+    // them is legitimate. Excludes self — nobody is paid for referring to themselves — and
+    // returns two fields only, because this is a list of OTHER people shown to a practitioner.
+    prisma.practitioner.findMany({
+      where: { id: { not: practitioner.id }, delistedAt: null, ...bookableWhere() },
+      select: { slug: true, displayName: true },
+      orderBy: { displayName: 'asc' },
+      take: 200,
+    }),
+    loadSettings(prisma),
+  ]);
+
+  // A freshly minted referral link, echoed back through the redirect so it can be copied. The
+  // token addresses a public redirect and belongs to the practitioner being shown it.
+  const newReferralLink = searchParams.token ? referralUrl(searchParams.token) : null;
+  const referralRateLabel = formatBpsAsPercent(crossReferralRates().referrerFeeBps);
+  const clientsNotice = clientsAndReferralsNotice(searchParams);
 
   const bookingRows: BookingRow[] = intents.map((i) => ({
     id: i.id,
@@ -703,6 +787,23 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
         {/* Above billing and offerings deliberately: someone holding a slot on this
             practitioner's calendar is the most time-sensitive thing on the page. */}
         <BookingsSection rows={bookingRows} />
+
+        {/* The same population one step later, and above commercial configuration for the same
+            reason: a client on this list BEFORE their first booking is 0% forever, so it belongs
+            next to the bookings it exempts rather than next to the plan it modifies. */}
+        <ClientsAndReferralsSection
+          slug={params.slug}
+          rows={clientRows}
+          referable={referable}
+          newReferralLink={newReferralLink}
+          referralRateLabel={referralRateLabel}
+          termMonths={leadAttributionTermMonths}
+          addAction={addClients.bind(null, params.slug)}
+          inviteAction={inviteClients.bind(null, params.slug)}
+          referByEmailAction={referClientByEmail.bind(null, params.slug)}
+          createLinkAction={createReferralLinkFor.bind(null, params.slug)}
+          notice={clientsNotice}
+        />
 
         <PlanChoice
           chosen={isPlanKey(practitioner.plan) ? practitioner.plan : null}

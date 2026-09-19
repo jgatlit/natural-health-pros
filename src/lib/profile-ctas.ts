@@ -1,4 +1,5 @@
 import { offeringAnchorId } from '@/components/practitioners/OfferingsSummaryRail';
+import { REFERRAL_PARAM } from '@/lib/referral-param';
 
 export type CtaOffering = {
   id: string;
@@ -87,6 +88,25 @@ export function linkDisplayLabel(link: CtaBookingLink, linked: CtaOffering[]): s
 }
 
 /**
+ * Thread a referral through a booking URL (spec v1.4 §5.4.5, hop 3).
+ *
+ * ⚠️ THE PARAM IS `nhpr`, NOT `ref`. `?ref=` is already taken by lead attribution and means the
+ * OPPOSITE thing — a practitioner tagging their own audience, which resolves to 0% commission
+ * (canon D18). A referral link carrying it would make every cross-referral free and pay the
+ * referrer nothing.
+ *
+ * Omitted entirely when there is no referral, rather than set empty: these URLs get copied and
+ * shared, and a dangling `?nhpr=` would travel with them.
+ *
+ * These three builders are the ONLY places a `/book` URL is constructed, which is what makes the
+ * carriage assertable — see `tests/profile-ctas.test.ts` and `tests/referral-carriage.test.ts`.
+ */
+function withReferral(params: URLSearchParams, referralTouchToken?: string | null): void {
+  const token = referralTouchToken?.trim();
+  if (token) params.set(REFERRAL_PARAM, token);
+}
+
+/**
  * Where a Booking Link CTA sends the buyer (§4 entry-point routing).
  *
  * 0 linked → straight into the flow with no Offering. This is a SUPPORTED entry point, not an
@@ -101,10 +121,12 @@ export function bookingLinkTarget(
   slug: string,
   link: CtaBookingLink,
   linked: CtaOffering[],
+  referralTouchToken?: string | null,
 ): { kind: 'chooser' } | { kind: 'flow'; href: string } {
   if (linked.length > 1) return { kind: 'chooser' };
   const params = new URLSearchParams({ link: link.id });
   if (linked.length === 1) params.set('offering', linked[0]!.id);
+  withReferral(params, referralTouchToken);
   return { kind: 'flow', href: `/practitioners/${encodeURIComponent(slug)}/book?${params}` };
 }
 
@@ -114,9 +136,14 @@ export function bookingLinkTarget(
  * NEVER a chooser (§4): the buyer has already expressed which Offering they want, and
  * re-presenting a menu containing a free option cannibalises a decided buyer.
  */
-export function offeringTarget(slug: string, offering: CtaOffering): string {
+export function offeringTarget(
+  slug: string,
+  offering: CtaOffering,
+  referralTouchToken?: string | null,
+): string {
   const params = new URLSearchParams({ offering: offering.id });
   if (offering.bookingLinkId) params.set('link', offering.bookingLinkId);
+  withReferral(params, referralTouchToken);
   return `/practitioners/${encodeURIComponent(slug)}/book?${params}`;
 }
 
@@ -136,11 +163,13 @@ export function chooserOptionTarget(
   slug: string,
   linkId: string,
   offering: Pick<CtaOffering, 'id' | 'listingVisibility'>,
+  referralTouchToken?: string | null,
 ): string {
   if (offering.listingVisibility === 'LISTED') {
     return `#${offeringAnchorId(offering.id)}`;
   }
   const params = new URLSearchParams({ link: linkId, offering: offering.id });
+  withReferral(params, referralTouchToken);
   return `/practitioners/${encodeURIComponent(slug)}/book?${params}`;
 }
 

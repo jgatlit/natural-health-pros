@@ -25,6 +25,12 @@ import {
   createSubscriptionCheckout,
   WHOP_OFFERING_TITLE_MAX,
 } from '@/lib/whop';
+import { bookableWhere } from '@/lib/practitioner-indexer';
+import { rateLimit } from '@/lib/rate-limit';
+import { extractError } from '@/lib/action-utils';
+import { loadSettings } from '@/lib/platform-settings';
+import { addClientEntries } from '@/lib/client-list';
+import { createEmailReferral, createReferralLink, referralUrl } from '@/lib/referrals';
 
 async function authorizeForSlug(slug: string) {
   const session = await auth();
@@ -1491,4 +1497,342 @@ export async function requestAccountEmailChange(slug: string, formData: FormData
 
   revalidatePath(`/practitioners/${slug}/edit`);
   redirect(`/practitioners/${slug}/edit?saved=email-pending#account`);
+}
+
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+// Clients & Referrals (spec v1.4 §5)
+//
+// Four actions, all of them practitioner-scoped through `authorizeForSlug`. Two properties are
+// worth stating once here rather than four times below:
+//
+//  1. 🔒 EVERY WRITE IS SCOPED TO `target.id` — the practitioner whose page this is, resolved from
+//     the slug and checked for ownership. Never to a practitioner id read from the form. The form
+//     is attacker-supplied and these rows decide who pays what.
+//  2. ⚠️ THE ONLY PRACTITIONER ID A FORM MAY SUPPLY is the REFERRED practitioner (Y), and it is
+//     re-resolved against `bookableWhere()` before use. Y is genuinely the user's choice; X never
+//     is.
+// ─────────────────────────────────────────────────────────────────────────────────────────────
+
+/** One submission's cap. A client list is built by hand; a 500-row paste is a different feature. */
+const MAX_CLIENTS_PER_SUBMIT = 50;
+
+function parseClientLines(raw: string): { email: string; name: string | null }[] {
+  return raw
+    .split(/[\n,;]+/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .slice(0, MAX_CLIENTS_PER_SUBMIT)
+    .map((line) => {
+      // "Dana Miles <dana@example.com>" or a bare address. Anything else falls through to the
+      // validator in addClientEntries, which reports it back rather than storing nonsense.
+      const angled = line.match(/^(.*?)<([^>]+)>$/);
+      if (angled) return { email: angled[2]!.trim(), name: angled[1]!.trim() || null };
+      return { email: line, name: null };
+    });
+}
+
+/**
+ * The shared body of Add and Send-invite.
+ *
+ * ⚠️ TAKES AN ALREADY-AUTHORIZED `target` RATHER THAN CALLING `authorizeForSlug` ITSELF. Each
+ * exported action calls the gate directly, so the gate is visible at every entry point rather
+ * than one level down — which is exactly what `tests/practitioner-write-authorization.test.ts`
+ * checks for, and it is right to: an auth call hidden behind a shared helper is one refactor away
+ * from being dropped for one caller and nobody noticing.
+ */
+async function addOrInviteClients(
+  slug: string,
+  target: { id: string },
+  formData: FormData,
+  mode: 'ADD' | 'INVITE',
+): Promise<void> {
+  const raw = String(formData.get('clients') ?? '');
+  const entries = parseClientLines(raw);
+  if (entries.length === 0) {
+    redirect(`/practitioners/${slug}/edit?clients=empty#clients`);
+  }
+
+  // An authenticated send-to-arbitrary-address path, i.e. a spam vector. The limiter is real now
+  // that KV is provisioned, and the result is CHECKED — an earlier pattern in this repo awaited
+  // it and discarded it, so the throttle could never block.
+  if (mode === 'INVITE') {
+    const limited = await rateLimit('client-invite', target.id, { limit: 10, windowSeconds: 3600 });
+    if (!limited.success) {
+      redirect(`/practitioners/${slug}/edit?clients=throttled#clients`);
+    }
+  }
+
+  const now = new Date();
+  const result = await addClientEntries(prisma, {
+    practitionerId: target.id,
+    source: mode === 'INVITE' ? 'EMAIL_INVITE' : 'MANUAL_ADD',
+    entries,
+    at: now,
+    invitedAt: mode === 'INVITE' ? now : null,
+  });
+
+  if (mode === 'INVITE') {
+    const practitioner = await prisma.practitioner.findUnique({
+      where: { id: target.id },
+      select: { displayName: true, slug: true },
+    });
+    for (const entry of result.entries) {
+      // The practitioner's OWN profile link, deliberately — an invited client is the
+      // practitioner's own by construction (R4), and sending them through a generic directory
+      // link would route their booking through attribution that charges her for her own client.
+      //
+      // Out of band and never fatal: the list entry is already committed, and a failed send must
+      // not lose it. Fail-soft per recipient so one bad address does not stop the batch.
+      await sendClientInvite({
+        to: entry.email,
+        practitionerName: practitioner?.displayName ?? 'your practitioner',
+        slug: practitioner?.slug ?? slug,
+        entryId: entry.emailHash,
+      }).catch((err) => {
+        console.error('[clients] invite email failed', {
+          practitionerId: target.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
+    }
+  }
+
+  const rejected = result.rejected.length;
+  redirect(
+    `/practitioners/${slug}/edit?clients=${mode === 'INVITE' ? 'invited' : 'added'}&n=${result.added}${
+      rejected ? `&bad=${rejected}` : ''
+    }#clients`,
+  );
+}
+
+export async function addClients(slug: string, formData: FormData): Promise<void> {
+  const target = await authorizeForSlug(slug);
+  await addOrInviteClients(slug, target, formData, 'ADD');
+}
+
+export async function inviteClients(slug: string, formData: FormData): Promise<void> {
+  const target = await authorizeForSlug(slug);
+  await addOrInviteClients(slug, target, formData, 'INVITE');
+}
+
+async function sendClientInvite(params: {
+  to: string;
+  practitionerName: string;
+  slug: string;
+  entryId: string;
+}): Promise<void> {
+  const url = `${SITE_URL}/practitioners/${encodeURIComponent(params.slug)}`;
+  const name = escapeHtml(params.practitionerName);
+  await sendEmail({
+    to: params.to,
+    subject: `Book with ${params.practitionerName} on Natural Health Pros`,
+    text: [
+      `${params.practitionerName} invited you to book through Natural Health Pros.`,
+      '',
+      url,
+    ].join('\n'),
+    html: `<p>${name} invited you to book through Natural Health Pros.</p>
+<p><a href="${url}">Book with ${name}</a></p>`,
+    // Keyed on the practitioner + client pair so a double-submit cannot double-send. The DURABLE
+    // guard is `ClientListEntry.invitedAt`, because Resend de-duplicates for 24 hours only — over
+    // a set nothing removes rows from, that means "one email a day forever", not "one email".
+    idempotencyKey: `client-invite/${params.slug}/${params.entryId}`,
+    tags: [{ name: 'type', value: 'client-invite' }],
+  });
+}
+
+/**
+ * Resolve the practitioner being referred TO (Y).
+ *
+ * `bookableWhere()` and not `listedWhere()`: an unlisted practitioner is absent from directory
+ * search but still bookable, and referring a client to someone whose profile works is legitimate.
+ * What is refused is a RETIRED or archived row, whose owner mailbox is typically dead — a referral
+ * there would be a lead nobody reads.
+ */
+async function resolveReferredPractitioner(
+  slug: string,
+  referredSlug: string,
+  selfId: string,
+): Promise<{ id: string; displayName: string; slug: string }> {
+  const referred = await prisma.practitioner.findFirst({
+    where: { slug: referredSlug, delistedAt: null, ...bookableWhere() },
+    select: { id: true, displayName: true, slug: true },
+  });
+  // IDOR discipline: "no such practitioner", "not bookable" and "that's you" produce one response.
+  if (!referred || referred.id === selfId) {
+    redirect(`/practitioners/${slug}/edit?refer=unknown#clients`);
+  }
+  return referred;
+}
+
+export async function referClientByEmail(slug: string, formData: FormData): Promise<void> {
+  const target = await authorizeForSlug(slug);
+  const referredSlug = String(formData.get('referredSlug') ?? '').trim();
+  const clientEmail = String(formData.get('clientEmail') ?? '').trim();
+  const clientName = String(formData.get('clientName') ?? '').trim() || null;
+  const note = String(formData.get('note') ?? '').trim() || null;
+
+  const referred = await resolveReferredPractitioner(slug, referredSlug, target.id);
+
+  // Same limiter shape as the invite path: this also sends to an arbitrary address on the
+  // practitioner's say-so.
+  const limited = await rateLimit('client-referral', target.id, { limit: 10, windowSeconds: 3600 });
+  if (!limited.success) {
+    redirect(`/practitioners/${slug}/edit?refer=throttled#clients`);
+  }
+
+  // SNAPSHOTTED AT ISSUE (R12). Read once, here — reading it again later would let an operator
+  // editing the admin term expire links already handed out.
+  const { leadAttributionTermMonths } = await loadSettings(prisma);
+
+  let created: Awaited<ReturnType<typeof createEmailReferral>>;
+  try {
+    created = await createEmailReferral(prisma, {
+      referrerId: target.id,
+      referredId: referred.id,
+      clientEmail,
+      clientName,
+      note,
+      termMonths: leadAttributionTermMonths,
+    });
+  } catch (err) {
+    redirect(
+      `/practitioners/${slug}/edit?refer=error&msg=${encodeURIComponent(
+        extractError(err, 'Could not send that referral.'),
+      )}#clients`,
+    );
+  }
+
+  const referrer = await prisma.practitioner.findUnique({
+    where: { id: target.id },
+    select: { displayName: true, user: { select: { email: true } } },
+  });
+
+  // Out of band and fail-soft: the referral row is already committed and is what decides money.
+  // A failed email is a delivery problem, not a reason to lose the referral.
+  await sendReferralEmails({
+    referral: created,
+    referrerName: referrer?.displayName ?? 'A practitioner',
+    referrerEmail: referrer?.user.email ?? null,
+    referredName: referred.displayName,
+    referredSlug: referred.slug,
+    note,
+  }).catch((err) => {
+    console.error('[referral] email send failed', {
+      referralId: created.id,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
+
+  redirect(`/practitioners/${slug}/edit?refer=sent#clients`);
+}
+
+export async function createReferralLinkFor(slug: string, formData: FormData): Promise<void> {
+  const target = await authorizeForSlug(slug);
+  const referredSlug = String(formData.get('referredSlug') ?? '').trim();
+  const referred = await resolveReferredPractitioner(slug, referredSlug, target.id);
+
+  const { leadAttributionTermMonths } = await loadSettings(prisma);
+
+  let link: Awaited<ReturnType<typeof createReferralLink>>;
+  try {
+    link = await createReferralLink(prisma, {
+      referrerId: target.id,
+      referredId: referred.id,
+      termMonths: leadAttributionTermMonths,
+    });
+  } catch (err) {
+    redirect(
+      `/practitioners/${slug}/edit?refer=error&msg=${encodeURIComponent(
+        extractError(err, 'Could not create that link.'),
+      )}#clients`,
+    );
+  }
+
+  // Returned in the URL so the page can render it for copying. It is a bearer token for a
+  // REFERRAL, not for anything private: opening it records who introduced whom and redirects to a
+  // public profile. It is X's own link, and X is the one being shown it.
+  redirect(
+    `/practitioners/${slug}/edit?refer=link&token=${encodeURIComponent(link.token)}#clients`,
+  );
+}
+
+/**
+ * The three §5.5 notices that fire when a referral email is sent.
+ *
+ * ⚠️ Y IS NOT TOLD THE CLIENT'S EMAIL (§5.5): "no email shown until C books". The referred
+ * practitioner learns that X sent them someone, and nothing more, until that person actually
+ * books through the link. The template below names X and Y only — enforced by what it is given,
+ * not by remembering not to interpolate a variable that is in scope.
+ */
+async function sendReferralEmails(params: {
+  referral: { token: string; clientEmail: string; expiresAt: Date };
+  referrerName: string;
+  referrerEmail: string | null;
+  referredName: string;
+  referredSlug: string;
+  note: string | null;
+}): Promise<void> {
+  const url = referralUrl(params.referral.token);
+  const referrer = escapeHtml(params.referrerName);
+  const referred = escapeHtml(params.referredName);
+  // The note is practitioner-supplied free text going into an HTML email. Escaped, for the same
+  // reason `escapeHtml` exists at all: an email local part may contain `<` and pass validation.
+  const note = params.note ? escapeHtml(params.note) : null;
+
+  // 1 — the client. The only message that carries the referral link.
+  await sendEmail({
+    to: params.referral.clientEmail,
+    subject: `${params.referrerName} suggested you see ${params.referredName}`,
+    text: [
+      `${params.referrerName} thought ${params.referredName} might be a good fit for you.`,
+      ...(params.note ? ['', `"${params.note}"`] : []),
+      '',
+      url,
+    ].join('\n'),
+    html: `<p>${referrer} thought ${referred} might be a good fit for you.</p>
+${note ? `<blockquote>${note.replace(/\n/g, '<br>')}</blockquote>` : ''}
+<p><a href="${url}">See ${referred}&rsquo;s profile</a></p>`,
+    idempotencyKey: `referral-client/${params.referral.token}`,
+    tags: [{ name: 'type', value: 'referral-client' }],
+  });
+
+  // 2 — the referred practitioner (Y). NO client email, by §5.5.
+  const referredUser = await prisma.practitioner.findUnique({
+    where: { slug: params.referredSlug },
+    select: { user: { select: { email: true } } },
+  });
+  if (referredUser?.user.email) {
+    await sendEmail({
+      to: referredUser.user.email,
+      subject: `${params.referrerName} referred a client to you`,
+      text: [
+        `${params.referrerName} referred a client to you on Natural Health Pros.`,
+        '',
+        'You will see their details if and when they book with you.',
+      ].join('\n'),
+      html: `<p>${referrer} referred a client to you on Natural Health Pros.</p>
+<p>You&rsquo;ll see their details if and when they book with you.</p>`,
+      idempotencyKey: `referral-referred/${params.referral.token}`,
+      tags: [{ name: 'type', value: 'referral-referred' }],
+    });
+  }
+
+  // 3 — the referrer's own confirmation, naming what they stand to earn and until when.
+  if (params.referrerEmail) {
+    const until = params.referral.expiresAt.toISOString().slice(0, 10);
+    await sendEmail({
+      to: params.referrerEmail,
+      subject: `Your referral to ${params.referredName} is on its way`,
+      text: [
+        `We sent your referral to ${params.referredName}.`,
+        '',
+        `If they book, you earn a share of their sessions with ${params.referredName} until ${until}.`,
+      ].join('\n'),
+      html: `<p>We sent your referral to ${referred}.</p>
+<p>If they book, you earn a share of their sessions with ${referred} until ${until}.</p>`,
+      idempotencyKey: `referral-referrer/${params.referral.token}`,
+      tags: [{ name: 'type', value: 'referral-referrer' }],
+    });
+  }
 }

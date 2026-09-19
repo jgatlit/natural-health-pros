@@ -30,6 +30,13 @@ const MUST_HAVE_A_CALLER = [
   'openPayoutPortal',
   'publishOffering',
   'unpublishOffering',
+  // Clients & Referrals (spec v1.4 §5). Every one of these writes a row that decides money — a
+  // client-list entry makes sessions free, a referral makes somebody a payee — so an exported,
+  // correct, callerless version of any of them is a feature that silently does not exist.
+  'addClients',
+  'inviteClients',
+  'referClientByEmail',
+  'createReferralLinkFor',
 ];
 
 /**
@@ -41,6 +48,14 @@ const MUST_HAVE_A_CALLER = [
  * exported and callerless for two and a half months.
  */
 const FLOW_ROUTES = [{ path: '/practitioners/', segment: 'book', linked: true, owner: '§17.4a' }];
+
+/**
+ * `/r/[token]` is reachable by DESIGN from outside the product — a practitioner pastes it into a
+ * message — so the "linked from a page" test above does not apply to it. What must be true is
+ * that the app can still MINT one: a referral route with no way to create a link is the same
+ * complete-but-unreachable shape, one step earlier in the chain.
+ */
+const REFERRAL_LINK_MINTERS = ['createReferralLink', 'referralUrl'];
 
 function walk(dir: string, out: string[] = []): string[] {
   for (const entry of readdirSync(dir)) {
@@ -114,6 +129,30 @@ describe('flow routes are reachable from the UI', () => {
       ).toBe(route.linked);
     });
   }
+});
+
+describe('the referral link can actually be minted and rendered', () => {
+  for (const name of REFERRAL_LINK_MINTERS) {
+    it(`${name} has a consumer outside src/lib`, () => {
+      const callers = files.filter(
+        (f) => !f.includes(`${sep}lib${sep}`) && new RegExp(`\\b${name}\\b`).test(readFileSync(f, 'utf8')),
+      );
+      expect(
+        callers,
+        `${name} is exported but nothing outside src/lib uses it — a referral system that cannot ` +
+          `issue a link is complete and unreachable.`,
+      ).not.toHaveLength(0);
+    });
+  }
+
+  it('the /r/[token] route exists and is explicitly dynamic', () => {
+    // A prerendered `/r/[token]` would serve ONE cached response to every visitor, so every
+    // referral would resolve to the same touch and the same referrer would be paid for all of
+    // them. `force-dynamic` is the declaration; the build table's ƒ/○ column is the proof.
+    const route = files.find((f) => f.endsWith(`${sep}app${sep}r${sep}[token]${sep}route.ts`));
+    expect(route, 'src/app/r/[token]/route.ts is missing').toBeTruthy();
+    expect(readFileSync(route!, 'utf8')).toContain("export const dynamic = 'force-dynamic'");
+  });
 });
 
 describe('cron routes are registered', () => {

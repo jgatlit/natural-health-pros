@@ -20,6 +20,14 @@ type Props = {
   offerings?: CtaOffering[];
   primaryBookingLinkId?: string | null;
   websiteUrl?: string | null;
+  /**
+   * A `ReferralTouch.touchToken`, threaded onto every `/book` URL this renders (spec §5.4.5 hop 3).
+   *
+   * Passed down rather than read from a cookie here: the visitor arrived at this page with the
+   * token in the URL, and the booking flow is where it has to end up. Undefined on every ordinary
+   * visit, which is most of them.
+   */
+  referralTouchToken?: string | null;
 };
 
 /**
@@ -75,6 +83,7 @@ export function PractitionerCTAs({
   offerings = [],
   primaryBookingLinkId,
   websiteUrl,
+  referralTouchToken,
 }: Props) {
   const hero = resolveHeroLink(bookingLinks, primaryBookingLinkId ?? null);
   const secondary = bookingLinks.filter((l) => l.id !== hero?.id);
@@ -91,7 +100,8 @@ export function PractitionerCTAs({
         Book time with me now
       </h2>
       {hero ? (
-        <HeroCta slug={slug} link={hero} offerings={offerings} />
+        <HeroCta slug={slug} link={hero} offerings={offerings}
+          referralTouchToken={referralTouchToken} />
       ) : bookingLinks.length > 0 ? (
         // §14.3 hero suppression: several links, none designated. The cards lead instead — a hero
         // pointing at one arbitrary calendar would misrepresent the practice. The links
@@ -113,7 +123,8 @@ export function PractitionerCTAs({
       )}
 
       {secondary.map((b) => (
-        <SecondaryCta key={b.id} slug={slug} link={b} offerings={offerings} />
+        <SecondaryCta key={b.id} slug={slug} link={b} offerings={offerings}
+          referralTouchToken={referralTouchToken} />
       ))}
 
       {websiteUrl && (
@@ -139,13 +150,15 @@ function HeroCta({
   slug,
   link,
   offerings,
+  referralTouchToken,
 }: {
   slug: string;
   link: CtaBookingLink;
   offerings: CtaOffering[];
+  referralTouchToken?: string | null;
 }) {
   const linked = offeringsForLink(offerings, link.id);
-  const target = bookingLinkTarget(slug, link, linked);
+  const target = bookingLinkTarget(slug, link, linked, referralTouchToken);
   const label = ctaLabelFor(link, linked);
 
   if (target.kind === 'chooser') {
@@ -157,7 +170,7 @@ function HeroCta({
           id: o.id,
           title: o.title,
           priceUsdCents: o.priceUsdCents,
-          href: chooserOptionTarget(slug, link.id, o),
+          href: chooserOptionTarget(slug, link.id, o, referralTouchToken),
         }))}
       />
     );
@@ -187,13 +200,15 @@ function SecondaryCta({
   slug,
   link,
   offerings,
+  referralTouchToken,
 }: {
   slug: string;
   link: CtaBookingLink;
   offerings: CtaOffering[];
+  referralTouchToken?: string | null;
 }) {
   const linked = offeringsForLink(offerings, link.id);
-  const target = bookingLinkTarget(slug, link, linked);
+  const target = bookingLinkTarget(slug, link, linked, referralTouchToken);
 
   if (target.kind === 'chooser') {
     return (
@@ -204,7 +219,7 @@ function SecondaryCta({
           id: o.id,
           title: o.title,
           priceUsdCents: o.priceUsdCents,
-          href: chooserOptionTarget(slug, link.id, o),
+          href: chooserOptionTarget(slug, link.id, o, referralTouchToken),
         }))}
       />
     );

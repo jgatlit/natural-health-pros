@@ -20,7 +20,23 @@ import { PractitionerHero } from '@/components/practitioners/PractitionerHero';
 import { PractitionerCTAs } from '@/components/practitioners/PractitionerCTAs';
 import { signOutAction } from '@/components/site/actions';
 
-type PageProps = { params: { slug: string }; searchParams: { onboarded?: string } };
+type PageProps = {
+  params: { slug: string };
+  searchParams: {
+    onboarded?: string;
+    /**
+     * A `ReferralTouch.touchToken`, put here by `/r/<token>` (spec §5.4.5 hop 3).
+     *
+     * Read and threaded onto every booking CTA so it survives the next navigation. Deliberately
+     * NOT `ref` — that param already marks a practitioner's OWN audience and resolves to 0%
+     * commission (canon D18), so reusing it would make every cross-referral free.
+     *
+     * Untrusted here. It is re-validated server-side against the practitioner being booked when
+     * the intent is created; this page only passes it along.
+     */
+    nhpr?: string;
+  };
+};
 
 async function loadPractitioner(slug: string) {
   return prisma.practitioner.findUnique({
@@ -61,6 +77,10 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
 export default async function PractitionerPage({ params, searchParams }: PageProps) {
   const p = await loadPractitioner(params.slug);
   if (!p) notFound();
+
+  // Carried onto every `/book` link below. Not validated here: this page renders for anyone, and
+  // a bad token simply fails re-validation at capture and records `referralCarriage = NONE`.
+  const referralTouchToken = searchParams.nhpr?.trim() || null;
 
   // The owner needs a way back to their dashboard from their own public page. Before this, the
   // dashboard link rendered ONLY behind ?onboarded — so once that first redirect was gone, the
@@ -113,7 +133,7 @@ export default async function PractitionerPage({ params, searchParams }: PagePro
       return {
         ...o,
         canTransact,
-        href: actionable ? offeringTarget(p.slug, { ...o }) : null,
+        href: actionable ? offeringTarget(p.slug, { ...o }, referralTouchToken) : null,
       };
     });
 
@@ -234,6 +254,7 @@ export default async function PractitionerPage({ params, searchParams }: PagePro
                 // EVERY non-archived offering, listingVisibility included: chooser membership is
                 // gated by bookingLinkId, never by visibility (§4).
                 offerings={ctaOfferings}
+                referralTouchToken={referralTouchToken}
                 primaryBookingLinkId={p.primaryBookingLinkId}
                 websiteUrl={p.websiteUrl}
               />
