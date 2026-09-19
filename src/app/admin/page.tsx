@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { Mail, Building2, Webhook, Tags, ChevronRight } from 'lucide-react';
+import { Mail, Building2, Webhook, Tags, ChevronRight, Scale, Users } from 'lucide-react';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
 import { isWhopPlatformsReady } from '@/lib/whop';
@@ -16,7 +16,8 @@ export default async function AdminIndex() {
     redirect('/auth/signin?callbackUrl=/admin');
   }
 
-  const [pendingInvites, connectedAccounts, recentWebhooks, pendingSpecialties] = await Promise.all([
+  const [pendingInvites, connectedAccounts, recentWebhooks, pendingSpecialties, heldShares, attributions] =
+    await Promise.all([
     prisma.invitation.count({
       where: { acceptedAt: null, expiresAt: { gt: new Date() } },
     }),
@@ -25,6 +26,8 @@ export default async function AdminIndex() {
       where: { receivedAt: { gt: new Date(Date.now() - 7 * 24 * 60 * 60 * 1000) } },
     }),
     prisma.specialtyAlias.count({ where: { status: 'PENDING' } }),
+    prisma.referralLedgerEntry.count({ where: { state: 'HELD' } }),
+    prisma.attributedClient.count(),
   ]);
 
   const tools = [
@@ -54,6 +57,25 @@ export default async function AdminIndex() {
       countLabel: 'connected',
       description: 'View practitioner Whop sub-merchant status + KYC progress.',
       status: isWhopPlatformsReady() ? ('active' as const) : ('pending-access' as const),
+    },
+    {
+      icon: Scale,
+      title: 'Commercial settings',
+      href: '/admin/commercial-settings',
+      count: heldShares,
+      countLabel: 'shares held',
+      description:
+        'Lead Attribution Term + referral hold period, and the referrer shares we are holding.',
+      status: 'active' as const,
+    },
+    {
+      icon: Users,
+      title: 'Attributions',
+      href: '/admin/attributions',
+      count: attributions,
+      countLabel: 'clients',
+      description: 'Who owns each client and who referred them. Overrides need a note.',
+      status: 'active' as const,
     },
     {
       icon: Webhook,

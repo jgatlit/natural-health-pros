@@ -73,7 +73,13 @@ type SettingsDb = {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     findMany(args?: any): Promise<Array<{ key: string; value: string }>>;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    findUnique(args: any): Promise<{ value: string } | null>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     upsert(args: any): Promise<unknown>;
+  };
+  platformSettingChange: {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    create(args: any): Promise<unknown>;
   };
 };
 
@@ -116,7 +122,17 @@ export async function loadSettings(
   };
 }
 
-/** Write one setting. Rejects out-of-range input loudly — this is an operator-facing edit. */
+/**
+ * Write one setting, and LOG THE CHANGE (spec §1.1: "logged with the admin, the time, and the old
+ * and new values").
+ *
+ * The log is a separate append-only table because `PlatformSetting` holds only the CURRENT value
+ * and therefore structurally cannot answer "who shortened the term, when, and from what?" — a
+ * question that matters precisely because the term decides what practitioners are charged.
+ *
+ * Rejects out-of-range input loudly and BEFORE writing either row: a refused change is not a
+ * change, and logging one would put an event in the audit trail that never happened.
+ */
 export async function saveSetting(
   db: SettingsDb,
   input: { name: keyof typeof SETTING_KEYS; value: number; updatedByUserId?: string | null },
@@ -128,9 +144,27 @@ export async function saveSetting(
     );
   }
   const value = String(input.value);
+
+  // Read the PREVIOUS stored value before overwriting it. Null when there has never been a row —
+  // deliberately not the resolved default, because "nobody had set this" and "somebody set it to
+  // 8" are different facts and the log should not claim the second when the first is true.
+  const previous = await db.platformSetting.findUnique({
+    where: { key: def.key },
+    select: { value: true },
+  });
+
   await db.platformSetting.upsert({
     where: { key: def.key },
     create: { key: def.key, value, updatedByUserId: input.updatedByUserId ?? null },
     update: { value, updatedByUserId: input.updatedByUserId ?? null },
+  });
+
+  await db.platformSettingChange.create({
+    data: {
+      key: def.key,
+      oldValue: previous?.value ?? null,
+      newValue: value,
+      changedByUserId: input.updatedByUserId ?? null,
+    },
   });
 }

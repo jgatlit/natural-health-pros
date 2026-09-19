@@ -27,7 +27,7 @@ export default async function CommercialSettingsPage() {
   // The held money this screen is accountable for. EXPIRED_UNCLAIMED is surfaced separately and
   // on purpose: day-91 policy is deliberately unruled, so the total is shown and NOTHING acts on
   // it — no forfeiture, no release. See the ReferralPayableState docs in schema.prisma.
-  const [held, expired] = await Promise.all([
+  const [held, expired, changes] = await Promise.all([
     prisma.referralLedgerEntry.aggregate({
       where: { state: 'HELD' },
       _sum: { referrerShareUsdCents: true },
@@ -37,6 +37,13 @@ export default async function CommercialSettingsPage() {
       where: { state: 'EXPIRED_UNCLAIMED' },
       _sum: { referrerShareUsdCents: true },
       _count: true,
+    }),
+    // Spec §1.1: "Every change is logged with the admin, the time, and the old and new values."
+    // Surfaced HERE rather than in a separate screen, because the question it answers — "why is
+    // the term 6 months now?" — only ever gets asked while looking at the number.
+    prisma.platformSettingChange.findMany({
+      orderBy: { changedAt: 'desc' },
+      take: 20,
     }),
   ]);
 
@@ -100,6 +107,26 @@ export default async function CommercialSettingsPage() {
           released — the money stays owed and reconcilable until there is an explicit decision
           about what day 91 means. That decision is still open.
         </p>
+      </section>
+
+      <section className="mt-6 rounded-lg border border-slate-200 p-5">
+        <h2 className="text-sm font-semibold text-slate-900">Change history</h2>
+        <p className="mt-1 text-sm text-slate-600">
+          Who changed what, when, and from what value. Existing attributions and holds keep the
+          numbers they were created under, so a change here is never retroactive.
+        </p>
+        {changes.length === 0 ? (
+          <p className="mt-3 text-sm text-slate-500">Nothing has been changed yet.</p>
+        ) : (
+          <ul className="mt-3 space-y-1 text-sm text-slate-700">
+            {changes.map((c) => (
+              <li key={c.id} className="font-mono text-xs">
+                {c.changedAt.toISOString().slice(0, 16).replace('T', ' ')} · {c.key} ·{' '}
+                {c.oldValue ?? '(unset)'} → {c.newValue} · {c.changedByUserId ?? 'unknown admin'}
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
     </main>
   );

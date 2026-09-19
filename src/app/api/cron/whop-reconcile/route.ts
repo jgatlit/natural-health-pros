@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { createTransfer, getIdentityProfile, getPayoutStatus, isWhopPlatformsReady } from '@/lib/whop';
+import {
+  createTransfer,
+  getIdentityProfile,
+  getPaymentFees,
+  getPayoutStatus,
+  isWhopPlatformsReady,
+} from '@/lib/whop';
+import { reconcileFeeLines } from '@/lib/fee-reconciliation';
 import {
   expireLapsedHolds,
   promoteHeldToPayable,
@@ -170,6 +177,52 @@ export async function GET(request: NextRequest) {
     return 0;
   });
 
+  // ── Fee reconciliation (spec §7) ───────────────────────────────────────────────────────────
+  //
+  // Match what we RECORDED collecting against what Whop says it actually took. This is the whole
+  // point of the fee ledger: without it, "the application fee was charged" is an assumption
+  // nobody can check, and a mint that silently minted a zero-fee plan would look identical to one
+  // that worked.
+  //
+  // Bounded and re-checked. Rows are re-examined on later runs rather than marked reconciled,
+  // which costs a handful of API reads an hour and buys idempotence with no extra column — and a
+  // discrepancy that appears later (a refund, an adjustment on Whop's side) is still caught.
+  const mismatches: { bookingIntentId: string | null; expectedUsdCents: number; observedUsdCents: number }[] = [];
+  const recent = await prisma.feeLedgerEntry
+    .findMany({
+      where: {
+        kind: 'APPLICATION_FEE',
+        whopPaymentId: { not: null },
+        createdAt: { gte: new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000) },
+      },
+      select: { bookingIntentId: true, whopPaymentId: true, amountUsdCents: true },
+      orderBy: { createdAt: 'desc' },
+      take: 25,
+    })
+    .catch((e) => {
+      errors.push(`fee-reconcile: ${e instanceof Error ? e.message : String(e)}`);
+      return [] as { bookingIntentId: string | null; whopPaymentId: string | null; amountUsdCents: number }[];
+    });
+
+  for (const entry of recent) {
+    try {
+      const fees = await getPaymentFees(entry.whopPaymentId!);
+      const result = reconcileFeeLines({ expectedUsdCents: entry.amountUsdCents, whopFees: fees });
+      if (!result.ok) {
+        mismatches.push({
+          bookingIntentId: entry.bookingIntentId,
+          expectedUsdCents: result.expectedUsdCents,
+          observedUsdCents: result.observedUsdCents,
+        });
+      }
+    } catch (e) {
+      errors.push(`fee-reconcile ${entry.whopPaymentId}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+  if (mismatches.length > 0) {
+    console.error('whop-reconcile: FEE MISMATCHES', JSON.stringify(mismatches));
+  }
+
   // A BLOCKED payout is not an error — it is the expected state until the parent company is
   // business-verified — but it must be visible in the response rather than inferred from
   // `settled: 0`. "We owe referrers money and here is exactly why it has not moved" should be
@@ -191,7 +244,10 @@ export async function GET(request: NextRequest) {
   // 207 on any failure, matching /api/cron/trial-sweep. A sweep that polled twelve accounts,
   // failed all twelve on a rotated key, and returned 200 is indistinguishable from a clean run
   // to Vercel cron monitoring — the silent-success shape this route exists to eliminate.
-  const ok = errors.length === 0 && unpollable.length === 0;
+  // A fee mismatch is a REAL problem — money we think we collected and Whop does not — so it must
+  // not return 200. A sweep that found one and reported success is the silent-success shape this
+  // route exists to eliminate.
+  const ok = errors.length === 0 && unpollable.length === 0 && mismatches.length === 0;
   return NextResponse.json(
     {
       ok,
@@ -200,6 +256,7 @@ export async function GET(request: NextRequest) {
       drift,
       unpollable,
       referrals: { promoted, expired, ...(settlement ?? {}) },
+      feeMismatches: mismatches,
       errors,
     },
     { status: ok ? 200 : 207 },

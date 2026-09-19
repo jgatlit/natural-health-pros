@@ -21,7 +21,8 @@ const mocks = vi.hoisted(() => ({
   ledgerUpdate: vi.fn<(args?: unknown) => Promise<unknown>>(),
   feeUpsert: vi.fn<(args?: unknown) => Promise<unknown>>(),
   feeUpdateMany: vi.fn<(args?: unknown) => Promise<{ count: number }>>(),
-  createTransfer: vi.fn<(args?: unknown) => Promise<{ transferId: string }>>(),
+  createTransfer: vi.fn<(args?: unknown) => Promise<{ transferId: string }>>(),  feeFindMany: vi.fn<(args?: unknown) => Promise<unknown[]>>(),
+  getPaymentFees: vi.fn<(id: string) => Promise<Array<{ origin: string; amount: number }>>>(),
 }));
 
 vi.mock('@/lib/prisma', () => ({
@@ -36,7 +37,11 @@ vi.mock('@/lib/prisma', () => ({
       updateMany: mocks.ledgerUpdateMany,
       update: mocks.ledgerUpdate,
     },
-    feeLedgerEntry: { upsert: mocks.feeUpsert, updateMany: mocks.feeUpdateMany },
+    feeLedgerEntry: {
+      upsert: mocks.feeUpsert,
+      updateMany: mocks.feeUpdateMany,
+      findMany: mocks.feeFindMany,
+    },
   },
 }));
 
@@ -46,6 +51,7 @@ vi.mock('@/lib/whop', () => ({
   isWhopPlatformsReady: mocks.isWhopPlatformsReady,
   // ⚠️ NEVER the real one. This test must not be one refactor away from posting a live transfer.
   createTransfer: mocks.createTransfer,
+  getPaymentFees: mocks.getPaymentFees,
 }));
 
 // Imported inside beforeAll, not at module top level: a top-level await here is valid for
@@ -84,6 +90,8 @@ beforeEach(() => {
   mocks.feeUpsert.mockResolvedValue({});
   mocks.feeUpdateMany.mockResolvedValue({ count: 0 });
   mocks.createTransfer.mockResolvedValue({ transferId: 'tr_test' });
+  mocks.feeFindMany.mockResolvedValue([]);
+  mocks.getPaymentFees.mockResolvedValue([]);
   mocks.update.mockResolvedValue({});
   mocks.findMany.mockResolvedValue([]);
 });
@@ -319,5 +327,50 @@ describe('referrer settlement pass (spec v1.4 §6.2, rulings 6 and 7)', () => {
     delete process.env.WHOP_TRANSFERS_ENABLED;
     delete process.env.WHOP_PARENT_COMPANY_ID;
     delete process.env.WHOP_COMPANY_API_KEY;
+  });
+});
+
+describe('fee reconciliation (spec §7)', () => {
+  it('agrees when Whop’s application_fee matches what we recorded collecting', async () => {
+    mocks.feeFindMany.mockResolvedValue([
+      { bookingIntentId: 'bi_1', whopPaymentId: 'pay_1', amountUsdCents: 4_000 },
+    ]);
+    mocks.getPaymentFees.mockResolvedValue([{ origin: 'application_fee', amount: 40 }]);
+
+    const res = await GET(req());
+    const body = (await res.json()) as { feeMismatches: unknown[] };
+
+    expect(body.feeMismatches).toEqual([]);
+  });
+
+  it('reports a mismatch AND refuses to return 200 — a silent success here hides missing money', async () => {
+    mocks.feeFindMany.mockResolvedValue([
+      { bookingIntentId: 'bi_1', whopPaymentId: 'pay_1', amountUsdCents: 4_000 },
+    ]);
+    mocks.getPaymentFees.mockResolvedValue([{ origin: 'application_fee', amount: 20 }]);
+
+    const res = await GET(req());
+    const body = (await res.json()) as {
+      ok: boolean;
+      feeMismatches: { expectedUsdCents: number; observedUsdCents: number }[];
+    };
+
+    expect(res.status).toBe(207);
+    expect(body.ok).toBe(false);
+    expect(body.feeMismatches).toEqual([
+      { bookingIntentId: 'bi_1', expectedUsdCents: 4_000, observedUsdCents: 2_000 },
+    ]);
+  });
+
+  it('treats a payment Whop reports NO application fee for as a mismatch, not a skip', async () => {
+    mocks.feeFindMany.mockResolvedValue([
+      { bookingIntentId: 'bi_1', whopPaymentId: 'pay_1', amountUsdCents: 4_000 },
+    ]);
+    mocks.getPaymentFees.mockResolvedValue([{ origin: 'payment_processing_fixed_fee', amount: 0.3 }]);
+
+    const res = await GET(req());
+    const body = (await res.json()) as { feeMismatches: { observedUsdCents: number }[] };
+
+    expect(body.feeMismatches[0]?.observedUsdCents).toBe(0);
   });
 });

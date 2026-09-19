@@ -458,6 +458,42 @@ export async function createBookingCheckoutConfig(params: {
   return { checkoutConfigId: cfg.id, purchaseUrl: absoluteCheckoutUrl(cfg.purchase_url) };
 }
 
+/**
+ * The itemised fee lines on one payment — what makes our ledger CHECKABLE (spec §7).
+ *
+ * Validated live on `pay_JOaWdCx7xc37VJ`: a $10.00 payment returned `application_fee` $5.00
+ * alongside `payment_processing_fixed_fee`, `payment_processing_percentage_fee`,
+ * `orchestration_percentage_fee` and `stripe_radar_fee`. An earlier claim that only
+ * `amount_after_fees` was exposed was wrong and is retracted.
+ *
+ * ⚠️ `amount` IS IN DOLLARS, like `/transfers` and unlike `application_fee_amount`. The conversion
+ * lives in `reconcileFeeLines`, which is where it is tested.
+ *
+ * Returns an EMPTY ARRAY on a read failure rather than throwing: this feeds a reconciliation
+ * sweep, and one unreadable payment must not abort the pass over the others. The caller reports
+ * an empty result as an observed zero, which is a mismatch it will surface.
+ */
+export async function getPaymentFees(
+  paymentId: string,
+): Promise<Array<{ origin: string; amount: number }>> {
+  if (!isWhopPlatformsReady()) throw new WhopNotConfigured('read payment fees');
+  const base = process.env.WHOP_API_BASE ?? 'https://api.whop.com/api/v1';
+  const res = await fetch(`${base}/payments/${encodeURIComponent(paymentId)}/fees`, {
+    headers: { Authorization: `Bearer ${process.env.WHOP_COMPANY_API_KEY}` },
+  });
+  if (!res.ok) return [];
+  const body = (await res.json().catch(() => null)) as
+    | { data?: Array<{ origin?: string; amount?: number }> }
+    | Array<{ origin?: string; amount?: number }>
+    | null;
+  const rows = Array.isArray(body) ? body : (body?.data ?? []);
+  return rows
+    .filter((r): r is { origin: string; amount: number } =>
+      typeof r?.origin === 'string' && typeof r?.amount === 'number',
+    )
+    .map((r) => ({ origin: r.origin, amount: r.amount }));
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Transfers — settling a referrer's share (spec v1.4 §6.2)
 // ──────────────────────────────────────────────────────────────────────────────

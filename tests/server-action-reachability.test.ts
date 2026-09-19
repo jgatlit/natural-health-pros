@@ -259,3 +259,34 @@ describe('every booking surface gates on bookableWhere, never listedWhere', () =
     }
   });
 });
+
+describe('client components use hooks that exist in the installed React', () => {
+  /**
+   * ⚠️ `next build` reports a missing React export as a WARNING, not an error.
+   *
+   * `SettingForm.tsx` shipped importing `useActionState` from 'react' — a React 19 API, in a
+   * React 18 project. tsc passed (the types come from the installed React only if you look),
+   * every test passed, the page compiled, and the form would have thrown on render the first time
+   * an operator opened /admin/commercial-settings. The build table's warnings are an oracle the
+   * suite is not, so the one class of failure that got through is asserted here directly.
+   */
+  const REACT_19_ONLY = ['useActionState', 'useOptimistic'];
+  const reactMajor = Number(
+    (require('react/package.json') as { version: string }).version.split('.')[0],
+  );
+
+  for (const hook of REACT_19_ONLY) {
+    it(`no file imports ${hook} while React ${reactMajor} is installed`, () => {
+      if (reactMajor >= 19) return; // The hook exists; nothing to guard.
+      const offenders = files.filter((f) => {
+        const src = readFileSync(f, 'utf8');
+        return new RegExp(`import\\s*\\{[^}]*\\b${hook}\\b[^}]*\\}\\s*from\\s*'react'`).test(src);
+      });
+      expect(
+        offenders.map((f) => f.replace(ROOT, 'src')),
+        `${hook} does not exist in React ${reactMajor}. next build reports this as a WARNING, so ` +
+          `it reaches production as a runtime crash on first render.`,
+      ).toEqual([]);
+    });
+  }
+});
