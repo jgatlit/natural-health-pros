@@ -27,6 +27,7 @@ const mocks = vi.hoisted(() => ({
       paidAt: Date | null;
       email?: string | null;
       scheduledAt?: Date | null;
+      referralTouchId?: string | null;
     } | null>
   >(),
   // The attribution write was invisible here until 2026-09-19: neither `platformSetting` nor
@@ -36,6 +37,14 @@ const mocks = vi.hoisted(() => ({
   settingFindMany: vi.fn<(args?: unknown) => Promise<Array<{ key: string; value: string }>>>(),
   attributedUpsert: vi.fn<(args: unknown) => Promise<unknown>>(),
   attributedUpdateMany: vi.fn<(args: unknown) => Promise<{ count: number }>>(),
+  attributedFindUnique: vi.fn<(args: unknown) => Promise<unknown>>(),
+  // Stage 3's referral ledger. Added here the moment the handler reached them, for the reason
+  // stated above: a mock that lacks a model the handler calls makes the handler's bare catch
+  // swallow a TypeError, and the whole path then passes while doing nothing.
+  feeSnapshotFindUnique: vi.fn<(args: unknown) => Promise<unknown>>(),
+  referralLedgerUpsert: vi.fn<(args: unknown) => Promise<unknown>>(),
+  feeLedgerUpsert: vi.fn<(args: unknown) => Promise<unknown>>(),
+  touchUpdateMany: vi.fn<(args: unknown) => Promise<{ count: number }>>(),
 }));
 
 vi.mock('@/lib/prisma', () => ({
@@ -58,6 +67,19 @@ vi.mock('@/lib/prisma', () => ({
     attributedClient: {
       upsert: mocks.attributedUpsert,
       updateMany: mocks.attributedUpdateMany,
+      findUnique: mocks.attributedFindUnique,
+    },
+    bookingFeeSnapshot: {
+      findUnique: mocks.feeSnapshotFindUnique,
+    },
+    referralLedgerEntry: {
+      upsert: mocks.referralLedgerUpsert,
+    },
+    feeLedgerEntry: {
+      upsert: mocks.feeLedgerUpsert,
+    },
+    referralTouch: {
+      updateMany: mocks.touchUpdateMany,
     },
   },
 }));
@@ -100,6 +122,11 @@ beforeEach(() => {
   mocks.settingFindMany.mockResolvedValue([{ key: 'lead_attribution_term_months', value: '8' }]);
   mocks.attributedUpsert.mockResolvedValue(undefined);
   mocks.attributedUpdateMany.mockResolvedValue({ count: 1 });
+  mocks.attributedFindUnique.mockResolvedValue(null);
+  mocks.feeSnapshotFindUnique.mockResolvedValue(null);
+  mocks.referralLedgerUpsert.mockResolvedValue(undefined);
+  mocks.feeLedgerUpsert.mockResolvedValue(undefined);
+  mocks.touchUpdateMany.mockResolvedValue({ count: 1 });
 });
 
 describe('signature verification & configuration', () => {
@@ -493,7 +520,17 @@ describe('payment.succeeded — the AUTHORITY for payment (§17.3c)', () => {
   // worked or was deleted. A stub weaker than production asserts nothing.
   beforeEach(() => {
     mocks.intentUpdateMany.mockResolvedValue({ count: 1 });
-    mocks.intentFindUnique.mockResolvedValue({ id: 'int_1', practitionerId: 'prac_1', paidAt: null });
+    // `email` is NOT NULL in the schema, so omitting it here would be a fixture that production
+    // cannot produce — and it would make the ledger commit throw on every test in this block,
+    // hiding real assertions behind a manufactured failure.
+    mocks.intentFindUnique.mockResolvedValue({
+      id: 'int_1',
+      practitionerId: 'prac_1',
+      paidAt: null,
+      email: 'client@example.com',
+      scheduledAt: null,
+      referralTouchId: null,
+    });
     mocks.findUnique.mockResolvedValue(fakePractitioner({ id: 'prac_1', whopCompanyId: 'biz_1' }));
   });
 
@@ -698,16 +735,156 @@ describe('payment.succeeded — the attribution term is ANCHORED, once, and alwa
     const res = await paid({ scheduledAt: new Date('2026-03-10T00:00:00Z') });
     expect(res.status).toBe(200);
     const recorded = mocks.eventUpdate.mock.calls.some((c) =>
-      JSON.stringify(c[0]).includes('attribution ledger write FAILED'),
+      JSON.stringify(c[0]).includes('ledger write FAILED'),
     );
     expect(recorded).toBe(true);
     // The payment itself still landed.
     expect(mocks.intentUpdateMany).toHaveBeenCalled();
   });
 
-  it('writes nothing when the intent was already paid — the retry guard', async () => {
+  it('RE-RUNS the ledger commit on a redelivery, because skipping it made a lost write permanent', async () => {
+    // ⚠️ DELIBERATE REVERSAL of the previous behaviour, which skipped the whole ledger block
+    // whenever the intent was already paid. That made a transient failure PERMANENT: the retry
+    // found `paidAt` set, counted zero, wrote nothing, and the client was then billed the platform
+    // share forever with nothing recording why. Idempotence now lives in the database — every
+    // write below is an upsert on a unique key — so re-running is safe and skipping is not.
     mocks.intentUpdateMany.mockResolvedValue({ count: 0 });
-    await paid({ scheduledAt: new Date('2026-03-10T00:00:00Z') });
-    expect(mocks.attributedUpsert).not.toHaveBeenCalled();
+    mocks.intentFindUnique.mockResolvedValue({
+      id: 'int_1',
+      practitionerId: 'prac_1',
+      paidAt: new Date('2026-02-01T00:00:00Z'),
+      email: 'client@example.com',
+      scheduledAt: null,
+      referralTouchId: null,
+    });
+
+    await POST(
+      signedRequest({
+        type: 'payment.succeeded',
+        data: { id: 'pay_1', metadata: { booking_intent_id: 'int_1' } },
+        company_id: 'biz_1',
+      }) as unknown as NextRequest,
+    );
+
+    expect(mocks.attributedUpsert).toHaveBeenCalled();
+  });
+
+  it('anchors a redelivery on the intent’s STORED paidAt, so a retry cannot move a running clock', async () => {
+    mocks.intentUpdateMany.mockResolvedValue({ count: 0 });
+    mocks.intentFindUnique.mockResolvedValue({
+      id: 'int_1',
+      practitionerId: 'prac_1',
+      paidAt: new Date('2026-02-01T00:00:00Z'),
+      email: 'client@example.com',
+      scheduledAt: null,
+      referralTouchId: null,
+    });
+
+    await POST(
+      signedRequest({
+        type: 'payment.succeeded',
+        data: { id: 'pay_1', metadata: { booking_intent_id: 'int_1' } },
+        company_id: 'biz_1',
+      }) as unknown as NextRequest,
+    );
+
+    const create = createArgs();
+    expect((create.termAnchorAt as Date).toISOString()).toBe('2026-02-01T00:00:00.000Z');
+  });
+});
+
+describe('payment.succeeded — the referral ledger (stage 3)', () => {
+  beforeEach(() => {
+    mocks.intentUpdateMany.mockResolvedValue({ count: 1 });
+    mocks.findUnique.mockResolvedValue(fakePractitioner({ id: 'prac_1', whopCompanyId: 'biz_1' }));
+    mocks.intentFindUnique.mockResolvedValue({
+      id: 'int_1',
+      practitionerId: 'prac_1',
+      paidAt: null,
+      email: 'client@example.com',
+      scheduledAt: new Date('2026-03-10T00:00:00Z'),
+      referralTouchId: 'touch_1',
+    });
+  });
+
+  function deliver() {
+    return POST(
+      signedRequest({
+        type: 'payment.succeeded',
+        data: { id: 'pay_1', metadata: { booking_intent_id: 'int_1' } },
+        company_id: 'biz_1',
+      }) as unknown as NextRequest,
+    );
+  }
+
+  it('turns the mint-time snapshot into a referrer debt, keyed so a redelivery cannot duplicate it', async () => {
+    mocks.feeSnapshotFindUnique.mockResolvedValue({
+      attributionOwner: 'NHP',
+      isCrossReferral: true,
+      priceUsdCents: 10_000,
+      nhpFeeUsdCents: 2_000,
+      referrerFeeBps: 2_000,
+      referrerShareUsdCents: 2_000,
+      referrerPractitionerId: 'prac_X',
+      applicationFeeUsdCents: 4_000,
+    });
+    // ⚠️ The payer check and the referrer lookup BOTH go through practitioner.findUnique, so this
+    // has to dispatch on the id. Returning the referrer unconditionally makes the payer check see
+    // a company that is not the intent's practitioner, and the handler then REFUSES the payment —
+    // a green-looking test that exercised none of the ledger.
+    mocks.findUnique.mockImplementation(async (args) => {
+      const id = (args as { where?: { id?: string } })?.where?.id;
+      if (id === 'prac_X') {
+        return fakePractitioner({ id: 'prac_X', whopCompanyId: 'biz_x', whopPayoutsEnabled: true });
+      }
+      return fakePractitioner({ id: 'prac_1', whopCompanyId: 'biz_1' });
+    });
+
+    await deliver();
+
+    const args = mocks.referralLedgerUpsert.mock.calls[0]?.[0] as {
+      create: Record<string, unknown>;
+      update: Record<string, unknown>;
+    };
+    expect(args.create).toMatchObject({
+      referrerPractitionerId: 'prac_X',
+      servingPractitionerId: 'prac_1',
+      referrerShareUsdCents: 2_000,
+      collectedFeeUsdCents: 4_000,
+      state: 'PAYABLE',
+      whopPaymentId: 'pay_1',
+    });
+    // CREATE-ONLY on conflict: a redelivery must not reset a hold clock or un-settle a paid row.
+    expect(args.update).toEqual({});
+  });
+
+  it('records the application fee even when no referrer is involved', async () => {
+    mocks.feeSnapshotFindUnique.mockResolvedValue({
+      attributionOwner: 'NHP',
+      isCrossReferral: false,
+      priceUsdCents: 10_000,
+      nhpFeeUsdCents: 4_000,
+      referrerFeeBps: 0,
+      referrerShareUsdCents: 0,
+      referrerPractitionerId: null,
+      applicationFeeUsdCents: 4_000,
+    });
+
+    await deliver();
+
+    expect(mocks.referralLedgerUpsert).not.toHaveBeenCalled();
+    const args = mocks.feeLedgerUpsert.mock.calls[0]?.[0] as { create: Record<string, unknown> };
+    expect(args.create).toMatchObject({ kind: 'APPLICATION_FEE', amountUsdCents: 4_000 });
+  });
+
+  it('still records the claim when the hosted-checkout fallback left no snapshot', async () => {
+    // Reachable, not hypothetical: the §8 fallback mints no per-booking configuration. Skipping
+    // the claim here would mean the term never starts for that client.
+    mocks.feeSnapshotFindUnique.mockResolvedValue(null);
+
+    await deliver();
+
+    expect(mocks.attributedUpsert).toHaveBeenCalled();
+    expect(mocks.referralLedgerUpsert).not.toHaveBeenCalled();
   });
 });

@@ -67,7 +67,7 @@ type Db = {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     upsert(args: any): Promise<unknown>;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    findUnique(args: any): Promise<AttributionRow | null>;
+    findUnique(args: any): Promise<any>;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     updateMany(args: any): Promise<{ count: number }>;
   };
@@ -120,6 +120,17 @@ export async function recordAttributedClient(
     sessionStartsAt?: Date | null;
     /** The practitioner who referred this client, when the booking carried a referral token. */
     referrerPractitionerId?: string | null;
+    /**
+     * THE DECISION TAKEN AT MINT (spec §3.1/§3.2), committed here rather than re-derived.
+     *
+     * Passed in because the fee the buyer was actually charged was computed from it, before this
+     * handler ran. Re-deriving it here could disagree with the amount Whop has already taken, and
+     * that disagreement has no resolution — the money has moved.
+     */
+    owner?: 'PRACTITIONER' | 'NHP' | null;
+    decidedByRule?: string | null;
+    /** The referral touch that carried this client in, when the referral actually earned. */
+    referralTouchId?: string | null;
     at?: Date;
   },
 ): Promise<{ emailHash: string }> {
@@ -147,6 +158,10 @@ export async function recordAttributedClient(
       termAnchorAt: term.termAnchorAt,
       termEndsAt: term.termEndsAt,
       referrerPractitionerId: input.referrerPractitionerId ?? null,
+      owner: input.owner ?? 'NHP',
+      decidedAt: input.owner ? at : null,
+      decidedByRule: input.decidedByRule ?? null,
+      referralTouchId: input.referralTouchId ?? null,
     },
     update: {},
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -160,6 +175,22 @@ export async function recordAttributedClient(
     await db.attributedClient.updateMany({
       where: { practitionerId: input.practitionerId, emailHash, termAnchorAt: null },
       data: { termAnchorAt: term.termAnchorAt, termEndsAt: term.termEndsAt, termMonths: term.termMonths },
+    });
+  }
+
+  // DECIDE THE OWNER, ONCE. Same lock shape as the anchor, and it exists for the rows that
+  // predate this column: they carry `owner` at its schema default and `decidedAt` null, which
+  // means "never decided" rather than "decided as NHP". Filtering on `decidedAt: null` fills those
+  // in on their next payment without ever re-deciding a row that already has an answer.
+  if (input.owner) {
+    await db.attributedClient.updateMany({
+      where: { practitionerId: input.practitionerId, emailHash, decidedAt: null },
+      data: {
+        owner: input.owner,
+        decidedAt: at,
+        decidedByRule: input.decidedByRule ?? null,
+        referralTouchId: input.referralTouchId ?? null,
+      },
     });
   }
 
@@ -194,7 +225,7 @@ export async function attributionTermState(
   db: Db,
   input: { practitionerId: string; email: string; asOf: Date },
 ): Promise<TermState> {
-  const row = await db.attributedClient.findUnique({
+  const row = (await db.attributedClient.findUnique({
     where: {
       practitionerId_emailHash: {
         practitionerId: input.practitionerId,
@@ -202,7 +233,7 @@ export async function attributionTermState(
       },
     },
     select: { expiresAt: true, termMonths: true, termAnchorAt: true, termEndsAt: true },
-  });
+  })) as AttributionRow | null;
   if (!row) return 'NONE';
   return termState(
     { termAnchorAt: row.termAnchorAt ?? null, termEndsAt: row.termEndsAt ?? null },

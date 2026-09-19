@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from 'next/server';
 import type { Practitioner, Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
-import { recordAttributedClient } from '@/lib/attributed-clients';
+import { commitPaymentAttribution } from '@/lib/referral-settlement';
 import { loadSettings } from '@/lib/platform-settings';
 import { unwrapWebhook } from '@/lib/whop';
 import { indexPractitioner } from '@/lib/practitioner-indexer';
@@ -266,6 +266,9 @@ async function handleEvent(
           attributionSource: true,
           // The term's ANCHOR — the first booked session's scheduled start, not this payment.
           scheduledAt: true,
+          /// Which referral carried this buyer in. The authority for who is owed a share — the
+          /// checkout metadata carries a copy, but only for reconciliation.
+          referralTouchId: true,
         },
       });
       if (!intent) return `payment.succeeded referenced unknown booking intent ${intentId}`;
@@ -307,37 +310,53 @@ async function handleEvent(
       // missing history row; under the term rule it means the clock NEVER STARTS for that client,
       // so they are charged the platform share forever. That is too expensive to leave visible
       // only in a log line nobody reads — returning it stamps /admin/whop-webhooks red.
+      // ⚠️ RUN ON EVERY DELIVERY, NOT ONLY ON THE PAID TRANSITION.
+      //
+      // This block used to sit behind `marked.count > 0`, which meant a transient failure was
+      // PERMANENT: the retry found the intent already paid, counted zero, skipped the ledger
+      // entirely, and the client was then charged the platform share forever with nothing
+      // recording why. The guard was there to stop a retry re-stamping the term — and it is no
+      // longer needed for that, because every write below is an upsert on a unique key and
+      // `recordAttributedClient`'s later fills are each filtered on "still null". Idempotence now
+      // lives in the database, which is the only place a retry cannot route around it.
+      //
+      // The anchor uses the intent's ALREADY-STORED `paidAt` on a redelivery, so a retry 70
+      // seconds later cannot move a clock the first delivery started.
+      const effectivePaidAt = marked.count > 0 ? paidAt : (intent.paidAt ?? paidAt);
       let attributionFailure: string | null = null;
-      if (marked.count > 0) {
-        try {
-          // The TERM is snapshotted onto the row here, read from the admin setting exactly once,
-          // at creation. Reading it later would let an operator edit reprice a claim already sold.
-          const { leadAttributionTermMonths } = await loadSettings(prisma);
-          await recordAttributedClient(prisma, {
-            practitionerId: intent.practitionerId,
-            email: intent.email,
-            party: intent.attributionParty,
-            source: intent.attributionSource,
-            bookingIntentId: intent.id,
-            termMonths: leadAttributionTermMonths,
-            // ANCHOR ON THE SCHEDULED SESSION. A January payment for a March session is
-            // attributed from March; anchoring at payment silently shortened every term by the
-            // booking lead time.
-            //
-            // ⚠️ FALL BACK TO THE PAYMENT INSTANT RATHER THAN TO NULL. A null anchor leaves the
-            // row PENDING_ANCHOR, and nothing in the system ever back-fills it — `sessionStartsAt`
-            // is only supplied here, on a transition that runs once per intent. PENDING_ANCHOR is
-            // chargeable and has no end date, so a null anchor does not mean "the clock has not
-            // started", it means THE CLOCK NEVER STARTS and the client is charged the platform
-            // share forever. That is the whole 8-month promise inverted, and it would have hit
-            // every practitioner with no scheduler link, where `scheduledAt` is always null.
-            sessionStartsAt: intent.scheduledAt ?? paidAt,
-          });
-        } catch (err) {
-          const detail = err instanceof Error ? err.message : String(err);
-          attributionFailure = `payment.succeeded marked booking intent ${intentId} PAID but the attribution ledger write FAILED (${detail}) — the lead attribution term never started for this client, so they will be charged indefinitely until this row is written`;
-          console.error('v1 webhook: attribution ledger write failed', { intentId, error: detail });
-        }
+      try {
+        // The TERM and the HOLD are snapshotted onto their rows here, read from the admin settings
+        // exactly once. Reading them later would let an operator edit reprice a claim already sold
+        // or move a hold clock that is already running.
+        const { leadAttributionTermMonths, referralHoldDays } = await loadSettings(prisma);
+        await commitPaymentAttribution(prisma, {
+          bookingIntentId: intent.id,
+          practitionerId: intent.practitionerId,
+          email: intent.email,
+          party: intent.attributionParty,
+          source: intent.attributionSource,
+          referralTouchId: intent.referralTouchId,
+          termMonths: leadAttributionTermMonths,
+          holdDays: referralHoldDays,
+          // ANCHOR ON THE SCHEDULED SESSION. A January payment for a March session is
+          // attributed from March; anchoring at payment silently shortened every term by the
+          // booking lead time.
+          //
+          // ⚠️ FALL BACK TO THE PAYMENT INSTANT RATHER THAN TO NULL. A null anchor leaves the
+          // row PENDING_ANCHOR, and nothing in the system ever back-fills it — `sessionStartsAt`
+          // is only supplied here. PENDING_ANCHOR is chargeable and has no end date, so a null
+          // anchor does not mean "the clock has not started", it means THE CLOCK NEVER STARTS and
+          // the client is charged the platform share forever. That is the whole 8-month promise
+          // inverted, and it would have hit every practitioner with no scheduler link, where
+          // `scheduledAt` is always null.
+          sessionStartsAt: intent.scheduledAt ?? effectivePaidAt,
+          paidAt: effectivePaidAt,
+          whopPaymentId: asString(data.id),
+        });
+      } catch (err) {
+        const detail = err instanceof Error ? err.message : String(err);
+        attributionFailure = `payment.succeeded marked booking intent ${intentId} PAID but the attribution/referral ledger write FAILED (${detail}) — the lead attribution term never started for this client, and any referrer share on this payment is unrecorded`;
+        console.error('v1 webhook: attribution ledger write failed', { intentId, error: detail });
       }
       // Still null on the happy path, so the PAID transition is never reported as a failure.
       return attributionFailure;

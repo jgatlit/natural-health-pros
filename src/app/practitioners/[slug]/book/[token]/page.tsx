@@ -8,8 +8,8 @@ import { flowShape, paymentsLive } from '@/lib/booking-flow';
 import { SchedulerStep } from '@/components/booking/SchedulerStep';
 import { recordScheduleSignal } from './actions';
 import { createBookingCheckoutConfig } from '@/lib/whop';
-import { effectivePlan, sessionFeeCents } from '@/lib/pricing-plans';
-import { attributionTermState } from '@/lib/attributed-clients';
+import { effectivePlan } from '@/lib/pricing-plans';
+import { resolveBookingFee, persistBookingFeeSnapshot } from '@/lib/booking-fee';
 import { CheckoutStep } from '@/components/booking/CheckoutStep';
 import { headers } from 'next/headers';
 
@@ -64,9 +64,13 @@ export default async function BookingFlowPage({ params }: Props) {
       whopCheckoutSessionId: true,
       whopCheckoutPurchaseUrl: true,
       paidAt: true,
+      createdAt: true,
       /// The instant the TERM boundary is measured against — spec §6.1 counts sessions by their
       /// scheduled start, not by when the card is charged.
       scheduledAt: true,
+      /// Which referral carried this buyer in, snapshotted at capture. The URL param is long gone
+      /// by the time the checkout is minted; this row is the authority for who gets paid.
+      referralTouchId: true,
       offering: {
         select: {
           id: true,
@@ -146,24 +150,32 @@ export default async function BookingFlowPage({ params }: Props) {
     // An unchosen plan resolves to Plan B (operator ruling 2026-09-18) rather than to "no fee":
     // the stored column stays null, but the commercial default is real.
     const planKey = effectivePlan(intent.practitioner.plan);
-    // THE TERM, not the old claim state. A client inside the attribution term is chargeable on
-    // EVERY sourced session (operator ruling, 2026-09-18); outside it, both plans charge 0% and
-    // there is no branch left that can re-charge a first-session fee on someone we introduced
-    // years ago.
-    // MEASURED AT THE SESSION'S SCHEDULED START (spec §6.1), not at this render. Buyers pay weeks
-    // ahead, so the two instants fall on opposite sides of the boundary near the end of a term —
-    // §9 test 5 is exactly that case. Falling back to now is for the no-scheduler flow, where no
-    // scheduled start is ever captured and the payment instant is the only honest stand-in.
-    const term = await attributionTermState(prisma, {
+    // THE WHOLE FEE DECISION, IN ONE CALL (spec §6.1): who owns this client, where the session
+    // falls in the attribution term, and whether a referrer is owed a share. Three inputs, one
+    // `application_fee_amount` — there is no second application fee on Whop and no account-level
+    // split, so our take and the referrer's take are summed into the single number below and the
+    // referrer is settled afterwards by a parent → sibling transfer.
+    //
+    // MEASURED AT THE SESSION'S SCHEDULED START, not at this render. Buyers pay weeks ahead, so
+    // the two instants fall on opposite sides of the boundary near the end of a term — §9 test 5
+    // is exactly that case. Falling back to now is for the no-scheduler flow, where no scheduled
+    // start is ever captured and the render instant is the only honest stand-in.
+    //
+    // `persist: false` — price now, record only if the configuration is actually minted below. A
+    // snapshot for a configuration that never existed would claim a fee nobody was charged, and
+    // the reconciliation sweep would report it as a Whop mismatch forever.
+    const fee = await resolveBookingFee(prisma, {
+      bookingIntentId: intent.id,
       practitionerId: intent.practitionerId,
       email: intent.email,
-      asOf: intent.scheduledAt ?? new Date(),
-    });
-    const feeCents = sessionFeeCents({
       plan: planKey,
-      term,
       priceUsdCents: offering!.priceUsdCents,
+      bookingCreatedAt: intent.createdAt,
+      sessionStartsAt: intent.scheduledAt ?? new Date(),
+      referralTouchId: intent.referralTouchId,
+      persist: false,
     });
+    const feeCents = fee.applicationFeeUsdCents;
 
     const minted = await createBookingCheckoutConfig({
       planId: offering!.whopPlanId!,
@@ -202,6 +214,25 @@ export default async function BookingFlowPage({ params }: Props) {
       if (claimed.count > 0) {
         checkoutConfigId = minted.checkoutConfigId;
         intentPurchaseUrl = minted.purchaseUrl;
+        // RECORDED BY THE WINNER ONLY, and only once the configuration is stored — so the snapshot
+        // describes the fee a buyer can actually be charged. Never fatal: the buyer is mid-payment
+        // and a missing snapshot is a reconciliation gap, not a reason to break checkout. It is
+        // logged loudly because the gap is real — `payment.succeeded` reads this row to decide
+        // whether a referrer is owed anything.
+        await persistBookingFeeSnapshot(prisma, {
+          bookingIntentId: intent.id,
+          plan: planKey,
+          priceUsdCents: offering!.priceUsdCents,
+          whopCheckoutConfigId: minted.checkoutConfigId,
+          fee,
+        }).catch((err) => {
+          console.error('[booking] fee snapshot write failed', {
+            intentId: intent.id,
+            applicationFeeCents: fee.applicationFeeUsdCents,
+            referrerPractitionerId: fee.referrerPractitionerId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
       } else {
         const winner = await prisma.bookingIntent.findUnique({
           where: { id: intent.id },
