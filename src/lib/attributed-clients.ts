@@ -99,8 +99,10 @@ export type AttributionRow = {
  * charges. The term is now fixed at the earliest touch and never moves.
  *
  * The ONLY fields a later call may fill are ones that were unknowable at first touch:
- *   - `termAnchorAt`/`termEndsAt` when the first booked session's scheduled start becomes known,
- *     and ONLY while the anchor is still null. Once anchored, the clock is immutable.
+ *   - `termAnchorAt`/`termEndsAt`, ONLY while the anchor is still null. Since 2026-09-19 the
+ *     anchor is the transaction instant, which is always known here, so a CREATE always sets it
+ *     and this fill now reaches only rows written before the term columns existed. Once anchored,
+ *     the clock is immutable.
  *   - `referrerPractitionerId`, same rule: first referrer named wins, for the same reason the
  *     first booking that introduced a client is never rewritten.
  * `attributedAt` is never moved. `termMonths` is snapshotted at creation and never re-read from
@@ -116,8 +118,15 @@ export async function recordAttributedClient(
     bookingIntentId?: string | null;
     /** The term to snapshot, in months. Resolve it from `loadSettings()` at the call site. */
     termMonths: number;
-    /** First booked session's scheduled start, when known. Null anchors the term later. */
-    sessionStartsAt?: Date | null;
+    /**
+     * THE DAY OF TRANSACTION — the instant this client's payment to this practitioner succeeded.
+     *
+     * REQUIRED and non-null (operator correction, 2026-09-19). It was `sessionStartsAt`, optional,
+     * and null meant "anchor it later" — except nothing ever did, because this is the only place
+     * an anchor is ever supplied. The payment instant always exists on the transition that calls
+     * this, so there is no legitimate null left to accept.
+     */
+    transactedAt: Date;
     /** The practitioner who referred this client, when the booking carried a referral token. */
     referrerPractitionerId?: string | null;
     /**
@@ -136,14 +145,14 @@ export async function recordAttributedClient(
 ): Promise<{ emailHash: string }> {
   const at = input.at ?? new Date();
   const emailHash = hashClientEmail(input.email);
-  const term = snapshotTerm({ termMonths: input.termMonths, anchorAt: input.sessionStartsAt ?? null });
+  const term = snapshotTerm({ termMonths: input.termMonths, anchorAt: input.transactedAt });
   const where = { practitionerId_emailHash: { practitionerId: input.practitionerId, emailHash } };
 
   // CREATE-ONLY. The update branch is deliberately EMPTY: on a repeat booking there is nothing
   // about an existing claim that this call is entitled to change. Everything a later touch may
   // legitimately fill is written below, each behind its own "only if still unset" filter, so the
   // lock is enforced by the database rather than by the order in which handlers happen to run.
-  await db.attributedClient.upsert({
+  const stored = (await db.attributedClient.upsert({
     where,
     create: {
       practitionerId: input.practitionerId,
@@ -165,16 +174,45 @@ export async function recordAttributedClient(
     },
     update: {},
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  } as any);
+  } as any)) as
+    | { attributedAt?: Date | null; termAnchorAt?: Date | null; termMonths?: number | null }
+    | null
+    | undefined;
 
-  // START THE CLOCK, ONCE. `updateMany` with `termAnchorAt: null` in the filter is the whole
-  // guard: an already-anchored row matches nothing and is left alone, and two concurrent bookings
-  // cannot race each other into re-anchoring because only one of them can match. A plain `update`
-  // would overwrite, which is how the rolling-window bug worked.
-  if (term.termAnchorAt) {
+  // REPAIR A LEGACY UNANCHORED ROW, ONCE — and anchor it on ITS OWN first payment.
+  //
+  // Since 2026-09-19 the CREATE above always writes an anchor, so this can no longer fire for a
+  // row this release made. What it exists for is the rows it cannot create: an `AttributedClient`
+  // written before the term columns existed, or one the previous deploy inserted during the
+  // migration window. Those are `PENDING_ANCHOR` — chargeable with NO end date — and if they are
+  // left alone the client is charged the platform share forever.
+  //
+  // ⚠️ THE ANCHOR COMES FROM `attributedAt`, NOT FROM THIS PAYMENT. `attributedAt` on such a row
+  // IS its first payment instant (the ledger write has always run on the `payment.succeeded`
+  // transition), so it is the correct clock. Anchoring on THIS payment instead would run the term
+  // from the client's second or fifth session and bill the practitioner months past the eight they
+  // were sold — a money bug in our favour, which is the kind that never gets reported.
+  //
+  // `termAnchorAt: null` stays in the filter: an already-anchored row matches nothing, and two
+  // concurrent payments cannot race each other into re-anchoring because only one can match.
+  //
+  // ⚠️ AND IT KEEPS THE ROW'S OWN `termMonths`. Filling a missing anchor is not a licence to also
+  // rewrite a term already sold — R1 is forward-only, and the per-row snapshot exists so that an
+  // operator moving the admin setting cannot reprice a live claim. `input.termMonths` is today's
+  // setting and is only correct for a row that never had one.
+  const legacyAnchor = stored && !stored.termAnchorAt ? (stored.attributedAt ?? null) : null;
+  if (legacyAnchor) {
+    const repaired = snapshotTerm({
+      termMonths: stored?.termMonths ?? input.termMonths,
+      anchorAt: legacyAnchor,
+    });
     await db.attributedClient.updateMany({
       where: { practitionerId: input.practitionerId, emailHash, termAnchorAt: null },
-      data: { termAnchorAt: term.termAnchorAt, termEndsAt: term.termEndsAt, termMonths: term.termMonths },
+      data: {
+        termAnchorAt: repaired.termAnchorAt,
+        termEndsAt: repaired.termEndsAt,
+        termMonths: repaired.termMonths,
+      },
     });
   }
 
@@ -207,19 +245,26 @@ export async function recordAttributedClient(
 }
 
 /**
- * Where this client sits in this practitioner's attribution term — the ONE read the fee path makes.
+ * Where this client sits in this practitioner's attribution term.
+ *
+ * ⚠️ NOT ON THE FEE PATH, despite what this docstring used to claim. `resolveBookingFee()` reads
+ * the row itself (it needs `owner` and `referrerPractitionerId` from the same query) and calls
+ * `termState()` directly, so nothing in `src/` calls this. It is the integration-level expression
+ * of the rule and is exercised by the regression suite; treat it as a read helper, not as the
+ * place to change behaviour — an edit here moves no money.
  *
  * Replaces `claimState()`'s NONE/LIVE/EXPIRED, which encoded the once-per-client rule that the
  * operator reversed on 2026-09-18. The states are no longer about whether a fee has been charged
  * before; they are about whether we are inside the term we sold.
  *
- * ⚠️ `asOf` IS THE SESSION'S SCHEDULED START, NOT THE WALL CLOCK, and it is REQUIRED for exactly
- * that reason. Spec §6.1 is explicit — "sessions count by scheduled start" — and people pay weeks
- * before they are seen, so the two instants straddle the boundary in both directions: a session
- * booked inside the term for a date outside it would be charged, and one paid for after the term
- * ends for a date inside it would not be. Spec §9 test 5 (months 0, 4 and 8) is precisely this
- * off-by-one. An optional parameter defaulting to `new Date()` is what let the fee path read the
- * wrong clock while every unit test — which passes the instant explicitly — still passed.
+ * ⚠️ `asOf` IS THIS SESSION'S OWN TRANSACTION INSTANT, and it is REQUIRED for exactly that reason.
+ * Spec §6.1's "sessions count by scheduled start" was SUPERSEDED on 2026-09-19: the boundary now
+ * reads the same calendar the anchor was set from, because a boundary on one calendar and a clock
+ * on another charge inconsistently at the edge — a session paid inside the term for a date outside
+ * it, or the reverse. Spec §9 test 5 (months 0, 4 and 8) is precisely that off-by-one, and it is
+ * now measured on payment dates. An optional parameter defaulting to `new Date()` is what let the
+ * fee path read the wrong clock while every unit test — which passes the instant explicitly —
+ * still passed, so it stays required even though "now" is frequently the right answer.
  */
 export async function attributionTermState(
   db: Db,

@@ -65,8 +65,9 @@ export default async function BookingFlowPage({ params }: Props) {
       whopCheckoutPurchaseUrl: true,
       paidAt: true,
       createdAt: true,
-      /// The instant the TERM boundary is measured against — spec §6.1 counts sessions by their
-      /// scheduled start, not by when the card is charged.
+      /// Whether this buyer has already picked a slot — it gates the schedule step, and nothing
+      /// else. It is deliberately NOT the term boundary: since 2026-09-19 the boundary is this
+      /// session's transaction instant, on the same calendar as the anchor.
       scheduledAt: true,
       /// Which referral carried this buyer in, snapshotted at capture. The URL param is long gone
       /// by the time the checkout is minted; this row is the authority for who gets paid.
@@ -156,10 +157,14 @@ export default async function BookingFlowPage({ params }: Props) {
     // split, so our take and the referrer's take are summed into the single number below and the
     // referrer is settled afterwards by a parent → sibling transfer.
     //
-    // MEASURED AT THE SESSION'S SCHEDULED START, not at this render. Buyers pay weeks ahead, so
-    // the two instants fall on opposite sides of the boundary near the end of a term — §9 test 5
-    // is exactly that case. Falling back to now is for the no-scheduler flow, where no scheduled
-    // start is ever captured and the render instant is the only honest stand-in.
+    // MEASURED AT THIS SESSION'S TRANSACTION INSTANT (operator correction, 2026-09-19). The mint
+    // runs moments before the card is charged — this is the checkout step — so the render instant
+    // is the payment instant to within the time it takes to type a card number.
+    //
+    // ⚠️ `intent.scheduledAt` IS DELIBERATELY NOT READ HERE. It was, and it put the boundary on a
+    // different calendar from the anchor: a session paid inside the term for a date outside it was
+    // charged nothing, and one paid after the term for a date inside it was charged. §9 test 5 is
+    // exactly that off-by-one, and it is now measured on payment dates on both sides.
     //
     // `persist: false` — price now, record only if the configuration is actually minted below. A
     // snapshot for a configuration that never existed would claim a fee nobody was charged, and
@@ -171,7 +176,7 @@ export default async function BookingFlowPage({ params }: Props) {
       plan: planKey,
       priceUsdCents: offering!.priceUsdCents,
       bookingCreatedAt: intent.createdAt,
-      sessionStartsAt: intent.scheduledAt ?? new Date(),
+      transactedAt: new Date(),
       referralTouchId: intent.referralTouchId,
       persist: false,
     });

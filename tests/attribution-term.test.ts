@@ -5,7 +5,11 @@ import { addMonths, holdExpiry, isChargeable, snapshotTerm, termState } from '@/
 /**
  * The term is the number the whole fee model hangs off, so its EDGES are tested directly rather
  * than inferred from a fee assertion. Every case here maps to spec v1.4 §9 or to an operator
- * ruling of 2026-09-18.
+ * ruling of 2026-09-18, as corrected on 2026-09-19.
+ *
+ * ⚠️ THE ANCHOR IS THE DAY OF TRANSACTION (operator correction, 2026-09-19). It was briefly the
+ * first booked session's scheduled start; that is superseded for BOTH the anchor and the
+ * per-session boundary, so the clock and the boundary read the same calendar.
  */
 describe('lead attribution term', () => {
   it('adds whole calendar months, not 30-day blocks', () => {
@@ -25,17 +29,31 @@ describe('lead attribution term', () => {
     );
   });
 
-  it('anchors on the first booked session, not on the payment', () => {
-    const snap = snapshotTerm({ termMonths: 8, anchorAt: new Date('2026-03-01T00:00:00Z') });
-    expect(snap.termAnchorAt?.toISOString()).toBe('2026-03-01T00:00:00.000Z');
-    expect(snap.termEndsAt?.toISOString()).toBe('2026-11-01T00:00:00.000Z');
+  it('anchors on the transaction instant, and always produces an end date', () => {
+    // The client paid in January for a session in March. The term runs from JANUARY.
+    const paidAt = new Date('2026-01-10T00:00:00Z');
+    const snap = snapshotTerm({ termMonths: 8, anchorAt: paidAt });
+    expect(snap.termAnchorAt.toISOString()).toBe('2026-01-10T00:00:00.000Z');
+    expect(snap.termEndsAt.toISOString()).toBe('2026-09-10T00:00:00.000Z');
   });
 
-  it('leaves the clock unstarted when no session is scheduled yet', () => {
-    const snap = snapshotTerm({ termMonths: 8, anchorAt: null });
-    expect(snap.termEndsAt).toBeNull();
+  it('REFUSES an unanchored term rather than snapshotting a row that can never expire', () => {
+    // A row with a null anchor is PENDING_ANCHOR: chargeable, with no end date, and nothing
+    // back-fills it. Under the transaction-date rule the anchor is ALWAYS knowable — a payment
+    // instant exists on the very transition that writes the row — so a null here is a caller bug,
+    // and throwing surfaces it on /admin/whop-webhooks instead of billing a client forever.
+    // @ts-expect-error — the type forbids it; this asserts the RUNTIME guard, which is what a
+    // JavaScript caller or a hand-written mock would actually hit.
+    expect(() => snapshotTerm({ termMonths: 8, anchorAt: null })).toThrow(/anchor/i);
+  });
+
+  it('still reads a LEGACY unanchored row as PENDING_ANCHOR rather than as expired', () => {
+    // The write path can no longer create one, but the DATABASE can still hold one: every
+    // AttributedClient row written before this release, and any row the previous deploy inserts
+    // during the migration window, has `termAnchorAt` null. Reading those as OUT_OF_TERM would
+    // silently zero a fee on real stored rows, which is an operator's revenue call, not a
+    // refactor's. See scripts/backfill-attribution-anchors.ts for the repair.
     expect(termState({ termAnchorAt: null, termEndsAt: null })).toBe('PENDING_ANCHOR');
-    // A term cannot expire before it begins — an unanchored claim still charges.
     expect(isChargeable('PENDING_ANCHOR')).toBe(true);
   });
 
@@ -71,6 +89,18 @@ describe('lead attribution term', () => {
     expect(owedJan.toISOString()).toBe('2026-04-01T00:00:00.000Z');
     expect(owedFeb.toISOString()).toBe('2026-05-02T00:00:00.000Z');
     expect(owedJan.getTime()).not.toBe(owedFeb.getTime());
+  });
+
+  it('measures months 0, 4 and 8 on PAYMENT dates (§9 test 5, corrected 2026-09-19)', () => {
+    // Spec §9 test 5 used to be measured on scheduled starts. It is now measured on the instant
+    // each session was PAID, which is also the calendar the anchor is set from.
+    const firstPayment = new Date('2026-01-15T00:00:00Z');
+    const { termAnchorAt, termEndsAt } = snapshotTerm({ termMonths: 8, anchorAt: firstPayment });
+    const row = { termAnchorAt, termEndsAt };
+
+    expect(termState(row, firstPayment)).toBe('IN_TERM'); // month 0 — paid today
+    expect(termState(row, addMonths(firstPayment, 4))).toBe('IN_TERM'); // month 4
+    expect(termState(row, addMonths(firstPayment, 8))).toBe('OUT_OF_TERM'); // month 8 — OUT
   });
 
   it('refuses a nonsense term or hold rather than silently charging forever', () => {

@@ -265,8 +265,6 @@ async function handleEvent(
           email: true,
           attributionParty: true,
           attributionSource: true,
-          // The term's ANCHOR — the first booked session's scheduled start, not this payment.
-          scheduledAt: true,
           /// Which referral carried this buyer in. The authority for who is owed a share — the
           /// checkout metadata carries a copy, but only for reconciliation.
           referralTouchId: true,
@@ -339,18 +337,16 @@ async function handleEvent(
           referralTouchId: intent.referralTouchId,
           termMonths: leadAttributionTermMonths,
           holdDays: referralHoldDays,
-          // ANCHOR ON THE SCHEDULED SESSION. A January payment for a March session is
-          // attributed from March; anchoring at payment silently shortened every term by the
-          // booking lead time.
+          // ANCHOR ON THE DAY OF TRANSACTION (operator correction, 2026-09-19). `effectivePaidAt`
+          // is both the payment instant and the term's anchor — there is no second date here any
+          // more, and `intent.scheduledAt` is deliberately not even selected above.
           //
-          // ⚠️ FALL BACK TO THE PAYMENT INSTANT RATHER THAN TO NULL. A null anchor leaves the
-          // row PENDING_ANCHOR, and nothing in the system ever back-fills it — `sessionStartsAt`
-          // is only supplied here. PENDING_ANCHOR is chargeable and has no end date, so a null
-          // anchor does not mean "the clock has not started", it means THE CLOCK NEVER STARTS and
-          // the client is charged the platform share forever. That is the whole 8-month promise
-          // inverted, and it would have hit every practitioner with no scheduler link, where
-          // `scheduledAt` is always null.
-          sessionStartsAt: intent.scheduledAt ?? effectivePaidAt,
+          // The superseded rule preferred the session's scheduled start and fell back to this.
+          // Two things went wrong with that and only the second was ever caught: the anchor
+          // depended on a field that is null for every practitioner without a scheduler link, and
+          // the boundary the fee path measured against was then on a DIFFERENT calendar from the
+          // clock. The payment instant is the only date the client, the practitioner and Whop can
+          // all produce a receipt for.
           paidAt: effectivePaidAt,
           whopPaymentId: asString(data.id),
         });

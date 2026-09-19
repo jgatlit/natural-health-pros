@@ -102,8 +102,13 @@ export async function commitPaymentAttribution(
     referralTouchId?: string | null;
     termMonths: number;
     holdDays: number;
-    /** The term's anchor — the first booked session's scheduled start, or the payment instant. */
-    sessionStartsAt: Date;
+    /**
+     * THE PAYMENT INSTANT — and, since the 2026-09-19 correction, also the term's ANCHOR.
+     *
+     * There used to be a second parameter (`sessionStartsAt`) carrying the anchor separately. It
+     * is gone rather than aliased: two fields that must always hold the same value are two fields
+     * that can disagree, and the one that decides money is this one.
+     */
     paidAt: Date;
     whopPaymentId?: string | null;
   },
@@ -165,7 +170,7 @@ export async function commitPaymentAttribution(
     source: input.source ?? null,
     bookingIntentId: input.bookingIntentId,
     termMonths: input.termMonths,
-    sessionStartsAt: input.sessionStartsAt,
+    transactedAt: input.paidAt,
     referrerPractitionerId,
     owner,
     decidedByRule,

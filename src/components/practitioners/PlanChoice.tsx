@@ -85,7 +85,7 @@ export function PlanChoice({
                 </div>
                 {/* "Every session … for N months", not "first session / after that". The old
                     pair read `laterSessionPlatformFeeBps`, which is 0 on Plan B — telling a
-                    practitioner we take nothing after the first session, which the shipped fee
+                    practitioner we take nothing after the first one, which the shipped fee
                     rule contradicts. */}
                 <div className="flex justify-between gap-2">
                   <dt className="text-muted-foreground">
@@ -98,6 +98,14 @@ export function PlanChoice({
                   <dd className="font-medium">{plan.afterTermLabel}</dd>
                 </div>
               </dl>
+
+              {/* ⚠️ NAMES WHAT STARTS THE CLOCK (operator correction, 2026-09-19). The two rows
+                  above quote a term without an anchor, which leaves a practitioner to assume one
+                  — and the natural assumption is the session, not the payment. On an advance
+                  booking those differ by the whole lead time, in our favour if left unsaid. */}
+              <p className="text-[11px] text-muted-foreground">
+                The {termMonths} months run from each client&rsquo;s first payment to you.
+              </p>
 
               <p className="text-xs text-muted-foreground">{plan.suits}</p>
 
@@ -163,8 +171,9 @@ export function PlanChoice({
           would otherwise reasonably conclude referred clients are cheaper on one of them. */}
       <p className="text-[11px] text-muted-foreground">
         When another practitioner refers a client to you, {referralRateLabel} of those sessions
-        goes to them and {referralRateLabel} to Natural Health Pros, for {termMonths} months, on
-        either plan. The same {referralRateLabel} is what you earn when you refer a client out.
+        goes to them and {referralRateLabel} to Natural Health Pros, for {termMonths} months from
+        that client&rsquo;s first payment, on either plan. The same {referralRateLabel} is what you
+        earn when you refer a client out.
       </p>
 
       <p className="text-[11px] text-muted-foreground">

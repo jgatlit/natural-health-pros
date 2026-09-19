@@ -23,8 +23,12 @@
 | Whop account | required | required |
 
 **One term, 8 months, governing both plans** (operator ruling 5). It is anchored on the
-first booked session's scheduled start and snapshotted per client, so changing the admin setting
-never moves a claim already made.
+**day of transaction** — the client's first payment to that practitioner — and snapshotted per
+client, so changing the admin setting never moves a claim already made. (Operator correction,
+2026-09-19: the anchor was briefly the first booked session's scheduled start. Anchoring at
+payment starts the clock earlier for any advance booking, which reaches 0% sooner — a small
+concession in the practitioner's favour, and it is already reflected in the months below, which
+have always counted from the first billable session.)
 
 ## Assumptions, and where each comes from
 
@@ -33,8 +37,10 @@ never moves a claim already made.
    $100, promoted hardest at $75 or less (2026-05-28 call).
 2. **0 / 1 / 2 / 4 / 8 new NHP-sourced clients per month**, held flat for 12 months. Practitioner
    income was described as swinging from ~$100 to ~$2,000/mo, so the low end is the realistic case.
-3. **Follow-ups at months 3 and 6** after the first session — the same cadence as spec §9 test 3,
-   so the projection and the acceptance test model the same client.
+3. **Follow-ups at months 3 and 6** after the first payment — the same cadence as spec §9 test 3,
+   so the projection and the acceptance test model the same client. Under the transaction-date
+   anchor these offsets are measured on payment dates on both sides, which is why the term
+   arithmetic below needs no adjustment: the model already counted from the first paid session.
 4. **Only NHP-sourced work is counted.** Own clients are 0% on both plans and are excluded.
 5. **Cross-referred clients are excluded** and are modelled separately at the end: they cost 40%
    in total on *either* plan, so they do not discriminate between the two.

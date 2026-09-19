@@ -106,31 +106,31 @@ describe('attributed-clients', () => {
     expect(hashClientEmail('sarah@example.com')).not.toBe(bare);
   });
 
-  it('snapshots the term onto the row at creation', async () => {
+  it('snapshots the term onto the row at creation, anchored on the PAYMENT', async () => {
     const db = fakeDb();
     await recordAttributedClient(db, {
       practitionerId: 'p1',
       email: 'c@x.com',
       termMonths: TERM,
-      sessionStartsAt: new Date('2026-03-01T00:00:00Z'),
+      transactedAt: new Date('2026-01-10T00:00:00Z'),
       at: new Date('2026-01-10T00:00:00Z'),
     });
     const row = only(db);
     expect(row.termMonths).toBe(8);
-    // Anchored on the SESSION (March), not on the payment (January).
-    expect(row.termAnchorAt?.toISOString()).toBe('2026-03-01T00:00:00.000Z');
-    expect(row.termEndsAt?.toISOString()).toBe('2026-11-01T00:00:00.000Z');
+    // Anchored on the payment (January), not on a March session the client booked ahead.
+    expect(row.termAnchorAt?.toISOString()).toBe('2026-01-10T00:00:00.000Z');
+    expect(row.termEndsAt?.toISOString()).toBe('2026-09-10T00:00:00.000Z');
   });
 
   it('keeps a later operator term change off a claim already sold', async () => {
     const db = fakeDb();
     const anchor = new Date('2026-03-01T00:00:00Z');
     await recordAttributedClient(db, {
-      practitionerId: 'p1', email: 'c@x.com', termMonths: 8, sessionStartsAt: anchor,
+      practitionerId: 'p1', email: 'c@x.com', termMonths: 8, transactedAt: anchor, at: anchor,
     });
     // The operator doubles the term. The existing row must not move.
     await recordAttributedClient(db, {
-      practitionerId: 'p1', email: 'c@x.com', termMonths: 16, sessionStartsAt: anchor,
+      practitionerId: 'p1', email: 'c@x.com', termMonths: 16, transactedAt: anchor, at: anchor,
     });
     const row = only(db);
     expect(row.termMonths).toBe(8);
@@ -145,53 +145,110 @@ describe('attributed-clients', () => {
     const later = new Date('2026-06-01T00:00:00Z');
     await recordAttributedClient(db, {
       practitionerId: 'p1', email: 'c@x.com', termMonths: TERM,
-      sessionStartsAt: first, at: first, bookingIntentId: 'bi_1',
+      transactedAt: first, at: first, bookingIntentId: 'bi_1',
     });
     await recordAttributedClient(db, {
       practitionerId: 'p1', email: 'c@x.com', termMonths: TERM,
-      sessionStartsAt: later, at: later, bookingIntentId: 'bi_2',
+      transactedAt: later, at: later, bookingIntentId: 'bi_2',
     });
     expect(db.rows.size).toBe(1);
     const row = only(db);
     expect(row.attributedAt).toEqual(first);
     expect(row.firstBookingIntentId).toBe('bi_1');
-    // The anchor is still the FIRST session, and the end date has not moved.
+    // The anchor is still the FIRST payment, and the end date has not moved.
     expect(row.termAnchorAt).toEqual(first);
     expect(row.termEndsAt?.toISOString()).toBe('2026-09-01T00:00:00.000Z');
   });
 
-  it('anchors late when the first booking had no scheduled session yet', async () => {
-    // A claim created by a payment with no known session start is PENDING_ANCHOR: chargeable, but
-    // its clock has not started. The first session that IS scheduled starts it, once.
+  it('REPAIRS a legacy unanchored row from its OWN attributedAt, not from this payment', async () => {
+    // A row written before the term columns existed (or by the previous deploy mid-migration) has
+    // a null anchor: PENDING_ANCHOR, chargeable, with NO end date — the 8-month promise inverted.
+    // The next payment repairs it.
+    //
+    // ⚠️ AND IT MUST ANCHOR ON `attributedAt`, WHICH IS THAT ROW'S FIRST PAYMENT. Anchoring on the
+    // payment in hand would run the term from the client's second session and bill the
+    // practitioner months past the eight they were sold.
     const db = fakeDb();
-    await recordAttributedClient(db, {
-      practitionerId: 'p1', email: 'c@x.com', termMonths: TERM, sessionStartsAt: null,
+    const firstPayment = new Date('2026-01-10T00:00:00Z');
+    db.rows.set(`p1|${hashClientEmail('c@x.com')}`, {
+      practitionerId: 'p1',
+      emailHash: hashClientEmail('c@x.com'),
+      expiresAt: new Date('2027-01-10T00:00:00Z'),
+      attributedAt: firstPayment,
+      party: null,
+      source: null,
+      firstBookingIntentId: null,
+      termMonths: null,
+      termAnchorAt: null,
+      termEndsAt: null,
+      referrerPractitionerId: null,
     });
     await expect(
       attributionTermState(db, { practitionerId: 'p1', email: 'c@x.com', asOf: new Date() }),
     ).resolves.toBe('PENDING_ANCHOR');
 
+    const secondPayment = new Date('2026-06-01T00:00:00Z');
     await recordAttributedClient(db, {
       practitionerId: 'p1', email: 'c@x.com', termMonths: TERM,
-      sessionStartsAt: new Date('2026-04-01T00:00:00Z'),
+      transactedAt: secondPayment, at: secondPayment,
     });
-    expect(only(db).termAnchorAt?.toISOString()).toBe('2026-04-01T00:00:00.000Z');
 
-    // …and a third booking does not re-anchor it.
+    const row = only(db);
+    expect(row.termAnchorAt?.toISOString()).toBe('2026-01-10T00:00:00.000Z');
+    expect(row.termEndsAt?.toISOString()).toBe('2026-09-10T00:00:00.000Z');
+    // …and a third payment does not re-anchor it.
     await recordAttributedClient(db, {
       practitionerId: 'p1', email: 'c@x.com', termMonths: TERM,
-      sessionStartsAt: new Date('2026-08-01T00:00:00Z'),
+      transactedAt: new Date('2026-08-01T00:00:00Z'), at: new Date('2026-08-01T00:00:00Z'),
     });
-    expect(only(db).termAnchorAt?.toISOString()).toBe('2026-04-01T00:00:00.000Z');
+    expect(only(db).termAnchorAt?.toISOString()).toBe('2026-01-10T00:00:00.000Z');
+  });
+
+  it('AUDIT: repairing a legacy row keeps ITS term, never today’s admin setting', async () => {
+    // R1 is forward-only: `termMonths` is snapshotted per row precisely so that an operator
+    // editing the setting cannot reprice a claim already sold. The repair below fills in a MISSING
+    // anchor — it is not a licence to also rewrite a term the row already carries.
+    //
+    // Reachable: the previous revision of this branch wrote `termMonths` alongside a NULL anchor
+    // whenever `sessionStartsAt` was null, which is every practitioner with no scheduler link.
+    // Such a row sold at 6 months would silently become 8 on the client's next payment.
+    const db = fakeDb();
+    const firstPayment = new Date('2026-01-10T00:00:00Z');
+    db.rows.set(`p9|${hashClientEmail('c@x.com')}`, {
+      practitionerId: 'p9',
+      emailHash: hashClientEmail('c@x.com'),
+      expiresAt: new Date('2027-01-10T00:00:00Z'),
+      attributedAt: firstPayment,
+      party: null,
+      source: null,
+      firstBookingIntentId: null,
+      termMonths: 6,
+      termAnchorAt: null,
+      termEndsAt: null,
+      referrerPractitionerId: null,
+    });
+
+    // The operator has since raised the setting to 8. The claim was sold at 6.
+    await recordAttributedClient(db, {
+      practitionerId: 'p9', email: 'c@x.com', termMonths: 8,
+      transactedAt: new Date('2026-06-01T00:00:00Z'), at: new Date('2026-06-01T00:00:00Z'),
+    });
+
+    const row = only(db);
+    expect(row.termMonths).toBe(6);
+    expect(row.termEndsAt?.toISOString()).toBe('2026-07-10T00:00:00.000Z');
   });
 
   it('keeps the first referrer named, never the latest', async () => {
     const db = fakeDb();
+    const at = new Date('2026-01-01T00:00:00Z');
     await recordAttributedClient(db, {
-      practitionerId: 'p1', email: 'c@x.com', termMonths: TERM, referrerPractitionerId: 'ref_1',
+      practitionerId: 'p1', email: 'c@x.com', termMonths: TERM, transactedAt: at, at,
+      referrerPractitionerId: 'ref_1',
     });
     await recordAttributedClient(db, {
-      practitionerId: 'p1', email: 'c@x.com', termMonths: TERM, referrerPractitionerId: 'ref_2',
+      practitionerId: 'p1', email: 'c@x.com', termMonths: TERM, transactedAt: at, at,
+      referrerPractitionerId: 'ref_2',
     });
     // Same earliest-touch logic as the booking that introduced them: a later link must not steal
     // a referral that someone else earned.
@@ -200,7 +257,9 @@ describe('attributed-clients', () => {
 
   it('scopes a claim to one practitioner — the same client is new to everyone else', async () => {
     const db = fakeDb();
-    await recordAttributedClient(db, { practitionerId: 'p1', email: 'c@x.com', termMonths: TERM });
+    await recordAttributedClient(db, {
+      practitionerId: 'p1', email: 'c@x.com', termMonths: TERM, transactedAt: new Date(),
+    });
     await expect(
       attributionTermState(db, { practitionerId: 'p2', email: 'c@x.com', asOf: new Date() }),
     ).resolves.toBe('NONE');
@@ -212,7 +271,7 @@ describe('attributed-clients', () => {
     const db = fakeDb();
     const anchor = new Date('2026-01-15T00:00:00Z');
     await recordAttributedClient(db, {
-      practitionerId: 'p1', email: 'c@x.com', termMonths: TERM, sessionStartsAt: anchor, at: anchor,
+      practitionerId: 'p1', email: 'c@x.com', termMonths: TERM, transactedAt: anchor, at: anchor,
     });
     const q = (asOf: Date) => attributionTermState(db, { practitionerId: 'p1', email: 'c@x.com', asOf });
     await expect(q(new Date('2026-04-15T00:00:00Z'))).resolves.toBe('IN_TERM');

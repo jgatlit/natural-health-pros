@@ -155,7 +155,6 @@ const commit = (fake: ReturnType<typeof db>) =>
     referralTouchId: 't1',
     termMonths: 8,
     holdDays: 90,
-    sessionStartsAt: PAID_AT,
     paidAt: PAID_AT,
     whopPaymentId: 'pay_1',
   });
@@ -350,7 +349,6 @@ describe('commitPaymentAttribution — the referrer’s own client list (§5.4.4
       referralTouchId: null,
       termMonths: 8,
       holdDays: 90,
-      sessionStartsAt: PAID_AT,
       paidAt: PAID_AT,
     });
 
@@ -385,7 +383,6 @@ describe('commitPaymentAttribution — AUDIT: a payment with no mint-time snapsh
       referralTouchId: null,
       termMonths: 8,
       holdDays: 90,
-      sessionStartsAt: PAID_AT,
       paidAt: PAID_AT,
     });
 
@@ -403,7 +400,6 @@ describe('commitPaymentAttribution — AUDIT: a payment with no mint-time snapsh
       referralTouchId: null,
       termMonths: 8,
       holdDays: 90,
-      sessionStartsAt: PAID_AT,
       paidAt: PAID_AT,
     });
 
@@ -435,7 +431,6 @@ describe('commitPaymentAttribution — AUDIT: a payment with no mint-time snapsh
       referralTouchId: 't1',
       termMonths: 8,
       holdDays: 90,
-      sessionStartsAt: PAID_AT,
       paidAt: PAID_AT,
     });
 

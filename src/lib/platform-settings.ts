@@ -43,9 +43,10 @@ export const SETTING_DEFS: Record<keyof typeof SETTING_KEYS, SettingDef> = {
     key: SETTING_KEYS.leadAttributionTermMonths,
     label: 'Lead Attribution Term',
     help:
-      'How long a platform-sourced client stays attributed to us, anchored on the first booked ' +
-      'session’s scheduled start. Both plans charge their share inside this term and 0% after it. ' +
-      'Changing this affects NEW attributions only — existing ones keep the term they were sold.',
+      'How long a platform-sourced client stays attributed to us, anchored on the DAY OF ' +
+      'TRANSACTION — their first payment to that practitioner. Both plans charge their share ' +
+      'inside this term and 0% after it. Changing this affects NEW attributions only — existing ' +
+      'ones keep the term they were sold.',
     envVar: 'LEAD_ATTRIBUTION_TERM_MONTHS',
     fallback: 8,
     min: 1,

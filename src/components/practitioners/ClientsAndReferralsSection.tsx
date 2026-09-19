@@ -120,7 +120,7 @@ export function ClientsAndReferralsSection({
           <h3 className="text-xs font-semibold">Refer a client to another practitioner</h3>
           <p className="text-xs text-muted-foreground">
             Earn {referralRateLabel} of what they book with that practitioner for {termMonths}{' '}
-            months.
+            months from that client&rsquo;s first payment.
           </p>
         </div>
 
@@ -216,8 +216,8 @@ export function ClientsAndReferralsSection({
             them — it is the same arrangement seen from the other side. */}
         <p className="text-xs text-muted-foreground">
           When another practitioner refers a client to you, {referralRateLabel} of those sessions
-          goes to them and {referralRateLabel} to Natural Health Pros, for {termMonths} months, on
-          either plan.
+          goes to them and {referralRateLabel} to Natural Health Pros, for {termMonths} months from
+          that client&rsquo;s first payment, on either plan.
         </p>
       </div>
 

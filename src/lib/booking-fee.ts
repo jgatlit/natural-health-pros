@@ -52,12 +52,18 @@ export async function resolveBookingFee(
     /** When this booking's intent row was created — the fallback for the §3.1 cutoff. */
     bookingCreatedAt: Date;
     /**
-     * THE INSTANT THE TERM IS MEASURED AGAINST — the session's scheduled start (§6.1: "sessions
-     * count by scheduled start"), falling back to now for the no-scheduler flow where no start is
-     * ever captured. Required, never defaulted: an optional parameter here is exactly how the fee
-     * path came to read the wall clock while every unit test passed the instant explicitly.
+     * THE INSTANT THE TERM IS MEASURED AGAINST — this session's own TRANSACTION instant (operator
+     * correction, 2026-09-19, superseding §6.1's "sessions count by scheduled start").
+     *
+     * The boundary and the anchor must read the same calendar. The anchor is the client's first
+     * payment; this is this session's payment, so at mint — which runs moments before the card is
+     * charged — the render instant is the honest stand-in, and the scheduled start is not
+     * consulted at all.
+     *
+     * Required, never defaulted: an optional parameter here is exactly how the fee path came to
+     * read the wall clock while every unit test passed the instant explicitly.
      */
-    sessionStartsAt: Date;
+    transactedAt: Date;
     referralTouchId?: string | null;
     /** The configuration this fee was minted onto, when one exists. */
     whopCheckoutConfigId?: string | null;
@@ -112,7 +118,7 @@ export async function resolveBookingFee(
 
   const state = termState(
     { termAnchorAt: row?.termAnchorAt ?? null, termEndsAt: row?.termEndsAt ?? null },
-    input.sessionStartsAt,
+    input.transactedAt,
   );
   // No row at all means we have never claimed this client, so this very session introduces them.
   const resolvedTerm: TermState = row ? state : 'NONE';

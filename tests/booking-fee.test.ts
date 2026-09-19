@@ -76,7 +76,7 @@ const call = (fake: ReturnType<typeof db>, over: Record<string, unknown> = {}) =
     plan: 'PLAN_B',
     priceUsdCents: 10_000,
     bookingCreatedAt: D(5),
-    sessionStartsAt: D(5),
+    transactedAt: D(5),
     referralTouchId: null,
     ...over,
   });
@@ -143,7 +143,7 @@ describe('resolveBookingFee', () => {
           termEndsAt: D(240),
         },
       }),
-      { sessionStartsAt: D(100) },
+      { transactedAt: D(100) },
     );
 
     expect(fee.isCrossReferral).toBe(true);
@@ -168,7 +168,9 @@ describe('resolveBookingFee', () => {
     expect(fee.applicationFeeUsdCents).toBe(0);
   });
 
-  it('measures the term at the SESSION START, not at the mint (spec §6.1)', async () => {
+  it('measures the term at the TRANSACTION instant (§6.1, corrected 2026-09-19)', async () => {
+    // The boundary reads the same calendar the anchor was set from — the client's payments — so
+    // the instant handed in here is this session's transaction, never its scheduled start.
     const seed = {
       attributed: {
         owner: 'NHP',
@@ -179,8 +181,8 @@ describe('resolveBookingFee', () => {
       },
     };
 
-    const inside = await call(db(seed), { sessionStartsAt: D(239) });
-    const outside = await call(db(seed), { sessionStartsAt: D(241) });
+    const inside = await call(db(seed), { transactedAt: D(239) });
+    const outside = await call(db(seed), { transactedAt: D(241) });
 
     expect(inside.nhpFeeUsdCents).toBe(4_000);
     expect(outside.nhpFeeUsdCents).toBe(0);

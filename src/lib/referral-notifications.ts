@@ -49,6 +49,13 @@ export function referralsNeedingClaimNotice<T extends { state: string; notifiedA
   return rows.filter((r) => r.state === 'HELD' && r.notifiedAt === null);
 }
 
+/**
+ * ⚠️ "FROM THEIR FIRST PAYMENT", NOT "FROM THEIR FIRST SESSION" (operator correction, 2026-09-19).
+ *
+ * The referrer dates their own earnings from this sentence, and the ledger anchors the term on the
+ * day of transaction. Naming a session start here would describe a calendar no row is measured on
+ * — and for an advance booking the two differ by the whole booking lead time.
+ */
 export function referralBookedCopy(input: {
   referredName: string;
   /** Pre-formatted, so no template renders a percentage a second way. */
@@ -61,7 +68,7 @@ export function referralBookedCopy(input: {
     `Someone you referred has booked with ${who}.`,
     '',
     `You earn ${input.rateLabel} of what they book with ${who} for ${input.termMonths} months from` +
-      ' their first session.',
+      ' their first payment.',
     '',
     // Says where the money comes from, because it does NOT arrive from us directly — the same
     // question the paid-practitioner notice already had to answer.
@@ -74,7 +81,7 @@ export function referralBookedCopy(input: {
 <p>Someone you referred has booked with ${escapeHtml(who)}.</p>
 <p>You earn ${escapeHtml(input.rateLabel)} of what they book with ${escapeHtml(who)} for ${
       input.termMonths
-    } months from their first session.</p>
+    } months from their first payment.</p>
 <p>Payments reach you through your connected Whop account.</p>
 </div>`,
   };

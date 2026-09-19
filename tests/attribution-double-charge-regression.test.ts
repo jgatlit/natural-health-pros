@@ -80,21 +80,23 @@ describe('regression: a client relationship is never charged a second first-sess
   it('bills the introduction once, then nothing at all after the term — even years later', async () => {
     const db = fakeDb();
     const p = { practitionerId: 'p1', email: 'client@x.com' };
-    const introSession = new Date('2026-01-15T00:00:00Z');
+    const introPayment = new Date('2026-01-15T00:00:00Z');
 
-    // Session 1 — we introduce them. Chargeable at the Plan B rate.
-    const firstState = await attributionTermState(db, { ...p, asOf: introSession });
+    // Session 1 — we introduce them. Chargeable at the Plan B rate. Every instant below is a
+    // PAYMENT date: since 2026-09-19 the anchor and the per-session boundary read the same
+    // calendar, and it is the client's transactions, not their scheduler.
+    const firstState = await attributionTermState(db, { ...p, asOf: introPayment });
     expect(firstState).toBe('NONE');
     const firstFee = sessionFeeCents({ plan: 'PLAN_B', term: firstState, priceUsdCents: SESSION_PRICE });
     expect(firstFee).toBe(4_000);
-    await recordAttributedClient(db, { ...p, termMonths: 8, sessionStartsAt: introSession, at: introSession });
+    await recordAttributedClient(db, { ...p, termMonths: 8, transactedAt: introPayment, at: introPayment });
 
     // Session 2, inside the term — still chargeable (the recurrence ruling).
     const month3 = new Date('2026-04-15T00:00:00Z');
     const midState = await attributionTermState(db, { ...p, asOf: month3 });
     expect(midState).toBe('IN_TERM');
     expect(sessionFeeCents({ plan: 'PLAN_B', term: midState, priceUsdCents: SESSION_PRICE })).toBe(4_000);
-    await recordAttributedClient(db, { ...p, termMonths: 8, sessionStartsAt: month3, at: month3 });
+    await recordAttributedClient(db, { ...p, termMonths: 8, transactedAt: month3, at: month3 });
 
     // …and that repeat booking must NOT have extended the term. This is half one of the bug.
     const row = Array.from(db.rows.values())[0] as { termEndsAt: Date };
@@ -117,7 +119,7 @@ describe('regression: a client relationship is never charged a second first-sess
     const db = fakeDb();
     const p = { practitionerId: 'p2', email: 'other@x.com' };
     const anchor = new Date('2026-01-15T00:00:00Z');
-    await recordAttributedClient(db, { ...p, termMonths: 8, sessionStartsAt: anchor, at: anchor });
+    await recordAttributedClient(db, { ...p, termMonths: 8, transactedAt: anchor, at: anchor });
 
     const billed: number[] = [];
     for (const when of ['2026-01-15', '2026-04-15', '2026-07-15', '2026-09-15', '2026-10-15']) {
@@ -126,5 +128,22 @@ describe('regression: a client relationship is never charged a second first-sess
     }
     // months 0, 3, 6 charge; month 8 exactly and month 9 do not (spec §9 test 3).
     expect(billed).toEqual([4_000, 4_000, 4_000, 0, 0]);
+  });
+
+  it('§9 test 5 — months 0, 4 and 8, measured on PAYMENT dates (corrected 2026-09-19)', async () => {
+    // Test 5 used to be measured on scheduled starts, which put it on a different calendar from
+    // the anchor. It is now measured end to end on the dates the client actually paid — the whole
+    // path, from the ledger write through `attributionTermState` to the cents charged.
+    const db = fakeDb();
+    const p = { practitionerId: 'p3', email: 'test5@x.com' };
+    const firstPayment = new Date('2026-01-15T00:00:00Z');
+    await recordAttributedClient(db, { ...p, termMonths: 8, transactedAt: firstPayment, at: firstPayment });
+
+    const billed: number[] = [];
+    for (const when of ['2026-01-15', '2026-05-15', '2026-09-15']) {
+      const term = await attributionTermState(db, { ...p, asOf: new Date(`${when}T00:00:00Z`) });
+      billed.push(sessionFeeCents({ plan: 'PLAN_B', term, priceUsdCents: SESSION_PRICE }));
+    }
+    expect(billed).toEqual([4_000, 4_000, 0]);
   });
 });

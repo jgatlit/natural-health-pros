@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import type { NextRequest } from 'next/server';
 import type { Practitioner } from '@prisma/client';
 import { signedRequest, signWebhook, TEST_SECRET } from './helpers/whop-webhook';
@@ -687,10 +687,18 @@ describe('payment.succeeded — the AUTHORITY for payment (§17.3c)', () => {
   });
 });
 
-describe('payment.succeeded — the attribution term is ANCHORED, once, and always starts', () => {
+describe('payment.succeeded — the term anchors on the DAY OF TRANSACTION', () => {
   beforeEach(() => {
     mocks.intentUpdateMany.mockResolvedValue({ count: 1 });
     mocks.findUnique.mockResolvedValue(fakePractitioner({ id: 'prac_1', whopCompanyId: 'biz_1' }));
+    // `Date` ONLY. The anchor is now `new Date()` inside the handler, so the assertions below are
+    // about a value the handler reads from the clock — which means the clock has to be pinned.
+    // Faking timers wholesale would stall the promise machinery this handler runs on; `toFake`
+    // keeps setTimeout/queueMicrotask real.
+    vi.useFakeTimers({ toFake: ['Date'] });
+  });
+  afterEach(() => {
+    vi.useRealTimers();
   });
 
   function paid(intent: { scheduledAt: Date | null }) {
@@ -715,39 +723,70 @@ describe('payment.succeeded — the attribution term is ANCHORED, once, and alwa
     return call.create;
   }
 
-  it('anchors on the SCHEDULED session start, not on the payment', async () => {
-    // A January payment for a March session is attributed from March. Anchoring at payment would
-    // shorten every term by the booking lead time.
+  it('IGNORES the scheduled start entirely and anchors on the payment instant', async () => {
+    // ⚠️ THE 2026-09-19 CORRECTION, ASSERTED AT THE ONE PLACE THAT WRITES THE CLOCK.
+    //
+    // A January payment for a March session now runs its 8 months from JANUARY. The previous
+    // revision preferred `intent.scheduledAt`, so this same event anchored in March — a term the
+    // buyer, the practitioner and Whop all have receipts contradicting.
+    //
+    // The scheduled start is a claim made by a third-party scheduler we do not control and cannot
+    // always read; the payment instant is the only date all three parties can observe.
     const session = new Date('2026-03-10T15:00:00Z');
+    vi.setSystemTime(new Date('2026-01-05T09:00:00Z'));
     await paid({ scheduledAt: session });
     const create = createArgs();
-    expect((create.termAnchorAt as Date).toISOString()).toBe('2026-03-10T15:00:00.000Z');
-    expect((create.termEndsAt as Date).toISOString()).toBe('2026-11-10T15:00:00.000Z');
+    expect((create.termAnchorAt as Date).toISOString()).toBe('2026-01-05T09:00:00.000Z');
+    expect((create.termEndsAt as Date).toISOString()).toBe('2026-09-05T09:00:00.000Z');
     expect(create.termMonths).toBe(8);
   });
 
-  it('STILL starts the clock when no session was ever scheduled', async () => {
-    // ⚠️ THE REGRESSION THIS EXISTS FOR. Falling back to a null anchor leaves the row
-    // PENDING_ANCHOR, which is chargeable and has no end date — and nothing ever back-fills it,
-    // because `sessionStartsAt` is only supplied on this once-per-intent transition. A null anchor
-    // therefore does not mean "the clock has not started yet", it means the clock NEVER starts and
-    // the client is charged the platform share forever. It would have hit every practitioner with
-    // no scheduler link, where `scheduledAt` is always null.
+  it('anchors identically when no session was ever scheduled', async () => {
+    // The whole `PENDING_ANCHOR` bug class disappears here: the anchor no longer depends on a
+    // field that is legitimately null for every practitioner without a scheduler link. A payment
+    // instant ALWAYS exists on the transition that writes the row, so the two cases above and
+    // below produce the SAME clock rather than one of them producing none.
+    vi.setSystemTime(new Date('2026-01-05T09:00:00Z'));
     await paid({ scheduledAt: null });
     const create = createArgs();
-    expect(create.termAnchorAt).toBeInstanceOf(Date);
-    expect(create.termEndsAt).toBeInstanceOf(Date);
-    const ends = (create.termEndsAt as Date).getTime();
-    const anchor = (create.termAnchorAt as Date).getTime();
-    expect(ends).toBeGreaterThan(anchor);
+    expect((create.termAnchorAt as Date).toISOString()).toBe('2026-01-05T09:00:00.000Z');
+    expect((create.termEndsAt as Date).toISOString()).toBe('2026-09-05T09:00:00.000Z');
   });
 
   it('reads the term from the admin setting, not from a literal', async () => {
     mocks.settingFindMany.mockResolvedValue([{ key: 'lead_attribution_term_months', value: '6' }]);
-    await paid({ scheduledAt: new Date('2026-03-10T00:00:00Z') });
+    vi.setSystemTime(new Date('2026-03-10T00:00:00Z'));
+    await paid({ scheduledAt: new Date('2026-08-01T00:00:00Z') });
     const create = createArgs();
     expect(create.termMonths).toBe(6);
     expect((create.termEndsAt as Date).toISOString()).toBe('2026-09-10T00:00:00.000Z');
+  });
+
+  it('anchors a REDELIVERY on the stored payment instant, never on the retry', async () => {
+    // Whop retries 3x over ~70s and the ledger block deliberately re-runs on every delivery. The
+    // anchor must come from the intent's ALREADY-STORED `paidAt`, or a retry would re-stamp a
+    // clock the first delivery started — 70 seconds of free term, and worse under a manual
+    // redelivery days later.
+    const storedPaidAt = new Date('2026-02-01T00:00:00Z');
+    mocks.intentUpdateMany.mockResolvedValue({ count: 0 });
+    mocks.intentFindUnique.mockResolvedValue({
+      id: 'int_1',
+      practitionerId: 'prac_1',
+      paidAt: storedPaidAt,
+      email: 'client@example.com',
+      scheduledAt: null,
+    });
+    vi.setSystemTime(new Date('2026-02-08T00:00:00Z'));
+    await POST(
+      signedRequest({
+        type: 'payment.succeeded',
+        data: { id: 'pay_1', metadata: { booking_intent_id: 'int_1' } },
+        company_id: 'biz_1',
+      }) as unknown as NextRequest,
+    );
+    const create = createArgs();
+    expect((create.termAnchorAt as Date).toISOString()).toBe('2026-02-01T00:00:00.000Z');
+    expect((create.termEndsAt as Date).toISOString()).toBe('2026-10-01T00:00:00.000Z');
   });
 
   it('records a FAILED ledger write on the event row instead of swallowing it', async () => {
