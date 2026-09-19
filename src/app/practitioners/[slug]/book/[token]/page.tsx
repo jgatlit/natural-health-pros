@@ -9,7 +9,7 @@ import { SchedulerStep } from '@/components/booking/SchedulerStep';
 import { recordScheduleSignal } from './actions';
 import { createBookingCheckoutConfig } from '@/lib/whop';
 import { effectivePlan, sessionFeeCents } from '@/lib/pricing-plans';
-import { claimState } from '@/lib/attributed-clients';
+import { attributionTermState } from '@/lib/attributed-clients';
 import { CheckoutStep } from '@/components/booking/CheckoutStep';
 import { headers } from 'next/headers';
 
@@ -132,9 +132,10 @@ export default async function BookingFlowPage({ params }: Props) {
   let intentPurchaseUrl: string | null = intent.whopCheckoutPurchaseUrl;
 
   if (willRenderCheckout && !checkoutConfigId) {
-    // THE FEE IS RESOLVED PER BOOKING, NOT PER OFFERING. Plan B takes a large share of the FIRST
-    // platform-sourced session with a client and nothing afterwards, so the same offering owes a
-    // different fee depending on who is buying — which only the attribution ledger can answer.
+    // THE FEE IS RESOLVED PER BOOKING, NOT PER OFFERING. Both plans take their share of every
+    // platform-sourced session INSIDE the lead attribution term and nothing after it, so the same
+    // offering owes a different fee depending on who is buying and when — which only the
+    // attribution ledger can answer.
     //
     // A practitioner who has not chosen a plan (`plan` null — every pre-2026-09-18 listing) is
     // charged nothing. Enrolling them in a split they never picked would be worse than collecting
@@ -142,13 +143,17 @@ export default async function BookingFlowPage({ params }: Props) {
     // An unchosen plan resolves to Plan B (operator ruling 2026-09-18) rather than to "no fee":
     // the stored column stays null, but the commercial default is real.
     const planKey = effectivePlan(intent.practitioner.plan);
-    const claim = await claimState(prisma, {
+    // THE TERM, not the old claim state. A client inside the attribution term is chargeable on
+    // EVERY sourced session (operator ruling, 2026-09-18); outside it, both plans charge 0% and
+    // there is no branch left that can re-charge a first-session fee on someone we introduced
+    // years ago.
+    const term = await attributionTermState(prisma, {
       practitionerId: intent.practitionerId,
       email: intent.email,
     });
     const feeCents = sessionFeeCents({
       plan: planKey,
-      claim,
+      term,
       priceUsdCents: offering!.priceUsdCents,
     });
 

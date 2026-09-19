@@ -1,5 +1,7 @@
 import { createHash } from 'node:crypto';
 
+import { snapshotTerm, termState, type TermState } from './attribution-term';
+
 /**
  * The attribution ledger — which clients Natural Health Pros sourced for a practitioner, and for
  * how long that claim lasts.
@@ -15,9 +17,12 @@ import { createHash } from 'node:crypto';
  */
 
 /**
- * How long a platform-sourced client stays attributed. Operator decision, 2026-09-17: one year.
- * Parameterised because it is a COMMERCIAL term, not a technical default — the same reason plan
- * prices live in env.
+ * DEPRECATED — superseded by the Lead Attribution Term (operator ruling 5, 2026-09-18: one term,
+ * 8 months, one admin setting, governing BOTH plans and snapshotted per row).
+ *
+ * Retained ONLY to keep writing the legacy `expiresAt` column while the previously-deployed
+ * release still reads it (expand/contract). Nothing may branch on this for money — `termState()`
+ * is the authority. Delete with the column.
  */
 export function attributionWindowDays(): number {
   const raw = process.env.ATTRIBUTION_CLAIM_WINDOW_DAYS;
@@ -62,16 +67,44 @@ type Db = {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     upsert(args: any): Promise<unknown>;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    findUnique(args: any): Promise<{ expiresAt: Date } | null>;
+    findUnique(args: any): Promise<AttributionRow | null>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    updateMany(args: any): Promise<{ count: number }>;
   };
 };
 
+/** The columns the fee path reads. `expiresAt` is legacy; the term fields are the authority. */
+export type AttributionRow = {
+  expiresAt: Date;
+  termMonths?: number | null;
+  termAnchorAt?: Date | null;
+  termEndsAt?: Date | null;
+  referrerPractitionerId?: string | null;
+};
+
 /**
- * Record (or refresh) an attribution claim.
+ * Record an attribution claim — THE EARLIEST-TOUCH LOCK.
  *
- * Idempotent by (practitionerId, emailHash). A repeat platform-sourced booking EXTENDS the window
- * rather than creating a second row — the claim is on the relationship, not on the transaction.
- * `attributedAt` is never moved backwards, so the original introduction date survives.
+ * Idempotent by (practitionerId, emailHash), and on a repeat booking it deliberately changes
+ * ALMOST NOTHING. This is the behavioural reversal in stage 2, and it is worth being explicit
+ * about what it fixes:
+ *
+ * ⚠️ THE SHIPPED CODE EXTENDED THE WINDOW ON EVERY REPEAT BOOKING (`update: { expiresAt: … }`).
+ * That made the claim a ROLLING window rather than a fixed term, with two consequences that both
+ * moved money the wrong way. A practitioner could never age out of a claim while the client kept
+ * booking — the term was unbounded in practice, which is not what was sold. And the mirror image
+ * was worse: when a row DID finally lapse, the next booking with a client we introduced years ago
+ * re-entered as a fresh first session and was charged a SECOND first-session fee (see the
+ * `EXPIRED` branch of the old `sessionFeeBps`). One client relationship, two first-session
+ * charges. The term is now fixed at the earliest touch and never moves.
+ *
+ * The ONLY fields a later call may fill are ones that were unknowable at first touch:
+ *   - `termAnchorAt`/`termEndsAt` when the first booked session's scheduled start becomes known,
+ *     and ONLY while the anchor is still null. Once anchored, the clock is immutable.
+ *   - `referrerPractitionerId`, same rule: first referrer named wins, for the same reason the
+ *     first booking that introduced a client is never rewritten.
+ * `attributedAt` is never moved. `termMonths` is snapshotted at creation and never re-read from
+ * the admin setting, so an operator editing the term cannot reprice a claim already sold.
  */
 export async function recordAttributedClient(
   db: Db,
@@ -81,13 +114,26 @@ export async function recordAttributedClient(
     party?: 'PRACTITIONER' | 'NHP' | null;
     source?: string | null;
     bookingIntentId?: string | null;
+    /** The term to snapshot, in months. Resolve it from `loadSettings()` at the call site. */
+    termMonths: number;
+    /** First booked session's scheduled start, when known. Null anchors the term later. */
+    sessionStartsAt?: Date | null;
+    /** The practitioner who referred this client, when the booking carried a referral token. */
+    referrerPractitionerId?: string | null;
     at?: Date;
   },
 ): Promise<{ emailHash: string }> {
   const at = input.at ?? new Date();
   const emailHash = hashClientEmail(input.email);
+  const term = snapshotTerm({ termMonths: input.termMonths, anchorAt: input.sessionStartsAt ?? null });
+  const where = { practitionerId_emailHash: { practitionerId: input.practitionerId, emailHash } };
+
+  // CREATE-ONLY. The update branch is deliberately EMPTY: on a repeat booking there is nothing
+  // about an existing claim that this call is entitled to change. Everything a later touch may
+  // legitimately fill is written below, each behind its own "only if still unset" filter, so the
+  // lock is enforced by the database rather than by the order in which handlers happen to run.
   await db.attributedClient.upsert({
-    where: { practitionerId_emailHash: { practitionerId: input.practitionerId, emailHash } },
+    where,
     create: {
       practitionerId: input.practitionerId,
       emailHash,
@@ -95,31 +141,51 @@ export async function recordAttributedClient(
       source: input.source ?? null,
       firstBookingIntentId: input.bookingIntentId ?? null,
       attributedAt: at,
+      // Legacy column, still written for the currently-deployed release. Not read for money.
       expiresAt: attributionExpiry(at),
+      termMonths: term.termMonths,
+      termAnchorAt: term.termAnchorAt,
+      termEndsAt: term.termEndsAt,
+      referrerPractitionerId: input.referrerPractitionerId ?? null,
     },
-    update: { expiresAt: attributionExpiry(at) },
-  });
+    update: {},
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  } as any);
+
+  // START THE CLOCK, ONCE. `updateMany` with `termAnchorAt: null` in the filter is the whole
+  // guard: an already-anchored row matches nothing and is left alone, and two concurrent bookings
+  // cannot race each other into re-anchoring because only one of them can match. A plain `update`
+  // would overwrite, which is how the rolling-window bug worked.
+  if (term.termAnchorAt) {
+    await db.attributedClient.updateMany({
+      where: { practitionerId: input.practitionerId, emailHash, termAnchorAt: null },
+      data: { termAnchorAt: term.termAnchorAt, termEndsAt: term.termEndsAt, termMonths: term.termMonths },
+    });
+  }
+
+  // NAME THE REFERRER, ONCE, for the same reason: a later referral link must not steal credit —
+  // and therefore money — from whoever actually made the introduction.
+  if (input.referrerPractitionerId) {
+    await db.attributedClient.updateMany({
+      where: { practitionerId: input.practitionerId, emailHash, referrerPractitionerId: null },
+      data: { referrerPractitionerId: input.referrerPractitionerId },
+    });
+  }
+
   return { emailHash };
 }
 
 /**
- * Has this practitioner already had a platform-sourced session with this client, inside the window?
+ * Where this client sits in this practitioner's attribution term — the ONE read the fee path makes.
  *
- * Returns true when the ledger holds a LIVE claim. An expired row is deliberately not deleted —
- * it is history, and the sweep reads it — but it no longer suppresses a first-session fee.
+ * Replaces `claimState()`'s NONE/LIVE/EXPIRED, which encoded the once-per-client rule that the
+ * operator reversed on 2026-09-18. The states are no longer about whether a fee has been charged
+ * before; they are about whether we are inside the term we sold.
  */
-/**
- * The three states a client can be in for fee purposes. "NONE" and "EXPIRED" are deliberately
- * distinct: never-seen means we are introducing them (a first session), while expired means we
- * introduced them over a year ago and no longer have a claim at all.
- */
-export type ClaimState = 'NONE' | 'LIVE' | 'EXPIRED';
-
-export async function claimState(
+export async function attributionTermState(
   db: Db,
   input: { practitionerId: string; email: string; now?: Date },
-): Promise<ClaimState> {
-  const now = input.now ?? new Date();
+): Promise<TermState> {
   const row = await db.attributedClient.findUnique({
     where: {
       practitionerId_emailHash: {
@@ -127,17 +193,26 @@ export async function claimState(
         emailHash: hashClientEmail(input.email),
       },
     },
-    select: { expiresAt: true },
+    select: { expiresAt: true, termMonths: true, termAnchorAt: true, termEndsAt: true },
   });
   if (!row) return 'NONE';
-  return row.expiresAt > now ? 'LIVE' : 'EXPIRED';
+  return termState(
+    { termAnchorAt: row.termAnchorAt ?? null, termEndsAt: row.termEndsAt ?? null },
+    input.now ?? new Date(),
+  );
 }
 
-export async function hasLiveAttribution(
+/**
+ * Does the ledger hold ANY claim on this client for this practitioner, live or lapsed?
+ *
+ * The leakage sweep and the Clients & Referrals list both need "have we ever introduced them",
+ * which is a different question from "may we charge for this session" and must not be answered
+ * with the fee-path helper.
+ */
+export async function hasAnyAttribution(
   db: Db,
-  input: { practitionerId: string; email: string; now?: Date },
+  input: { practitionerId: string; email: string },
 ): Promise<boolean> {
-  const now = input.now ?? new Date();
   const row = await db.attributedClient.findUnique({
     where: {
       practitionerId_emailHash: {
@@ -147,18 +222,5 @@ export async function hasLiveAttribution(
     },
     select: { expiresAt: true },
   });
-  return !!row && row.expiresAt > now;
-}
-
-/**
- * Is the booking about to be paid a FIRST session for fee purposes?
- *
- * First session = no live claim yet. The fee is therefore charged once per client relationship per
- * window, which is exactly how Plan B was described to practitioners.
- */
-export async function isFirstSession(
-  db: Db,
-  input: { practitionerId: string; email: string; now?: Date },
-): Promise<boolean> {
-  return !(await hasLiveAttribution(db, input));
+  return !!row;
 }

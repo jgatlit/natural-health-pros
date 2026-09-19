@@ -107,6 +107,12 @@ export const ROUTE_META: Record<string, RouteMeta> = {
     audience: 'admin',
     status: 'live',
   },
+  '/admin/commercial-settings': {
+    description:
+      '<strong>The two operator-editable numbers that decide money.</strong> <em>Lead Attribution Term</em> (8 months, spec v1.4 &sect;1.1) governs BOTH plans &mdash; each charges its share on every platform-sourced session inside the term and 0% after it &mdash; and is snapshotted onto every attribution row at creation, so an edit here is forward-only and cannot reprice a claim already sold. <em>Referral Hold Period</em> (90 days) is how long an unpayable referrer&rsquo;s share is held while they claim their Whop account, clocked per held row. Also shows the held and <code>expired_unclaimed</code> totals; nothing acts on an expired share automatically, in either direction, because day-91 policy is deliberately unruled.',
+    audience: 'admin',
+    status: 'live',
+  },
   '/admin/whop-webhooks': {
     description:
       '<strong>Webhook event log.</strong> Last 100 WhopWebhookEvent rows ordered by receivedAt desc, with the <code>error</code> column surfacing events that ran but could not be attributed to a practitioner. While empty it lists the event types actually observed in production (<code>identity_profile.*</code>, <code>payout_account.status_updated</code>, <code>payment.succeeded</code>) in a &lt;details&gt; element. The old list advertised <code>account.verified</code>, which Whop has never delivered.',

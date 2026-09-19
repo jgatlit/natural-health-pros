@@ -95,7 +95,7 @@
           <button id="env-prod" class="active" type="button">Production</button>
           <button id="env-local" type="button">Local (localhost:3000)</button>
         </div>
-        <p class="meta-note">Generated 2026-07-29T05:37:34.436Z</p>
+        <p class="meta-note">Generated 2026-09-19T00:13:34.380Z</p>
       </header>
 
       <section class="group">
@@ -170,6 +170,28 @@
         </div>
         <div class="route">
           <div>
+            <div class="path"><a href="" data-route="/verification-submitted" target="_blank">/verification-submitted</a></div>
+            <p class="desc"><strong>Public KYC return landing.</strong> Where <code>/api/whop/onboarding/return</code> sends anyone it cannot positively identify as the owner. Deliberately generic — no name, slug or status — so it renders identically for the practitioner who just finished, a stale link, and a stranger, which is what lets the return route stay unauthenticated without leaking whether a practitioner exists. ⚠️ The path is load-bearing: middleware gates on <code>startsWith(&apos;/onboarding&apos;)</code>, a PREFIX match, so naming this <code>/onboarding-complete</code> would auth-gate it and reintroduce the dead end it exists to remove.</p>
+            
+          </div>
+          <div class="badges">
+            <span class="badge public">Public</span>
+            <span class="badge live">Live</span>
+          </div>
+        </div>
+        <div class="route">
+          <div>
+            <div class="path"><a href="" data-route="/api/whop/onboarding/return" target="_blank">/api/whop/onboarding/return</a></div>
+            <p class="desc"><strong>Whop KYC return redirect.</strong> DELIBERATELY UNAUTHENTICATED and side-effect-free. Whop&rsquo;s callback is a client-side navigation that fetches this URL cross-origin (no cookies possible), and Sumsub&rsquo;s &ldquo;continue on your phone&rdquo; handoff means the practitioner may finish on a device with no session at all — so a cookie here is a coin flip, not a boundary. Redirects an authenticated owner to their payments section; everyone else (unknown slug, someone else&rsquo;s slug, no session) gets the identical redirect to <code>/verification-submitted</code>. Payout state is owned entirely by the <code>identity_profile.*</code> webhook plus <code>/api/cron/whop-reconcile</code>.</p>
+            
+          </div>
+          <div class="badges">
+            <span class="badge public">Public</span>
+            <span class="badge live">Live</span>
+          </div>
+        </div>
+        <div class="route">
+          <div>
             <div class="path"><a href="" data-route="/auth/invite-accept/EXAMPLE_TOKEN" target="_blank">/auth/invite-accept/[token]</a></div>
             <p class="desc"><strong>Invitation acceptance landing.</strong> Validates the token, shows "You're invited" with the inviter's name, "Send sign-in link" button. On click, calls signIn('resend') with redirectTo=/onboarding?invitation=TOKEN.</p>
             
@@ -209,19 +231,8 @@
         </div>
         <div class="route">
           <div>
-            <div class="path"><a href="" data-route="/api/whop/onboarding/return" target="_blank">/api/whop/onboarding/return</a></div>
-            <p class="desc"><strong>Whop KYC return redirect.</strong> Auth + ownership gated. Best-effort ONLY — it fires the moment the practitioner submits the hosted form, before the provider approves, so it never sets <code>whopPayoutsEnabled</code>; the <code>identity_profile.approved</code> webhook is authoritative. Opportunistically refreshes <code>whopPayoutStatus</code>, and a failed refresh is non-fatal.</p>
-            
-          </div>
-          <div class="badges">
-            <span class="badge auth">Auth required</span>
-            <span class="badge live">Live</span>
-          </div>
-        </div>
-        <div class="route">
-          <div>
             <div class="path"><a href="" data-route="/api/whop/onboarding/refresh" target="_blank">/api/whop/onboarding/refresh</a></div>
-            <p class="desc"><strong>Whop account-link refresh.</strong> Auth + ownership gated. Whop redirects here when a short-lived account link expires mid-flow; re-mints a fresh <code>account_onboarding</code> link and bounces straight back into the hosted KYC form.</p>
+            <p class="desc"><strong>Whop account-link refresh.</strong> Auth + ownership gated, and STAYS gated — it mints a link carrying payout scopes (create/delete destination, withdraw funds), so an open version would hand anyone a privileged link for any connected account. Whop redirects here when a short-lived account link expires mid-flow; re-mints a fresh <code>account_onboarding</code> link. An unauthenticated hit bounces to sign-in with a callback to the practitioner&rsquo;s own payments section rather than back to this route.</p>
             
           </div>
           <div class="badges">
@@ -260,7 +271,7 @@
         <div class="route">
           <div>
             <div class="path"><a href="" data-route="/admin/whop-webhooks" target="_blank">/admin/whop-webhooks</a></div>
-            <p class="desc"><strong>Webhook event log.</strong> Last 100 WhopWebhookEvent rows ordered by receivedAt desc. Empty today; lists the 8 expected event types (company.created, account.verified, payment.succeeded, payout.paid, etc.) in a &lt;details&gt; element while empty.</p>
+            <p class="desc"><strong>Webhook event log.</strong> Last 100 WhopWebhookEvent rows ordered by receivedAt desc, with the <code>error</code> column surfacing events that ran but could not be attributed to a practitioner. While empty it lists the event types actually observed in production (<code>identity_profile.*</code>, <code>payout_account.status_updated</code>, <code>payment.succeeded</code>) in a &lt;details&gt; element. The old list advertised <code>account.verified</code>, which Whop has never delivered.</p>
             
           </div>
           <div class="badges">
@@ -272,6 +283,17 @@
           <div>
             <div class="path"><a href="" data-route="/admin/connected-accounts" target="_blank">/admin/connected-accounts</a></div>
             <p class="desc"><strong>Whop connected-account lifecycle + reconciliation.</strong> Per-practitioner payout status (Whop&rsquo;s raw <code>payout_status</code>) and the authoritative <code>payouts_enabled</code> gate, sorted so restricted accounts (<code>connected</code> but not payouts-enabled) surface first. Also joins the live <code>GET /companies?parent_company_id=</code> roster against local rows to surface drift in both directions — webhooks retry only ~70s before dropping events, so drift is expected and this is what catches it. Degrades to the local table if Whop is unreachable.</p>
+            
+          </div>
+          <div class="badges">
+            <span class="badge admin">Admin</span>
+            <span class="badge live">Live</span>
+          </div>
+        </div>
+        <div class="route">
+          <div>
+            <div class="path"><a href="" data-route="/admin/commercial-settings" target="_blank">/admin/commercial-settings</a></div>
+            <p class="desc"><strong>The two operator-editable numbers that decide money.</strong> <em>Lead Attribution Term</em> (8 months, spec v1.4 &sect;1.1) governs BOTH plans &mdash; each charges its share on every platform-sourced session inside the term and 0% after it &mdash; and is snapshotted onto every attribution row at creation, so an edit here is forward-only and cannot reprice a claim already sold. <em>Referral Hold Period</em> (90 days) is how long an unpayable referrer&rsquo;s share is held while they claim their Whop account, clocked per held row. Also shows the held and <code>expired_unclaimed</code> totals; nothing acts on an expired share automatically, in either direction, because day-91 policy is deliberately unruled.</p>
             
           </div>
           <div class="badges">
@@ -311,6 +333,17 @@
           <div>
             <div class="path"><a href="" data-route="/api/auth/session" target="_blank">/api/auth/[...nextauth]</a></div>
             <p class="desc"><strong>NextAuth handlers.</strong> Catches /api/auth/signin, /signout, /session, /callback/*, /csrf, etc. Magic-link verification callback runs here.</p>
+            
+          </div>
+          <div class="badges">
+            <span class="badge api">API</span>
+            <span class="badge live">Live</span>
+          </div>
+        </div>
+        <div class="route">
+          <div>
+            <div class="path"><a href="" data-route="/api/cron/whop-reconcile" target="_blank">/api/cron/whop-reconcile</a></div>
+            <p class="desc"><strong>Whop payout drift sweep.</strong> The safety net behind the <code>identity_profile.*</code> webhook, which Whop drops permanently after 3 retries (~70s). Reads <code>GET /identity_profiles/{idpf_…}</code> — the only endpoint exposing <code>status</code>, <code>payout_status</code> and <code>payouts_enabled</code> together — and keys completion on <code>status: approved</code>. ONE-WAY: it may OPEN the payout gate, never close it, because a parent-company API key is known to under-report (<code>linked_companies</code> reads empty here but arrives populated on the webhook). Revocation stays with <code>identity_profile.rejected</code>/<code>needs_action</code>. Reports connected accounts that have NO stored Whop ids — the signature of a webhook that never resolved. Bearer <code>CRON_SECRET</code> when set.</p>
             
           </div>
           <div class="badges">

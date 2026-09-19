@@ -15,6 +15,8 @@
  * names, and that ambiguity is worth one longer identifier to kill permanently.
  */
 
+import type { TermState } from './attribution-term';
+
 export type PlanKey = 'PLAN_A' | 'PLAN_B';
 
 export type PractitionerPlan = {
@@ -38,6 +40,12 @@ export type PractitionerPlan = {
    *
    * Plan A is not once: its smaller share applies to platform-sourced clients for the length of
    * the attribution window (the 09-03 model, 20% on NHP-sourced clients for ~12 months).
+   */
+  /**
+   * ⚠️ DEPRECATED AND NO LONGER CONSULTED FOR MONEY (operator ruling, 2026-09-18). Both plans now
+   * charge their share on every platform-sourced session INSIDE the attribution term and 0%
+   * after it, so "once per client, forever" has no expression in the fee rule. Kept on the type
+   * for one release because onboarding copy still reads it; delete with that copy.
    */
   firstSessionFeeOnce: boolean;
   /** Both plans transact through Whop; kept explicit so no UI can imply otherwise. */
@@ -227,25 +235,47 @@ export function effectivePlan(stored: unknown): PlanKey {
 
 /**
  * The platform fee for one session, resolved from the plan and the client's place in the
- * attribution ledger. This is the ONE place the "once vs ongoing" rule lives.
+ * ATTRIBUTION TERM. This is the ONE place the rule lives.
  *
- *   NONE    — we are introducing this client. First-session share.
- *   LIVE    — introduced inside the window. Plan A keeps taking its smaller share; Plan B takes
- *             nothing, because the practitioner was promised the split applies once.
- *   EXPIRED — introduced over a window ago. We no longer have a claim, so we take nothing, on
- *             either plan. Under Plan B that is also what stops a lapsed row re-charging a
- *             first-session fee on a client we introduced years ago.
+ * ⚠️ REWRITTEN 2026-09-18 on two operator rulings, both of which INVERT behaviour that was
+ * shipped and asserted:
+ *
+ *  1. Plan B charges its share on EVERY platform-sourced session inside the term, not once per
+ *     client forever (spec R3 / §9 test 3: $40 × 3 at months 0/3/6, $0 at month 9). The old
+ *     `firstSessionFeeOnce` / NONE-LIVE-EXPIRED rule no longer expresses the business.
+ *  2. Plan A expires at the SAME boundary as Plan B. It was carried as 20% forever; that
+ *     assertion was wrong and is now inverted.
+ *
+ * The consequence worth naming: OUT_OF_TERM is 0% on BOTH plans, which is also what closes the
+ * double-charge hole. The old rule read an EXPIRED ledger row as "no live claim, so this is a
+ * first session" and charged the full first-session share a second time on a client we had
+ * already introduced and already been paid for. There is now no branch that can charge anything
+ * once the term has run out.
+ *
+ * `NONE` means we are introducing this client with this very session — month 0, chargeable.
+ * `PENDING_ANCHOR` means we hold a claim whose first session has not happened yet, so the clock
+ * has not started; a term cannot expire before it begins, so it charges.
  */
-export function sessionFeeBps(input: { plan: PlanKey; claim: 'NONE' | 'LIVE' | 'EXPIRED' }): number {
-  const plan = getPlan(input.plan);
-  if (input.claim === 'NONE') return plan.firstSessionPlatformFeeBps;
-  if (input.claim === 'EXPIRED') return plan.firstSessionFeeOnce ? 0 : plan.firstSessionPlatformFeeBps;
-  return plan.laterSessionPlatformFeeBps;
+export function sessionFeeBps(input: { plan: PlanKey; term: TermState }): number {
+  if (input.term === 'OUT_OF_TERM') return 0;
+  return sourcedSessionFeeBps(input.plan);
+}
+
+/**
+ * The plan's share of a platform-sourced session inside the term.
+ *
+ * Reads `firstSessionPlatformFeeBps` for EVERY in-term session by design: after the recurrence
+ * ruling there is only one sourced-session rate per plan. `laterSessionPlatformFeeBps` survives
+ * only as the (unused, zero) tail rate and is not consulted here — a second rate to keep in sync
+ * is exactly how Plan B ended up charging 0% on sessions the spec says are chargeable.
+ */
+export function sourcedSessionFeeBps(plan: PlanKey): number {
+  return getPlan(plan).firstSessionPlatformFeeBps;
 }
 
 export function sessionFeeCents(input: {
   plan: PlanKey;
-  claim: 'NONE' | 'LIVE' | 'EXPIRED';
+  term: TermState;
   priceUsdCents: number;
 }): number {
   if (input.priceUsdCents <= 0) return 0;

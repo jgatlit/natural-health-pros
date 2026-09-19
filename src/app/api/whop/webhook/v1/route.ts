@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import type { Practitioner, Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { recordAttributedClient } from '@/lib/attributed-clients';
+import { loadSettings } from '@/lib/platform-settings';
 import { unwrapWebhook } from '@/lib/whop';
 import { indexPractitioner } from '@/lib/practitioner-indexer';
 
@@ -263,6 +264,8 @@ async function handleEvent(
           email: true,
           attributionParty: true,
           attributionSource: true,
+          // The term's ANCHOR — the first booked session's scheduled start, not this payment.
+          scheduledAt: true,
         },
       });
       if (!intent) return `payment.succeeded referenced unknown booking intent ${intentId}`;
@@ -301,12 +304,21 @@ async function handleEvent(
       // here that cannot be reconstructed.
       if (marked.count > 0) {
         try {
+          // The TERM is snapshotted onto the row here, read from the admin setting exactly once,
+          // at creation. Reading it later would let an operator edit reprice a claim already sold.
+          const { leadAttributionTermMonths } = await loadSettings(prisma);
           await recordAttributedClient(prisma, {
             practitionerId: intent.practitionerId,
             email: intent.email,
             party: intent.attributionParty,
             source: intent.attributionSource,
             bookingIntentId: intent.id,
+            termMonths: leadAttributionTermMonths,
+            // ANCHOR ON THE SCHEDULED SESSION, not on `new Date()`. A January payment for a March
+            // session is attributed from March; anchoring at payment silently shortened every
+            // term by the booking lead time. Null here leaves the row PENDING_ANCHOR — chargeable,
+            // but with a clock that has not started, which is the honest state.
+            sessionStartsAt: intent.scheduledAt ?? null,
           });
         } catch (err) {
           console.error('v1 webhook: attribution ledger write failed', {

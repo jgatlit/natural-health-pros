@@ -1,9 +1,9 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { effectivePlan, getPlan, sessionFeeBps, sessionFeeCents } from '@/lib/pricing-plans';
+import { effectivePlan, sessionFeeBps, sessionFeeCents } from '@/lib/pricing-plans';
 
 const ENV = ['PLAN_DEFAULT', 'PLAN_B_FIRST_SESSION_FEE_ONCE', 'PLAN_A_FIRST_SESSION_FEE_ONCE'];
 
-describe('plan default + once-vs-ongoing fee rule', () => {
+describe('plan default + in-term fee rule', () => {
   let saved: Record<string, string | undefined>;
   beforeEach(() => {
     saved = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
@@ -28,30 +28,52 @@ describe('plan default + once-vs-ongoing fee rule', () => {
     expect(effectivePlan(null)).toBe('PLAN_A');
   });
 
-  it("charges Plan B's first-session split once and never again", () => {
-    expect(sessionFeeBps({ plan: 'PLAN_B', claim: 'NONE' })).toBe(4_000);
-    expect(sessionFeeBps({ plan: 'PLAN_B', claim: 'LIVE' })).toBe(0);
-    // The promise was "book them privately after that" — a lapsed ledger row must not re-charge.
-    expect(sessionFeeBps({ plan: 'PLAN_B', claim: 'EXPIRED' })).toBe(0);
-    expect(getPlan('PLAN_B').firstSessionFeeOnce).toBe(true);
+  /**
+   * ⚠️ THIS ASSERTION REPLACES ITS OWN OPPOSITE. The previous version of this test asserted that
+   * Plan B charged once per client and 0% on every later session ("book them privately after
+   * that", 2026-09-14). Spec v1.4 R3 / §9 test 3 and the operator ruling of 2026-09-18 reverse
+   * that: the share applies to EVERY platform-sourced session inside the term.
+   */
+  it('charges Plan B on every sourced session inside the term', () => {
+    expect(sessionFeeBps({ plan: 'PLAN_B', term: 'NONE' })).toBe(4_000);
+    expect(sessionFeeBps({ plan: 'PLAN_B', term: 'IN_TERM' })).toBe(4_000);
+    expect(sessionFeeBps({ plan: 'PLAN_B', term: 'PENDING_ANCHOR' })).toBe(4_000);
   });
 
-  it('keeps taking the Plan A share while the claim is live, and stops when it lapses', () => {
-    expect(sessionFeeBps({ plan: 'PLAN_A', claim: 'NONE' })).toBe(2_000);
-    expect(sessionFeeBps({ plan: 'PLAN_A', claim: 'LIVE' })).toBe(2_000);
-    expect(sessionFeeBps({ plan: 'PLAN_A', claim: 'EXPIRED' })).toBe(2_000);
+  /**
+   * ⚠️ ALSO AN INVERSION. Plan A was implemented and asserted as 20% FOREVER. Operator ruling 5
+   * (2026-09-18): "Both plan a and plan b reduce to 0% after the same term." One term, one admin
+   * setting, both plans.
+   */
+  it('drops Plan A to 0% at the SAME boundary as Plan B', () => {
+    expect(sessionFeeBps({ plan: 'PLAN_A', term: 'NONE' })).toBe(2_000);
+    expect(sessionFeeBps({ plan: 'PLAN_A', term: 'IN_TERM' })).toBe(2_000);
+    expect(sessionFeeBps({ plan: 'PLAN_A', term: 'OUT_OF_TERM' })).toBe(0);
+    expect(sessionFeeBps({ plan: 'PLAN_B', term: 'OUT_OF_TERM' })).toBe(0);
   });
 
-  it('can be flipped back to recurring for Plan B if the term ever changes', () => {
+  it('cannot be made to charge after the term by any env flag', () => {
+    // The old `FEE_ONCE` flags are no longer consulted for money. Flipping both must not
+    // resurrect a post-term charge on either plan.
     process.env.PLAN_B_FIRST_SESSION_FEE_ONCE = 'false';
-    expect(sessionFeeBps({ plan: 'PLAN_B', claim: 'EXPIRED' })).toBe(4_000);
+    process.env.PLAN_A_FIRST_SESSION_FEE_ONCE = 'false';
+    expect(sessionFeeBps({ plan: 'PLAN_B', term: 'OUT_OF_TERM' })).toBe(0);
+    expect(sessionFeeBps({ plan: 'PLAN_A', term: 'OUT_OF_TERM' })).toBe(0);
   });
 
   it('never charges on a free session', () => {
-    expect(sessionFeeCents({ plan: 'PLAN_B', claim: 'NONE', priceUsdCents: 0 })).toBe(0);
+    expect(sessionFeeCents({ plan: 'PLAN_B', term: 'NONE', priceUsdCents: 0 })).toBe(0);
   });
 
   it('rounds down in the practitioner favour', () => {
-    expect(sessionFeeCents({ plan: 'PLAN_B', claim: 'NONE', priceUsdCents: 4_501 })).toBe(1_800);
+    expect(sessionFeeCents({ plan: 'PLAN_B', term: 'NONE', priceUsdCents: 4_501 })).toBe(1_800);
+  });
+
+  it('bills §9 test 3 exactly: $40 at months 0, 3 and 6, then $0', () => {
+    const price = 10_000; // $100 session
+    const inTerm = ['NONE', 'IN_TERM', 'IN_TERM'] as const;
+    const charged = inTerm.map((term) => sessionFeeCents({ plan: 'PLAN_B', term, priceUsdCents: price }));
+    expect(charged).toEqual([4_000, 4_000, 4_000]);
+    expect(sessionFeeCents({ plan: 'PLAN_B', term: 'OUT_OF_TERM', priceUsdCents: price })).toBe(0);
   });
 });
