@@ -50,6 +50,8 @@ const mocks = vi.hoisted(() => ({
   clientListFindFirst: vi.fn<(args: unknown) => Promise<unknown>>(),
   intentFindFirst: vi.fn<(args: unknown) => Promise<unknown>>(),
   touchFindMany: vi.fn<(args: unknown) => Promise<unknown[]>>(),
+  ledgerFindFirst: vi.fn<(args: unknown) => Promise<unknown>>(),
+  ledgerUpdate: vi.fn<(args: unknown) => Promise<unknown>>(),
 }));
 
 vi.mock('@/lib/prisma', () => ({
@@ -80,6 +82,8 @@ vi.mock('@/lib/prisma', () => ({
     },
     referralLedgerEntry: {
       upsert: mocks.referralLedgerUpsert,
+      findFirst: mocks.ledgerFindFirst,
+      update: mocks.ledgerUpdate,
     },
     feeLedgerEntry: {
       upsert: mocks.feeLedgerUpsert,
@@ -144,6 +148,8 @@ beforeEach(() => {
   mocks.clientListFindFirst.mockResolvedValue(null);
   mocks.intentFindFirst.mockResolvedValue(null);
   mocks.touchFindMany.mockResolvedValue([]);
+  mocks.ledgerFindFirst.mockResolvedValue(null);
+  mocks.ledgerUpdate.mockResolvedValue({});
 });
 
 describe('signature verification & configuration', () => {
@@ -939,3 +945,82 @@ describe('payment.succeeded — AUDIT: the hosted-fallback path resolves the own
     expect(create.owner).toBe('PRACTITIONER');
   });
 });
+
+describe('refund.created — §9 test 17', () => {
+  const unpaidShare = {
+    id: 'led_1',
+    state: 'PAYABLE',
+    grossUsdCents: 10_000,
+    referrerShareUsdCents: 2_000,
+    referrerPractitionerId: 'prac_X',
+    servingPractitionerId: 'prac_1',
+  };
+
+  function refund(over: Record<string, unknown> = {}) {
+    return POST(
+      signedRequest({
+        type: 'refund.created',
+        data: { id: 'ref_1', amount: 100, payment: { id: 'pay_1' }, ...over },
+        company_id: 'biz_1',
+      }) as unknown as NextRequest,
+    );
+  }
+
+  it('reverses an unpaid referrer share proportionally and reports no failure', async () => {
+    mocks.ledgerFindFirst.mockResolvedValue(unpaidShare);
+
+    const res = await refund();
+
+    expect(res.status).toBe(200);
+    expect(mocks.ledgerUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'led_1' }, data: { referrerShareUsdCents: 0 } }),
+    );
+    expect(errorRecordedOnEvent()).toBe(false);
+  });
+
+  it('REPORTS LOUDLY when the share was already paid out — nothing is clawed back automatically', async () => {
+    mocks.ledgerFindFirst.mockResolvedValue({ ...unpaidShare, state: 'SETTLED' });
+
+    const res = await refund();
+
+    expect(res.status).toBe(200);
+    // Not merely logged: recovering money already sitting in a third party's Whop account needs a
+    // human, so it has to reach /admin/whop-webhooks rather than a console line nobody reads.
+    expect(mocks.ledgerUpdate).not.toHaveBeenCalled();
+    expect(
+      mocks.eventUpdate.mock.calls.some((c) => JSON.stringify(c[0]).includes('ALREADY PAID OUT')),
+    ).toBe(true);
+  });
+
+  it('is silent for a refund of a payment that owed nobody a share', async () => {
+    mocks.ledgerFindFirst.mockResolvedValue(null);
+
+    await refund();
+
+    expect(mocks.ledgerUpdate).not.toHaveBeenCalled();
+    expect(errorRecordedOnEvent()).toBe(false);
+  });
+
+  it('reports a refund it cannot attribute rather than acking it clean', async () => {
+    await POST(
+      signedRequest({
+        type: 'refund.created',
+        data: { id: 'ref_1', amount: 100 },
+        company_id: 'biz_1',
+      }) as unknown as NextRequest,
+    );
+
+    expect(
+      mocks.eventUpdate.mock.calls.some((c) =>
+        JSON.stringify(c[0]).includes('no resolvable payment id'),
+      ),
+    ).toBe(true);
+  });
+});
+
+function errorRecordedOnEvent(): boolean {
+  return mocks.eventUpdate.mock.calls.some((c) => {
+    const data = (c[0] as { data?: { error?: string | null } })?.data;
+    return typeof data?.error === 'string' && data.error.length > 0;
+  });
+}

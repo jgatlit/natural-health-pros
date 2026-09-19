@@ -139,7 +139,11 @@ export async function settlePayableShares(
   const summary: SettlementSummary = { matched: 0, settled: 0, skipped: 0, failed: 0, blocked: null };
 
   const rows = (await db.referralLedgerEntry.findMany({
-    where: { state: 'PAYABLE', settledAt: null },
+    // `gt: 0` is load-bearing, not defensive. A refund REDUCES an unpaid share in place, and a
+    // fully refunded one lands at exactly zero — which `toTransferDollars` rejects, so without
+    // this filter one refunded booking would throw on every sweep forever and take the rest of
+    // the batch's error budget with it.
+    where: { state: 'PAYABLE', settledAt: null, referrerShareUsdCents: { gt: 0 } },
     select: {
       id: true,
       referrerShareUsdCents: true,

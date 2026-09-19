@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import type { Practitioner, Prisma } from '@prisma/client';
 import { prisma } from '@/lib/prisma';
 import { commitPaymentAttribution } from '@/lib/referral-settlement';
+import { reverseReferralOnRefund } from '@/lib/referral-refunds';
 import { loadSettings } from '@/lib/platform-settings';
 import { unwrapWebhook } from '@/lib/whop';
 import { indexPractitioner } from '@/lib/practitioner-indexer';
@@ -360,6 +361,46 @@ async function handleEvent(
       }
       // Still null on the happy path, so the PAID transition is never reported as a failure.
       return attributionFailure;
+    }
+    case 'refund.created':
+    case 'refund.updated': {
+      // §9 test 17. Whop reverses the APPLICATION FEE itself, proportionally; what does not
+      // auto-reverse is the referrer's share, which is a separate object on a separate account.
+      //
+      // Event names taken from the installed SDK's own `WebhookEvent` union
+      // (@whop/sdk resources/webhooks) rather than guessed — the payload shape there also
+      // documents `data.amount` as DOLLARS ("10.43 for $10.43 USD") and nests the original
+      // payment under `data.payment.id`.
+      //
+      // `refund.updated` is handled identically and is safe to: the reversal is keyed on the
+      // refund id, so a status change that redelivers the same refund writes nothing new.
+      const payment = asRecord(data.payment);
+      const paymentId = asString(payment?.id) ?? asString(data.payment_id);
+      const amount = typeof data.amount === 'number' ? data.amount : null;
+      if (!paymentId || amount === null) {
+        // Reported rather than swallowed: a refund we cannot attribute may be one that should
+        // have clawed back a referrer share, and silence here is indistinguishable from "no
+        // share was owed".
+        const message = `${type} carried no resolvable payment id or amount — any referrer share on it is unreversed`;
+        console.error(`v1 webhook: ${message}`);
+        return message;
+      }
+
+      const outcome = await reverseReferralOnRefund(prisma, {
+        whopPaymentId: paymentId,
+        refundAmountUsdDollars: amount,
+        refundId: asString(data.id) ?? `${type}:${paymentId}`,
+        at: new Date(),
+      });
+
+      // A share that was ALREADY PAID OUT is money owed back by a third party. Nothing is clawed
+      // back automatically, so this must reach /admin/whop-webhooks rather than only a log line.
+      if (outcome.recoveryOwedUsdCents > 0) {
+        const message = `refund on payment ${paymentId} reverses a referrer share of ${outcome.recoveryOwedUsdCents} cents that was ALREADY PAID OUT — recovery needs an explicit action`;
+        console.error(`v1 webhook: ${message}`);
+        return message;
+      }
+      return null;
     }
     default:
       return null;
