@@ -181,10 +181,18 @@ export async function recordAttributedClient(
  * Replaces `claimState()`'s NONE/LIVE/EXPIRED, which encoded the once-per-client rule that the
  * operator reversed on 2026-09-18. The states are no longer about whether a fee has been charged
  * before; they are about whether we are inside the term we sold.
+ *
+ * ⚠️ `asOf` IS THE SESSION'S SCHEDULED START, NOT THE WALL CLOCK, and it is REQUIRED for exactly
+ * that reason. Spec §6.1 is explicit — "sessions count by scheduled start" — and people pay weeks
+ * before they are seen, so the two instants straddle the boundary in both directions: a session
+ * booked inside the term for a date outside it would be charged, and one paid for after the term
+ * ends for a date inside it would not be. Spec §9 test 5 (months 0, 4 and 8) is precisely this
+ * off-by-one. An optional parameter defaulting to `new Date()` is what let the fee path read the
+ * wrong clock while every unit test — which passes the instant explicitly — still passed.
  */
 export async function attributionTermState(
   db: Db,
-  input: { practitionerId: string; email: string; now?: Date },
+  input: { practitionerId: string; email: string; asOf: Date },
 ): Promise<TermState> {
   const row = await db.attributedClient.findUnique({
     where: {
@@ -198,7 +206,7 @@ export async function attributionTermState(
   if (!row) return 'NONE';
   return termState(
     { termAnchorAt: row.termAnchorAt ?? null, termEndsAt: row.termEndsAt ?? null },
-    input.now ?? new Date(),
+    input.asOf,
   );
 }
 

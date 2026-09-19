@@ -290,9 +290,10 @@ async function handleEvent(
       // Never re-writes an already-paid intent: `paidAt: null` is the idempotency guard, so a Whop
       // retry (3x over ~70s) cannot double-record. A zero count here means it was already paid,
       // which is the expected retry path — the unknown-id case was ruled out above.
+      const paidAt = new Date();
       const marked = await prisma.bookingIntent.updateMany({
         where: { id: intentId, paidAt: null },
-        data: { status: 'PAID', paidAt: new Date() },
+        data: { status: 'PAID', paidAt },
       });
 
       // Record the attribution claim on the SAME transition that records payment, and only once —
@@ -302,6 +303,11 @@ async function handleEvent(
       // Never fatal. The webhook has ~70s of retries and then Whop drops the event permanently, so
       // a ledger write that fails must not cost us the PAID transition, which is the one thing
       // here that cannot be reconstructed.
+      // Recorded on the event row, not just the console. A lost attribution write used to mean one
+      // missing history row; under the term rule it means the clock NEVER STARTS for that client,
+      // so they are charged the platform share forever. That is too expensive to leave visible
+      // only in a log line nobody reads — returning it stamps /admin/whop-webhooks red.
+      let attributionFailure: string | null = null;
       if (marked.count > 0) {
         try {
           // The TERM is snapshotted onto the row here, read from the admin setting exactly once,
@@ -314,20 +320,27 @@ async function handleEvent(
             source: intent.attributionSource,
             bookingIntentId: intent.id,
             termMonths: leadAttributionTermMonths,
-            // ANCHOR ON THE SCHEDULED SESSION, not on `new Date()`. A January payment for a March
-            // session is attributed from March; anchoring at payment silently shortened every
-            // term by the booking lead time. Null here leaves the row PENDING_ANCHOR — chargeable,
-            // but with a clock that has not started, which is the honest state.
-            sessionStartsAt: intent.scheduledAt ?? null,
+            // ANCHOR ON THE SCHEDULED SESSION. A January payment for a March session is
+            // attributed from March; anchoring at payment silently shortened every term by the
+            // booking lead time.
+            //
+            // ⚠️ FALL BACK TO THE PAYMENT INSTANT RATHER THAN TO NULL. A null anchor leaves the
+            // row PENDING_ANCHOR, and nothing in the system ever back-fills it — `sessionStartsAt`
+            // is only supplied here, on a transition that runs once per intent. PENDING_ANCHOR is
+            // chargeable and has no end date, so a null anchor does not mean "the clock has not
+            // started", it means THE CLOCK NEVER STARTS and the client is charged the platform
+            // share forever. That is the whole 8-month promise inverted, and it would have hit
+            // every practitioner with no scheduler link, where `scheduledAt` is always null.
+            sessionStartsAt: intent.scheduledAt ?? paidAt,
           });
         } catch (err) {
-          console.error('v1 webhook: attribution ledger write failed', {
-            intentId,
-            error: err instanceof Error ? err.message : String(err),
-          });
+          const detail = err instanceof Error ? err.message : String(err);
+          attributionFailure = `payment.succeeded marked booking intent ${intentId} PAID but the attribution ledger write FAILED (${detail}) — the lead attribution term never started for this client, so they will be charged indefinitely until this row is written`;
+          console.error('v1 webhook: attribution ledger write failed', { intentId, error: detail });
         }
       }
-      return null;
+      // Still null on the happy path, so the PAID transition is never reported as a failure.
+      return attributionFailure;
     }
     default:
       return null;

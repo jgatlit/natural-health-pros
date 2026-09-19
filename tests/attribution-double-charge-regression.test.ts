@@ -83,7 +83,7 @@ describe('regression: a client relationship is never charged a second first-sess
     const introSession = new Date('2026-01-15T00:00:00Z');
 
     // Session 1 — we introduce them. Chargeable at the Plan B rate.
-    const firstState = await attributionTermState(db, p);
+    const firstState = await attributionTermState(db, { ...p, asOf: introSession });
     expect(firstState).toBe('NONE');
     const firstFee = sessionFeeCents({ plan: 'PLAN_B', term: firstState, priceUsdCents: SESSION_PRICE });
     expect(firstFee).toBe(4_000);
@@ -91,7 +91,7 @@ describe('regression: a client relationship is never charged a second first-sess
 
     // Session 2, inside the term — still chargeable (the recurrence ruling).
     const month3 = new Date('2026-04-15T00:00:00Z');
-    const midState = await attributionTermState(db, { ...p, now: month3 });
+    const midState = await attributionTermState(db, { ...p, asOf: month3 });
     expect(midState).toBe('IN_TERM');
     expect(sessionFeeCents({ plan: 'PLAN_B', term: midState, priceUsdCents: SESSION_PRICE })).toBe(4_000);
     await recordAttributedClient(db, { ...p, termMonths: 8, sessionStartsAt: month3, at: month3 });
@@ -102,7 +102,7 @@ describe('regression: a client relationship is never charged a second first-sess
 
     // Session 3, two years later. The old code called this a first session and charged $40 again.
     const muchLater = new Date('2028-06-01T00:00:00Z');
-    const lateState = await attributionTermState(db, { ...p, now: muchLater });
+    const lateState = await attributionTermState(db, { ...p, asOf: muchLater });
     expect(lateState).toBe('OUT_OF_TERM');
     expect(sessionFeeCents({ plan: 'PLAN_B', term: lateState, priceUsdCents: SESSION_PRICE })).toBe(0);
 
@@ -121,7 +121,7 @@ describe('regression: a client relationship is never charged a second first-sess
 
     const billed: number[] = [];
     for (const when of ['2026-01-15', '2026-04-15', '2026-07-15', '2026-09-15', '2026-10-15']) {
-      const term = await attributionTermState(db, { ...p, now: new Date(`${when}T00:00:00Z`) });
+      const term = await attributionTermState(db, { ...p, asOf: new Date(`${when}T00:00:00Z`) });
       billed.push(sessionFeeCents({ plan: 'PLAN_B', term, priceUsdCents: SESSION_PRICE }));
     }
     // months 0, 3, 6 charge; month 8 exactly and month 9 do not (spec §9 test 3).

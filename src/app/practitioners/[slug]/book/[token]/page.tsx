@@ -64,6 +64,9 @@ export default async function BookingFlowPage({ params }: Props) {
       whopCheckoutSessionId: true,
       whopCheckoutPurchaseUrl: true,
       paidAt: true,
+      /// The instant the TERM boundary is measured against — spec §6.1 counts sessions by their
+      /// scheduled start, not by when the card is charged.
+      scheduledAt: true,
       offering: {
         select: {
           id: true,
@@ -147,9 +150,14 @@ export default async function BookingFlowPage({ params }: Props) {
     // EVERY sourced session (operator ruling, 2026-09-18); outside it, both plans charge 0% and
     // there is no branch left that can re-charge a first-session fee on someone we introduced
     // years ago.
+    // MEASURED AT THE SESSION'S SCHEDULED START (spec §6.1), not at this render. Buyers pay weeks
+    // ahead, so the two instants fall on opposite sides of the boundary near the end of a term —
+    // §9 test 5 is exactly that case. Falling back to now is for the no-scheduler flow, where no
+    // scheduled start is ever captured and the payment instant is the only honest stand-in.
     const term = await attributionTermState(prisma, {
       practitionerId: intent.practitionerId,
       email: intent.email,
+      asOf: intent.scheduledAt ?? new Date(),
     });
     const feeCents = sessionFeeCents({
       plan: planKey,

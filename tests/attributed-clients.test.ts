@@ -168,7 +168,7 @@ describe('attributed-clients', () => {
       practitionerId: 'p1', email: 'c@x.com', termMonths: TERM, sessionStartsAt: null,
     });
     await expect(
-      attributionTermState(db, { practitionerId: 'p1', email: 'c@x.com' }),
+      attributionTermState(db, { practitionerId: 'p1', email: 'c@x.com', asOf: new Date() }),
     ).resolves.toBe('PENDING_ANCHOR');
 
     await recordAttributedClient(db, {
@@ -202,7 +202,7 @@ describe('attributed-clients', () => {
     const db = fakeDb();
     await recordAttributedClient(db, { practitionerId: 'p1', email: 'c@x.com', termMonths: TERM });
     await expect(
-      attributionTermState(db, { practitionerId: 'p2', email: 'c@x.com' }),
+      attributionTermState(db, { practitionerId: 'p2', email: 'c@x.com', asOf: new Date() }),
     ).resolves.toBe('NONE');
     await expect(hasAnyAttribution(db, { practitionerId: 'p1', email: 'c@x.com' })).resolves.toBe(true);
     await expect(hasAnyAttribution(db, { practitionerId: 'p2', email: 'c@x.com' })).resolves.toBe(false);
@@ -214,7 +214,7 @@ describe('attributed-clients', () => {
     await recordAttributedClient(db, {
       practitionerId: 'p1', email: 'c@x.com', termMonths: TERM, sessionStartsAt: anchor, at: anchor,
     });
-    const q = (now: Date) => attributionTermState(db, { practitionerId: 'p1', email: 'c@x.com', now });
+    const q = (asOf: Date) => attributionTermState(db, { practitionerId: 'p1', email: 'c@x.com', asOf });
     await expect(q(new Date('2026-04-15T00:00:00Z'))).resolves.toBe('IN_TERM');
     await expect(q(new Date('2026-09-15T00:00:00Z'))).resolves.toBe('OUT_OF_TERM'); // month 8 exactly
     await expect(q(new Date('2026-10-15T00:00:00Z'))).resolves.toBe('OUT_OF_TERM');

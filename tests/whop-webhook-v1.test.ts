@@ -20,8 +20,22 @@ const mocks = vi.hoisted(() => ({
   eventUpdate: vi.fn<(args: unknown) => Promise<unknown>>(),
   indexPractitioner: vi.fn<(id: string) => Promise<void>>(),
   intentUpdateMany: vi.fn<(args: unknown) => Promise<{ count: number }>>(),
-  intentFindUnique:
-    vi.fn<(args: unknown) => Promise<{ id: string; practitionerId: string; paidAt: Date | null } | null>>(),
+  intentFindUnique: vi.fn<
+    (args: unknown) => Promise<{
+      id: string;
+      practitionerId: string;
+      paidAt: Date | null;
+      email?: string | null;
+      scheduledAt?: Date | null;
+    } | null>
+  >(),
+  // The attribution write was invisible here until 2026-09-19: neither `platformSetting` nor
+  // `attributedClient` existed on this mock, so `loadSettings` threw on every payment event, the
+  // handler's bare catch swallowed it, and the whole ledger path was unexercised while every test
+  // in this file passed. A mock weaker than production asserts nothing.
+  settingFindMany: vi.fn<(args?: unknown) => Promise<Array<{ key: string; value: string }>>>(),
+  attributedUpsert: vi.fn<(args: unknown) => Promise<unknown>>(),
+  attributedUpdateMany: vi.fn<(args: unknown) => Promise<{ count: number }>>(),
 }));
 
 vi.mock('@/lib/prisma', () => ({
@@ -37,6 +51,13 @@ vi.mock('@/lib/prisma', () => ({
     bookingIntent: {
       updateMany: mocks.intentUpdateMany,
       findUnique: mocks.intentFindUnique,
+    },
+    platformSetting: {
+      findMany: mocks.settingFindMany,
+    },
+    attributedClient: {
+      upsert: mocks.attributedUpsert,
+      updateMany: mocks.attributedUpdateMany,
     },
   },
 }));
@@ -76,6 +97,9 @@ beforeEach(() => {
   mocks.upsert.mockResolvedValue({ id: 'evt_row_1' });
   mocks.eventUpdate.mockResolvedValue(undefined);
   mocks.indexPractitioner.mockResolvedValue(undefined);
+  mocks.settingFindMany.mockResolvedValue([{ key: 'lead_attribution_term_months', value: '8' }]);
+  mocks.attributedUpsert.mockResolvedValue(undefined);
+  mocks.attributedUpdateMany.mockResolvedValue({ count: 1 });
 });
 
 describe('signature verification & configuration', () => {
@@ -600,5 +624,90 @@ describe('payment.succeeded — the AUTHORITY for payment (§17.3c)', () => {
     );
     expect(res.status).toBe(200);
     expect(errorRecorded('unknown booking intent')).toBe(false);
+  });
+});
+
+describe('payment.succeeded — the attribution term is ANCHORED, once, and always starts', () => {
+  beforeEach(() => {
+    mocks.intentUpdateMany.mockResolvedValue({ count: 1 });
+    mocks.findUnique.mockResolvedValue(fakePractitioner({ id: 'prac_1', whopCompanyId: 'biz_1' }));
+  });
+
+  function paid(intent: { scheduledAt: Date | null }) {
+    mocks.intentFindUnique.mockResolvedValue({
+      id: 'int_1',
+      practitionerId: 'prac_1',
+      paidAt: null,
+      email: 'client@example.com',
+      scheduledAt: intent.scheduledAt,
+    });
+    return POST(
+      signedRequest({
+        type: 'payment.succeeded',
+        data: { id: 'pay_1', metadata: { booking_intent_id: 'int_1' } },
+        company_id: 'biz_1',
+      }) as unknown as NextRequest,
+    );
+  }
+
+  function createArgs(): Record<string, unknown> {
+    const call = mocks.attributedUpsert.mock.calls[0]?.[0] as { create: Record<string, unknown> };
+    return call.create;
+  }
+
+  it('anchors on the SCHEDULED session start, not on the payment', async () => {
+    // A January payment for a March session is attributed from March. Anchoring at payment would
+    // shorten every term by the booking lead time.
+    const session = new Date('2026-03-10T15:00:00Z');
+    await paid({ scheduledAt: session });
+    const create = createArgs();
+    expect((create.termAnchorAt as Date).toISOString()).toBe('2026-03-10T15:00:00.000Z');
+    expect((create.termEndsAt as Date).toISOString()).toBe('2026-11-10T15:00:00.000Z');
+    expect(create.termMonths).toBe(8);
+  });
+
+  it('STILL starts the clock when no session was ever scheduled', async () => {
+    // ⚠️ THE REGRESSION THIS EXISTS FOR. Falling back to a null anchor leaves the row
+    // PENDING_ANCHOR, which is chargeable and has no end date — and nothing ever back-fills it,
+    // because `sessionStartsAt` is only supplied on this once-per-intent transition. A null anchor
+    // therefore does not mean "the clock has not started yet", it means the clock NEVER starts and
+    // the client is charged the platform share forever. It would have hit every practitioner with
+    // no scheduler link, where `scheduledAt` is always null.
+    await paid({ scheduledAt: null });
+    const create = createArgs();
+    expect(create.termAnchorAt).toBeInstanceOf(Date);
+    expect(create.termEndsAt).toBeInstanceOf(Date);
+    const ends = (create.termEndsAt as Date).getTime();
+    const anchor = (create.termAnchorAt as Date).getTime();
+    expect(ends).toBeGreaterThan(anchor);
+  });
+
+  it('reads the term from the admin setting, not from a literal', async () => {
+    mocks.settingFindMany.mockResolvedValue([{ key: 'lead_attribution_term_months', value: '6' }]);
+    await paid({ scheduledAt: new Date('2026-03-10T00:00:00Z') });
+    const create = createArgs();
+    expect(create.termMonths).toBe(6);
+    expect((create.termEndsAt as Date).toISOString()).toBe('2026-09-10T00:00:00.000Z');
+  });
+
+  it('records a FAILED ledger write on the event row instead of swallowing it', async () => {
+    // The handler must still ack (Whop retries 3x then drops the event, and the PAID transition is
+    // the one thing here that cannot be reconstructed) — but a silent failure here now means the
+    // client is billed forever, so it has to reach /admin/whop-webhooks.
+    mocks.attributedUpsert.mockRejectedValue(new Error('ledger offline'));
+    const res = await paid({ scheduledAt: new Date('2026-03-10T00:00:00Z') });
+    expect(res.status).toBe(200);
+    const recorded = mocks.eventUpdate.mock.calls.some((c) =>
+      JSON.stringify(c[0]).includes('attribution ledger write FAILED'),
+    );
+    expect(recorded).toBe(true);
+    // The payment itself still landed.
+    expect(mocks.intentUpdateMany).toHaveBeenCalled();
+  });
+
+  it('writes nothing when the intent was already paid — the retry guard', async () => {
+    mocks.intentUpdateMany.mockResolvedValue({ count: 0 });
+    await paid({ scheduledAt: new Date('2026-03-10T00:00:00Z') });
+    expect(mocks.attributedUpsert).not.toHaveBeenCalled();
   });
 });
