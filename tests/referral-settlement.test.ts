@@ -30,17 +30,20 @@ const PAID_AT = new Date(Date.UTC(2026, 5, 1));
 function db(seed: {
   snapshot?: Record<string, unknown> | null;
   referrer?: Record<string, unknown> | null;
+  touch?: Record<string, unknown> | null;
 }) {
   const referralLedger = new Map<string, Record<string, unknown>>();
   const feeLedger = new Map<string, Record<string, unknown>>();
   const attributed = new Map<string, Record<string, unknown>>();
   const touchUpdates: Record<string, unknown>[] = [];
+  const listUpserts: Record<string, unknown>[] = [];
 
   return {
     referralLedger,
     feeLedger,
     attributed,
     touchUpdates,
+    listUpserts,
     bookingFeeSnapshot: {
       async findUnique() {
         return seed.snapshot ?? null;
@@ -100,6 +103,16 @@ function db(seed: {
       async updateMany(args: any) {
         touchUpdates.push(args);
         return { count: 1 };
+      },
+      async findUnique() {
+        return seed.touch ?? null;
+      },
+    },
+    clientListEntry: {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async upsert(args: any) {
+        listUpserts.push(args);
+        return { id: 'entry_1' };
       },
     },
   };
@@ -279,5 +292,53 @@ describe('commitPaymentAttribution — the fee ledger', () => {
       practitionerId: P,
     });
     expect(entry.dedupeKey).toBe('APPLICATION_FEE:bi_1');
+  });
+});
+
+describe('commitPaymentAttribution — the referrer’s own client list (§5.4.4)', () => {
+  it('adds the client to the REFERRER’s list, dated when the link was OPENED', async () => {
+    // §5.4.4: "C is added to X's list if not already there (source = referral_made, added_at =
+    // opened_at)". The date matters commercially: it is the earliest-touch lock for X's OWN future
+    // fees on this person, so dating it at payment instead of at the open would silently shorten
+    // the exemption X earned by making the introduction.
+    const opened = new Date(Date.UTC(2026, 4, 20));
+    const fake = db({
+      snapshot: snapshot(),
+      referrer: { id: X, whopCompanyId: 'biz_x', whopPayoutsEnabled: true },
+      touch: { id: 't1', openedAt: opened, referral: { referrerId: X } },
+    });
+
+    await commit(fake);
+
+    const [upsert] = fake.listUpserts as { where: Record<string, unknown>; create: Record<string, unknown>; update: Record<string, unknown> }[];
+    expect(upsert!.create).toMatchObject({
+      practitionerId: X,
+      email: EMAIL,
+      emailHash: HASH,
+      source: 'REFERRAL_MADE',
+      addedAt: opened,
+    });
+    // §5.6: if C was already on X's list, this must not move the lock they already had.
+    expect(upsert!.update).toEqual({});
+  });
+
+  it('adds nothing when no referral carried the booking', async () => {
+    const fake = db({
+      snapshot: snapshot({ isCrossReferral: false, referrerPractitionerId: null, referrerShareUsdCents: 0 }),
+      touch: null,
+    });
+
+    await commitPaymentAttribution(fake, {
+      bookingIntentId: 'bi_1',
+      practitionerId: P,
+      email: EMAIL,
+      referralTouchId: null,
+      termMonths: 8,
+      holdDays: 90,
+      sessionStartsAt: PAID_AT,
+      paidAt: PAID_AT,
+    });
+
+    expect(fake.listUpserts).toHaveLength(0);
   });
 });

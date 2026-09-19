@@ -4,6 +4,15 @@ import { bookableWhere } from '@/lib/practitioner-indexer';
 import { sendEmail } from '@/lib/email';
 import { SITE_URL } from '@/lib/site';
 import { paymentsLive } from '@/lib/booking-flow';
+import { formatBpsAsPercent } from '@/lib/pricing-plans';
+import { crossReferralRates } from '@/lib/referral-fees';
+import { loadSettings } from '@/lib/platform-settings';
+import {
+  referralBookedCopy,
+  referralHoldCopy,
+  referralsNeedingBookedNotice,
+  referralsNeedingClaimNotice,
+} from '@/lib/referral-notifications';
 import {
   COLD_LEAD_MS,
   RESUME_AFTER_CAPTURE_MS,
@@ -399,6 +408,136 @@ export async function GET(request: Request): Promise<NextResponse> {
   // SCHEDULED intents are excluded however old they get: §10 calls that state "a follow-up, not a
   // loss", and relabelling it would bury the one thing this section exists to rescue. See
   // COLD_LEAD_MS for why this transition is a judgment call at all.
+  // ── Referral notices (spec v1.4 §5.5 / R10, operator ruling 7 / R15) ───────────────────────
+  //
+  // HERE, not in the Whop webhook. Whop retries 3× over ~70 s and then drops the event
+  // permanently, so a Resend round-trip inside that handler risks the payment record itself — the
+  // same reason the paid notices above moved out of it.
+  //
+  // ⚠️ RULING 7 SAYS "IMMEDIATELY", AND THIS IS EVERY 15 MINUTES. That is the honest trade: the
+  // alternative is sending inside the webhook and risking the event. Named rather than papered
+  // over, so nobody later reads "immediately" in the ruling and assumes it is wired that way.
+  //
+  // ⚠️ NEITHER NOTICE IS GATED BY `notifyLeadsImmediately`. That flag suppresses LEAD emails.
+  // Being told a referral converted, or that money is waiting on your account setup, is not a
+  // marketing preference.
+  const referrals: Summary = { matched: 0, sent: 0, skipped: 0, failed: 0 };
+  if (emailConfigured) {
+    const { referrerFeeBps } = crossReferralRates();
+    const rateLabel = formatBpsAsPercent(referrerFeeBps);
+    const { leadAttributionTermMonths } = await loadSettings(prisma);
+
+    // 1 — "your referral booked". Keyed on the TOUCH, because one copied link reaches several
+    // clients and each of them is a separate conversion the referrer should hear about.
+    const bookedCandidates = await prisma.referralTouch.findMany({
+      where: { bookedNoticeSentAt: null, status: 'BOOKED' },
+      select: {
+        id: true,
+        referral: {
+          select: {
+            referrer: { select: { user: { select: { email: true } } } },
+            referred: { select: { displayName: true } },
+          },
+        },
+      },
+      take: CANDIDATE_TAKE,
+    });
+
+    // The durable marker is the real guard; `paidAt` here is derived from the BOOKED status the
+    // payment handler sets, so the pure selector is given what it needs to say so explicitly.
+    const booked = referralsNeedingBookedNotice(
+      bookedCandidates.map((t) => ({ ...t, bookedNoticeSentAt: null as Date | null, paidAt: now })),
+    );
+    referrals.matched += booked.length;
+
+    for (const touch of booked) {
+      const to = touch.referral?.referrer?.user.email;
+      const referredName = touch.referral?.referred?.displayName;
+      if (!to || !referredName) {
+        referrals.skipped += 1;
+        continue;
+      }
+      try {
+        await sendEmail({
+          to,
+          ...referralBookedCopy({ referredName, rateLabel, termMonths: leadAttributionTermMonths }),
+          idempotencyKey: `referral-booked/${touch.id}`,
+          tags: [{ name: 'feature', value: 'referral-booked' }],
+        });
+        await prisma.referralTouch.update({
+          where: { id: touch.id },
+          data: { bookedNoticeSentAt: new Date() },
+        });
+        referrals.sent += 1;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        referrals.failed += 1;
+        failures.push({ job: 'referral-booked', intentId: touch.id, error: message });
+        console.error('[booking-sweep] REFERRAL NOTICE FAILED', JSON.stringify({ touchId: touch.id, error: message }));
+      }
+    }
+
+    // 2 — R15: the share could not be paid. Tell them to claim their Whop account.
+    //
+    // `EXPIRED_UNCLAIMED` rows are deliberately NOT selected (see referralsNeedingClaimNotice):
+    // day-91 policy is unruled, and mailing someone about money whose fate nobody has decided
+    // makes a promise the product cannot keep.
+    const heldRows = await prisma.referralLedgerEntry.findMany({
+      where: { state: 'HELD', notifiedAt: null },
+      select: {
+        id: true,
+        state: true,
+        notifiedAt: true,
+        referrerShareUsdCents: true,
+        holdExpiresAt: true,
+        referrerPractitioner: {
+          select: { slug: true, user: { select: { email: true } } },
+        },
+        servingPractitioner: { select: { displayName: true } },
+      },
+      take: CANDIDATE_TAKE,
+    });
+
+    const held = referralsNeedingClaimNotice(heldRows);
+    referrals.matched += held.length;
+
+    for (const row of held) {
+      const to = row.referrerPractitioner?.user.email;
+      if (!to || !row.holdExpiresAt) {
+        referrals.skipped += 1;
+        continue;
+      }
+      try {
+        await sendEmail({
+          to,
+          ...referralHoldCopy({
+            referredName: row.servingPractitioner?.displayName ?? 'a practitioner',
+            amountUsdCents: row.referrerShareUsdCents,
+            holdExpiresAt: row.holdExpiresAt,
+            onboardingUrl: `${SITE_URL}/practitioners/${encodeURIComponent(
+              row.referrerPractitioner!.slug,
+            )}/edit#payments`,
+          }),
+          idempotencyKey: `referral-hold/${row.id}`,
+          tags: [{ name: 'feature', value: 'referral-hold' }],
+        });
+        // The DURABLE marker. Ruling 7 put `notifiedAt` on the row at stage 1 precisely so this
+        // send has somewhere idempotent to land — Resend's own key de-duplicates for 24 hours
+        // only, and a held row stays a candidate for 90 days.
+        await prisma.referralLedgerEntry.update({
+          where: { id: row.id },
+          data: { notifiedAt: new Date() },
+        });
+        referrals.sent += 1;
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        referrals.failed += 1;
+        failures.push({ job: 'referral-hold', intentId: row.id, error: message });
+        console.error('[booking-sweep] REFERRAL HOLD NOTICE FAILED', JSON.stringify({ entryId: row.id, error: message }));
+      }
+    }
+  }
+
   const cold = await prisma.bookingIntent.updateMany({
     where: {
       status: 'PENDING',
@@ -411,7 +550,7 @@ export async function GET(request: Request): Promise<NextResponse> {
 
   const ok = failures.length === 0 && emailConfigured;
   return NextResponse.json(
-    { ok, emailConfigured, resume, notify, paid, skipReasons, abandoned: cold.count, failures },
+    { ok, emailConfigured, resume, notify, paid, referrals, skipReasons, abandoned: cold.count, failures },
     { status: failures.length === 0 ? 200 : 207 },
   );
 }

@@ -45,6 +45,8 @@ const mocks = vi.hoisted(() => ({
   referralLedgerUpsert: vi.fn<(args: unknown) => Promise<unknown>>(),
   feeLedgerUpsert: vi.fn<(args: unknown) => Promise<unknown>>(),
   touchUpdateMany: vi.fn<(args: unknown) => Promise<{ count: number }>>(),
+  touchFindUnique: vi.fn<(args: unknown) => Promise<unknown>>(),
+  clientListUpsert: vi.fn<(args: unknown) => Promise<unknown>>(),
 }));
 
 vi.mock('@/lib/prisma', () => ({
@@ -80,6 +82,10 @@ vi.mock('@/lib/prisma', () => ({
     },
     referralTouch: {
       updateMany: mocks.touchUpdateMany,
+      findUnique: mocks.touchFindUnique,
+    },
+    clientListEntry: {
+      upsert: mocks.clientListUpsert,
     },
   },
 }));
@@ -127,6 +133,8 @@ beforeEach(() => {
   mocks.referralLedgerUpsert.mockResolvedValue(undefined);
   mocks.feeLedgerUpsert.mockResolvedValue(undefined);
   mocks.touchUpdateMany.mockResolvedValue({ count: 1 });
+  mocks.touchFindUnique.mockResolvedValue(null);
+  mocks.clientListUpsert.mockResolvedValue(undefined);
 });
 
 describe('signature verification & configuration', () => {

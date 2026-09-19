@@ -10,6 +10,11 @@ const mocks = vi.hoisted(() => ({
   updateMany: vi.fn<(args: unknown) => Promise<{ count: number }>>(),
   update: vi.fn<(args: unknown) => Promise<unknown>>(),
   sendEmail: vi.fn<(args: unknown) => Promise<{ id: string }>>(),
+  touchFindMany: vi.fn<(args?: unknown) => Promise<unknown[]>>(),
+  touchUpdate: vi.fn<(args?: unknown) => Promise<unknown>>(),
+  ledgerFindMany: vi.fn<(args?: unknown) => Promise<unknown[]>>(),
+  ledgerUpdate: vi.fn<(args?: unknown) => Promise<unknown>>(),
+  settingFindMany: vi.fn<(args?: unknown) => Promise<Array<{ key: string; value: string }>>>(),
 }));
 
 vi.mock('@/lib/prisma', () => ({
@@ -19,9 +24,24 @@ vi.mock('@/lib/prisma', () => ({
       updateMany: mocks.updateMany,
       update: mocks.update,
     },
+    // The referral-notice jobs (spec §5.5 / R15). Stubbed EMPTY rather than omitted: a model the
+    // route reads but the mock lacks throws a TypeError inside the handler, and a handler that
+    // "passes" because it crashed before doing anything is the failure this file already carries
+    // a warning about in the Whop webhook tests.
+    referralTouch: { findMany: mocks.touchFindMany, update: mocks.touchUpdate },
+    referralLedgerEntry: { findMany: mocks.ledgerFindMany, update: mocks.ledgerUpdate },
+    platformSetting: { findMany: mocks.settingFindMany },
   },
 }));
-vi.mock('@/lib/email', () => ({ sendEmail: mocks.sendEmail }));
+// `escapeHtml` is a REAL export of this module and the referral copy builders use it. Mocking
+// only `sendEmail` left it undefined, and the route's own try/catch then reported the resulting
+// TypeError as a failed send — a partial mock producing a plausible-looking failure rather than
+// an obvious one. Keep the escaper real: it is pure, and a stubbed escaper would let an
+// injection test pass.
+vi.mock('@/lib/email', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/email')>();
+  return { ...actual, sendEmail: mocks.sendEmail };
+});
 vi.mock('@/lib/site', () => ({ SITE_URL: 'https://naturalhealthpros.com' }));
 
 type Handler = (request: Request) => Promise<Response>;
@@ -82,6 +102,11 @@ beforeEach(() => {
   whenQueried({});
   mocks.updateMany.mockResolvedValue({ count: 0 });
   mocks.update.mockResolvedValue({});
+  mocks.touchFindMany.mockResolvedValue([]);
+  mocks.touchUpdate.mockResolvedValue({});
+  mocks.ledgerFindMany.mockResolvedValue([]);
+  mocks.ledgerUpdate.mockResolvedValue({});
+  mocks.settingFindMany.mockResolvedValue([{ key: 'lead_attribution_term_months', value: '8' }]);
   mocks.sendEmail.mockResolvedValue({ id: 'msg_1' });
 });
 
@@ -388,5 +413,113 @@ describe('payment confirmations', () => {
     await GET(req());
     const buyer = mocks.sendEmail.mock.calls[0]![0] as { text: string; subject: string };
     expect(`${buyer.subject} ${buyer.text}`.toLowerCase()).not.toContain('receipt');
+  });
+});
+
+describe('referral notices (spec v1.4 §5.5 / R10, operator ruling 7 / R15)', () => {
+  /**
+   * ⚠️ THESE EXIST BECAUSE AN EMPTY MOCK MAKES A NEW JOB INERT. `touchFindMany` and
+   * `ledgerFindMany` default to `[]` in `beforeEach`, so every other test in this file passes
+   * whether or not these two jobs do anything at all. This repo has shipped exactly that shape
+   * before — a shared mock defaulting to null made a newly added guard unreachable while six
+   * tests passed identically with the guard deleted.
+   */
+
+  function touch(over: Record<string, unknown> = {}) {
+    return {
+      id: 'touch_1',
+      referral: {
+        referrer: { user: { email: 'x@example.com' } },
+        referred: { displayName: 'Dr Y' },
+      },
+      ...over,
+    };
+  }
+
+  function heldRow(over: Record<string, unknown> = {}) {
+    return {
+      id: 'led_1',
+      state: 'HELD',
+      notifiedAt: null,
+      referrerShareUsdCents: 2_000,
+      holdExpiresAt: new Date('2026-04-01T00:00:00Z'),
+      referrerPractitioner: { slug: 'dr-x', user: { email: 'x@example.com' } },
+      servingPractitioner: { displayName: 'Dr Y' },
+      ...over,
+    };
+  }
+
+  it('tells the referrer their referral booked, and marks the DURABLE column', async () => {
+    mocks.touchFindMany.mockResolvedValue([touch()]);
+
+    const res = await GET(req());
+    const body = (await res.json()) as { referrals: { sent: number } };
+
+    expect(body.referrals.sent).toBe(1);
+    const sent = mocks.sendEmail.mock.calls.map((c) => c[0] as { to: string; subject: string });
+    expect(sent.some((e) => e.to === 'x@example.com' && /referral booked/i.test(e.subject))).toBe(true);
+    // Resend's idempotency key lasts 24 HOURS; a referral touch stays a candidate forever. The
+    // column is the guard.
+    expect(mocks.touchUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'touch_1' } }),
+    );
+  });
+
+  it('R15 — tells an unpayable referrer to claim their account, with the amount and the deadline', async () => {
+    mocks.ledgerFindMany.mockResolvedValue([heldRow()]);
+
+    const res = await GET(req());
+    const body = (await res.json()) as { referrals: { sent: number } };
+
+    expect(body.referrals.sent).toBe(1);
+    const email = mocks.sendEmail.mock.calls
+      .map((c) => c[0] as { to: string; text: string })
+      .find((e) => e.to === 'x@example.com');
+    expect(email?.text).toContain('$20.00');
+    expect(email?.text).toContain('2026-04-01');
+    expect(mocks.ledgerUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'led_1' }, data: { notifiedAt: expect.any(Date) } }),
+    );
+  });
+
+  it('never chases an EXPIRED_UNCLAIMED share — day-91 policy is deliberately unruled', async () => {
+    // Belt and braces: the query filters on HELD, and the pure selector refuses it again. If a
+    // future edit widens the query, this is what fails.
+    mocks.ledgerFindMany.mockResolvedValue([heldRow({ state: 'EXPIRED_UNCLAIMED' })]);
+
+    const res = await GET(req());
+    const body = (await res.json()) as { referrals: { sent: number } };
+
+    expect(body.referrals.sent).toBe(0);
+    expect(mocks.ledgerUpdate).not.toHaveBeenCalled();
+  });
+
+  it('counts a failed send instead of swallowing it, and still returns 207', async () => {
+    mocks.ledgerFindMany.mockResolvedValue([heldRow()]);
+    mocks.sendEmail.mockRejectedValue(new Error('Resend 500: upstream'));
+
+    const res = await GET(req());
+    const body = (await res.json()) as {
+      referrals: { failed: number };
+      failures: { job: string }[];
+    };
+
+    expect(res.status).toBe(207);
+    expect(body.referrals.failed).toBe(1);
+    expect(body.failures.some((f) => f.job === 'referral-hold')).toBe(true);
+    // NOT marked — an unsent notice must stay a candidate for the next run.
+    expect(mocks.ledgerUpdate).not.toHaveBeenCalled();
+  });
+
+  it('skips a referrer with no email rather than throwing mid-batch', async () => {
+    mocks.ledgerFindMany.mockResolvedValue([
+      heldRow({ referrerPractitioner: { slug: 'dr-x', user: { email: null } } }),
+    ]);
+
+    const res = await GET(req());
+    const body = (await res.json()) as { referrals: { skipped: number; sent: number } };
+
+    expect(body.referrals.skipped).toBe(1);
+    expect(body.referrals.sent).toBe(0);
   });
 });

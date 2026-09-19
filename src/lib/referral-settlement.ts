@@ -52,6 +52,12 @@ export type SettlementDb = {
   referralTouch: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     updateMany(args: any): Promise<{ count: number }>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    findUnique(args: any): Promise<any>;
+  };
+  clientListEntry: {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    upsert(args: any): Promise<any>;
   };
 };
 
@@ -147,6 +153,14 @@ export async function commitPaymentAttribution(
   // several clients, and the FIRST one to pay through a given touch owns it. Without the filter a
   // later buyer on the same touch row would overwrite whose booking it recorded.
   if (input.referralTouchId) {
+    // Read BEFORE the update: `openedAt` is what dates the referrer's own list entry below, and
+    // the update does not change it — but reading afterwards would make that a coincidence rather
+    // than a guarantee.
+    const touch = (await db.referralTouch.findUnique({
+      where: { id: input.referralTouchId },
+      select: { openedAt: true, referral: { select: { referrerId: true } } },
+    })) as { openedAt: Date; referral: { referrerId: string } | null } | null;
+
     await db.referralTouch.updateMany({
       where: { id: input.referralTouchId, clientEmailHash: null },
       // `receivedAt` is NOT set here. It was written when the link was opened (§5.4: "received_at
@@ -159,6 +173,31 @@ export async function commitPaymentAttribution(
         status: 'BOOKED',
       },
     });
+
+    // §5.4.4 — THE CLIENT JOINS THE REFERRER'S OWN LIST, DATED AT THE OPEN.
+    //
+    // Not cosmetic. That date is the earliest-touch lock for X's OWN future fees on this person,
+    // so dating it at payment rather than at the open would silently shorten the exemption X
+    // earned by making the introduction. It is also what makes X's later sight of the address
+    // legitimate under the privacy ruling — "referred that client themselves" is one of the four
+    // permitted grounds, and until this row exists X has no list entry to read it from.
+    //
+    // §5.6: create-only. If C was already on X's list, referring them must not move the lock.
+    if (touch?.referral?.referrerId) {
+      await db.clientListEntry.upsert({
+        where: {
+          practitionerId_emailHash: { practitionerId: touch.referral.referrerId, emailHash },
+        },
+        create: {
+          practitionerId: touch.referral.referrerId,
+          email: input.email,
+          emailHash,
+          addedAt: touch.openedAt,
+          source: 'REFERRAL_MADE',
+        },
+        update: {},
+      });
+    }
   }
 
   let referralState: 'PAYABLE' | 'HELD' | null = null;
