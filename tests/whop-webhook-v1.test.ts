@@ -47,6 +47,9 @@ const mocks = vi.hoisted(() => ({
   touchUpdateMany: vi.fn<(args: unknown) => Promise<{ count: number }>>(),
   touchFindUnique: vi.fn<(args: unknown) => Promise<unknown>>(),
   clientListUpsert: vi.fn<(args: unknown) => Promise<unknown>>(),
+  clientListFindFirst: vi.fn<(args: unknown) => Promise<unknown>>(),
+  intentFindFirst: vi.fn<(args: unknown) => Promise<unknown>>(),
+  touchFindMany: vi.fn<(args: unknown) => Promise<unknown[]>>(),
 }));
 
 vi.mock('@/lib/prisma', () => ({
@@ -62,6 +65,7 @@ vi.mock('@/lib/prisma', () => ({
     bookingIntent: {
       updateMany: mocks.intentUpdateMany,
       findUnique: mocks.intentFindUnique,
+      findFirst: mocks.intentFindFirst,
     },
     platformSetting: {
       findMany: mocks.settingFindMany,
@@ -83,9 +87,11 @@ vi.mock('@/lib/prisma', () => ({
     referralTouch: {
       updateMany: mocks.touchUpdateMany,
       findUnique: mocks.touchFindUnique,
+      findMany: mocks.touchFindMany,
     },
     clientListEntry: {
       upsert: mocks.clientListUpsert,
+      findFirst: mocks.clientListFindFirst,
     },
   },
 }));
@@ -135,6 +141,9 @@ beforeEach(() => {
   mocks.touchUpdateMany.mockResolvedValue({ count: 1 });
   mocks.touchFindUnique.mockResolvedValue(null);
   mocks.clientListUpsert.mockResolvedValue(undefined);
+  mocks.clientListFindFirst.mockResolvedValue(null);
+  mocks.intentFindFirst.mockResolvedValue(null);
+  mocks.touchFindMany.mockResolvedValue([]);
 });
 
 describe('signature verification & configuration', () => {
@@ -894,5 +903,39 @@ describe('payment.succeeded — the referral ledger (stage 3)', () => {
 
     expect(mocks.attributedUpsert).toHaveBeenCalled();
     expect(mocks.referralLedgerUpsert).not.toHaveBeenCalled();
+  });
+});
+
+describe('payment.succeeded — AUDIT: the hosted-fallback path resolves the owner', () => {
+  it('records the practitioner’s OWN client as theirs even with no mint-time snapshot', async () => {
+    // Reachable: the §8 hosted checkout mints no per-booking configuration. Defaulting the owner
+    // to NHP here writes a FINAL decision (`decidedAt` is set), so the practitioner would be
+    // charged the platform share for the whole term on a client they brought themselves.
+    mocks.intentUpdateMany.mockResolvedValue({ count: 1 });
+    mocks.findUnique.mockResolvedValue(fakePractitioner({ id: 'prac_1', whopCompanyId: 'biz_1' }));
+    mocks.intentFindUnique.mockResolvedValue({
+      id: 'int_1',
+      practitionerId: 'prac_1',
+      paidAt: null,
+      email: 'client@example.com',
+      scheduledAt: new Date('2026-03-10T00:00:00Z'),
+      referralTouchId: null,
+    });
+    mocks.feeSnapshotFindUnique.mockResolvedValue(null);
+    // On the practitioner's own list, well before the booking.
+    mocks.clientListFindFirst.mockResolvedValue({ addedAt: new Date('2026-01-01T00:00:00Z') });
+    mocks.intentFindFirst.mockResolvedValue({ createdAt: new Date('2026-03-01T00:00:00Z') });
+
+    await POST(
+      signedRequest({
+        type: 'payment.succeeded',
+        data: { id: 'pay_1', metadata: { booking_intent_id: 'int_1' } },
+        company_id: 'biz_1',
+      }) as unknown as NextRequest,
+    );
+
+    const create = (mocks.attributedUpsert.mock.calls[0]?.[0] as { create: Record<string, unknown> })
+      .create;
+    expect(create.owner).toBe('PRACTITIONER');
   });
 });

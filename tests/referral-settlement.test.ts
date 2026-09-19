@@ -31,6 +31,10 @@ function db(seed: {
   snapshot?: Record<string, unknown> | null;
   referrer?: Record<string, unknown> | null;
   touch?: Record<string, unknown> | null;
+  /** The reads the attribution resolver makes when there is no snapshot to read the owner from. */
+  listEntry?: { addedAt: Date } | null;
+  firstBooking?: { createdAt: Date } | null;
+  touches?: Record<string, unknown>[];
 }) {
   const referralLedger = new Map<string, Record<string, unknown>>();
   const feeLedger = new Map<string, Record<string, unknown>>();
@@ -107,12 +111,23 @@ function db(seed: {
       async findUnique() {
         return seed.touch ?? null;
       },
+      async findMany() {
+        return seed.touches ?? [];
+      },
     },
     clientListEntry: {
+      async findFirst() {
+        return seed.listEntry ?? null;
+      },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       async upsert(args: any) {
         listUpserts.push(args);
         return { id: 'entry_1' };
+      },
+    },
+    bookingIntent: {
+      async findFirst() {
+        return seed.firstBooking ?? null;
       },
     },
   };
@@ -340,5 +355,90 @@ describe('commitPaymentAttribution — the referrer’s own client list (§5.4.4
     });
 
     expect(fake.listUpserts).toHaveLength(0);
+  });
+});
+
+describe('commitPaymentAttribution — AUDIT: a payment with no mint-time snapshot', () => {
+  /**
+   * 🚨 THE OVER-CHARGE THIS CATCHES.
+   *
+   * A snapshot is missing whenever the per-booking checkout configuration was never minted — the
+   * §8 hosted-checkout fallback is the reachable case. The commit then has to decide the owner
+   * from scratch, and defaulting it to NHP is not a safe default here: the decision is written
+   * with `decidedAt`, so it is FINAL. A practitioner's own client who happened to pay through
+   * that path would be recorded as platform-sourced permanently, and charged the platform share
+   * on every session for the whole term — for a client the practitioner brought themselves.
+   *
+   * Defaulting to NHP is right for the AMOUNT (a fee we cannot prove was collected is not paid
+   * out) and wrong for the DECISION. They are different questions and were briefly answered by
+   * the same line.
+   */
+  it('resolves the owner from the client list instead of defaulting to NHP', async () => {
+    const opened = new Date(Date.UTC(2026, 0, 1));
+    // C was on Y's OWN list before ever booking — R4/R5 make them the practitioner's own.
+    const fake = db({ snapshot: null, listEntry: { addedAt: opened }, firstBooking: { createdAt: PAID_AT } });
+
+    await commitPaymentAttribution(fake, {
+      bookingIntentId: 'bi_1',
+      practitionerId: P,
+      email: EMAIL,
+      referralTouchId: null,
+      termMonths: 8,
+      holdDays: 90,
+      sessionStartsAt: PAID_AT,
+      paidAt: PAID_AT,
+    });
+
+    const row = Array.from(fake.attributed.values())[0]!;
+    expect(row.owner).toBe('PRACTITIONER');
+  });
+
+  it('still records NHP when nothing suggests the client was theirs', async () => {
+    const fake = db({ snapshot: null, listEntry: null, firstBooking: { createdAt: PAID_AT } });
+
+    await commitPaymentAttribution(fake, {
+      bookingIntentId: 'bi_1',
+      practitionerId: P,
+      email: EMAIL,
+      referralTouchId: null,
+      termMonths: 8,
+      holdDays: 90,
+      sessionStartsAt: PAID_AT,
+      paidAt: PAID_AT,
+    });
+
+    expect(Array.from(fake.attributed.values())[0]!.owner).toBe('NHP');
+  });
+
+  it('pays out NOTHING even if a referral exists — no snapshot means no proven collection', async () => {
+    // The two questions are separate: the OWNER is resolved from our own records, but the AMOUNT
+    // comes only from a fee we can prove Whop collected. A referrer share invented here would be
+    // money transferred out against a fee that may never have been charged.
+    const fake = db({
+      snapshot: null,
+      referrer: { id: X, whopCompanyId: 'biz_x', whopPayoutsEnabled: true },
+      listEntry: null,
+      firstBooking: { createdAt: PAID_AT },
+      touches: [
+        {
+          id: 't1',
+          receivedAt: PAID_AT,
+          referral: { referrerId: X, referredId: P, expiresAt: new Date(Date.UTC(2027, 0, 1)) },
+        },
+      ],
+    });
+
+    await commitPaymentAttribution(fake, {
+      bookingIntentId: 'bi_1',
+      practitionerId: P,
+      email: EMAIL,
+      referralTouchId: 't1',
+      termMonths: 8,
+      holdDays: 90,
+      sessionStartsAt: PAID_AT,
+      paidAt: PAID_AT,
+    });
+
+    expect(fake.referralLedger.size).toBe(0);
   });
 });

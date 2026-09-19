@@ -159,7 +159,7 @@ export async function GET(request: NextRequest) {
   // on THIS run rather than waiting another hour; expire last so a hold cannot lapse in the same
   // pass that would have paid it.
   const now = new Date();
-  const promoted = await promoteHeldToPayable(prisma, { at: now }).catch((e) => {
+  const promoted = await promoteHeldToPayable(prisma).catch((e) => {
     errors.push(`promote-held: ${e instanceof Error ? e.message : String(e)}`);
     return 0;
   });

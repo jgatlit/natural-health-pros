@@ -501,11 +501,15 @@ export async function getPaymentFees(
 /**
  * Move money from the parent company to a connected account.
  *
- * ⚠️ `amount` IS IN DOLLARS. Every other money field in this file — `application_fee_amount`,
- * `initial_price` — is in CENTS, converted at the call site. This one is not: `amount: 24999`
- * produced "-$24,999.00" in a live rejection probe. Two adjacent money APIs with different units
- * is a 100x error waiting to happen, so the caller must hand this DOLLARS and the conversion
- * lives in `toTransferDollars()`, which validates the input rather than dividing quietly.
+ * ⚠️ UNITS. Whop takes DOLLARS on every money field — `amount` here, `application_fee_amount` and
+ * `initial_price` above. What differs is where the conversion happens, and that is the actual
+ * trap: `createBookingCheckoutConfig` takes CENTS and divides at the boundary, while this
+ * function takes DOLLARS and divides nowhere. A caller who reads one signature and assumes the
+ * other is off by 100x with no type error, because both are `number`.
+ *
+ * Hence `toTransferDollars()` on the caller's side: it is a named, validated boundary rather than
+ * an inline `/ 100` that reviews as obviously correct in either direction. `amount: 24999`
+ * produced "-$24,999.00" in a live rejection probe, which is the evidence this is dollars.
  *
  * ⚠️ NO IDEMPOTENCY KEY IS AVAILABLE. Whop exposes none on this endpoint, so a retry is a second
  * payout. The caller claims the ledger row BEFORE calling and reconciles a crash-in-flight against

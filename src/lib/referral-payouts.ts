@@ -11,11 +11,13 @@
  * in the Whop dashboard, not a code fix, so this ships behind a guard that FAILS CLOSED and names
  * the reason. When verification clears, `WHOP_TRANSFERS_ENABLED=true` is the whole change.
  *
- * ⚠️ THE 100× TRAP, STATED ONCE AND ENFORCED IN ONE PLACE. `POST /api/v1/transfers` takes `amount`
- * in **DOLLARS**. `application_fee_amount`, a few hundred lines away in `whop.ts`, is in **CENTS**.
- * Two adjacent money APIs with different units will eventually be confused by somebody, so the
- * conversion is `toTransferDollars()` — a named, validated, separately tested boundary rather than
- * an inline `/ 100` that reviews as obviously correct in both directions.
+ * ⚠️ THE 100× TRAP, STATED ONCE AND ENFORCED IN ONE PLACE. Whop takes DOLLARS on every money
+ * field. What differs is where OUR code converts: `createBookingCheckoutConfig` accepts CENTS and
+ * divides at the boundary, while `createTransfer` accepts DOLLARS and divides nowhere. Both
+ * parameters are plain `number`, so reading one signature and assuming the other is off by 100×
+ * with no type error. The conversion is therefore `toTransferDollars()` — a named, validated,
+ * separately tested boundary rather than an inline `/ 100` that reviews as obviously correct in
+ * either direction.
  *
  * ⚠️ `POST /transfers` HAS NO OBSERVED IDEMPOTENCY KEY. The claim-then-call ordering below is the
  * ONLY guard against paying twice, and a crash between the call and the confirmation must be
@@ -257,10 +259,7 @@ export async function settlePayableShares(
  * an event permanently after ~70 s of retries, and a referrer whose approval webhook was lost
  * would otherwise stay held forever with nothing reporting it.
  */
-export async function promoteHeldToPayable(
-  db: PayoutsDb,
-  opts: { at: Date },
-): Promise<number> {
+export async function promoteHeldToPayable(db: PayoutsDb): Promise<number> {
   const held = (await db.referralLedgerEntry.findMany({
     where: { state: 'HELD' },
     select: { id: true, referrerPractitionerId: true },
@@ -282,11 +281,12 @@ export async function promoteHeldToPayable(
 
   // Filtered on `state: 'HELD'` as well as the ids: an EXPIRED_UNCLAIMED row must never be swept
   // back into the payable set by this, because leaving that state is an operator decision.
+  // `notifiedAt` is deliberately NOT cleared: it records that we told this referrer their money
+  // was stuck, which stays true after it unsticks. Clearing it would re-queue the claim email.
   const { count } = await db.referralLedgerEntry.updateMany({
     where: { id: { in: ids }, state: 'HELD' },
-    data: { state: 'PAYABLE', notifiedAt: undefined },
+    data: { state: 'PAYABLE' },
   });
-  void opts;
   return count;
 }
 

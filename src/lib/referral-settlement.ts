@@ -22,9 +22,10 @@
 
 import { holdExpiry } from './attribution-term';
 import { hashClientEmail, recordAttributedClient } from './attributed-clients';
+import { resolveAttributionDecision, type AttributionResolverDb } from './attribution-resolver';
 
 /** STRUCTURAL — see the note on `attributed-clients.ts`'s `Db`. */
-export type SettlementDb = {
+export type SettlementDb = AttributionResolverDb & {
   attributedClient: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     upsert(args: any): Promise<unknown>;
@@ -126,10 +127,34 @@ export async function commitPaymentAttribution(
   // A missing snapshot is REACHABLE, not a bug: the §8 hosted-checkout fallback mints no
   // per-booking configuration, so a real payment can arrive with nothing recorded at mint. The
   // claim must still be written — without it the term never starts and the client is charged the
-  // platform share indefinitely — so this degrades to "NHP-sourced, no referrer" rather than
-  // skipping. Nothing is paid out on a fee we cannot prove was collected.
-  const owner: 'PRACTITIONER' | 'NHP' =
-    snapshot?.attributionOwner === 'PRACTITIONER' ? 'PRACTITIONER' : 'NHP';
+  // platform share indefinitely.
+  //
+  // 🚨 BUT THE OWNER MUST BE RESOLVED, NOT DEFAULTED. This branch briefly answered two different
+  // questions with one line, and defaulting to NHP is only right for one of them:
+  //
+  //   THE AMOUNT — default to nothing. A referrer share we cannot prove Whop collected must never
+  //   be paid out, so `referrerShareUsdCents` stays 0 and no ledger row is written.
+  //   THE DECISION — resolve it properly. It is written with `decidedAt`, which makes it FINAL,
+  //   so defaulting a practitioner's OWN client to NHP would record them as platform-sourced
+  //   permanently and charge the platform share on every session for the whole term — for a
+  //   client the practitioner brought themselves.
+  let owner: 'PRACTITIONER' | 'NHP';
+  let decidedByRule: string;
+  if (snapshot) {
+    owner = snapshot.attributionOwner === 'PRACTITIONER' ? 'PRACTITIONER' : 'NHP';
+    decidedByRule = 'MINT_SNAPSHOT';
+  } else {
+    const decision = await resolveAttributionDecision(db, {
+      practitionerId: input.practitionerId,
+      email: input.email,
+      bookingCreatedAt: input.paidAt,
+      referralTouchId: input.referralTouchId,
+    });
+    owner = decision.owner;
+    decidedByRule = `NO_SNAPSHOT:${decision.decidedByRule}`;
+  }
+  // The referrer and the amount come from the snapshot ALONE. A referral resolved here would name
+  // a payee for a fee nobody can show was charged.
   const referrerPractitionerId = snapshot?.referrerPractitionerId ?? null;
   const referrerShareUsdCents = snapshot?.referrerShareUsdCents ?? 0;
 
@@ -143,7 +168,7 @@ export async function commitPaymentAttribution(
     sessionStartsAt: input.sessionStartsAt,
     referrerPractitionerId,
     owner,
-    decidedByRule: snapshot ? 'MINT_SNAPSHOT' : 'NHP_SOURCED_NO_SNAPSHOT',
+    decidedByRule,
     referralTouchId: input.referralTouchId ?? null,
     at: input.paidAt,
   });

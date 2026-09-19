@@ -30,22 +30,18 @@ export type PractitionerPlan = {
   /** Platform share of every subsequent platform-sourced session, in basis points. */
   laterSessionPlatformFeeBps: number;
   /**
-   * Is the first-session share charged ONCE per client, forever, or does it recur while the
-   * attribution claim is live?
+   * ⚠️ DEAD. NOTHING READS THIS, AND NOTHING MAY.
    *
-   * Plan B is once. Amy relaying the practitioners' own words, 2026-09-14: "a fifty-fifty split
-   * for the FIRST session if I can book them privately after that", and Jonathan on the same
-   * call: "after that, they're yours." Charging it again a year later because a ledger row
-   * lapsed would break the exact promise that made Plan B acceptable.
+   * It expressed "charge the sourced share once per client, forever" — reversed by the operator
+   * on 2026-09-18, after which both plans charge on EVERY sourced session inside the Lead
+   * Attribution Term and 0% after it. A previous note here claimed onboarding copy still read it;
+   * that is false, verified by grep across `src/`, `scripts/` and `tests/`.
    *
-   * Plan A is not once: its smaller share applies to platform-sourced clients for the length of
-   * the attribution window (the 09-03 model, 20% on NHP-sourced clients for ~12 months).
-   */
-  /**
-   * ⚠️ DEPRECATED AND NO LONGER CONSULTED FOR MONEY (operator ruling, 2026-09-18). Both plans now
-   * charge their share on every platform-sourced session INSIDE the attribution term and 0%
-   * after it, so "once per client, forever" has no expression in the fee rule. Kept on the type
-   * for one release because onboarding copy still reads it; delete with that copy.
+   * It is kept for one release only so a deployment mid-rollout does not see the field vanish,
+   * and it is left in place rather than deleted BECAUSE it is money-shaped: a boolean called
+   * `firstSessionFeeOnce` sitting next to two rate fields is exactly the thing somebody re-wires
+   * in good faith. `tests/pricing-plans.test.ts` asserts that setting it — either way, on either
+   * plan — changes no fee. Re-wire it and that test fails.
    */
   firstSessionFeeOnce: boolean;
   /** Both plans transact through Whop; kept explicit so no UI can imply otherwise. */

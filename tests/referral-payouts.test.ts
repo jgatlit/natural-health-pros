@@ -17,10 +17,10 @@ import {
  * operator/dashboard action, not a code fix, so this ships behind a guard that FAILS CLOSED and
  * names the reason — the moment verification clears it is a switch, not a build.
  *
- * ⚠️ THE 100× TRAP. `POST /api/v1/transfers` takes `amount` in DOLLARS. `application_fee_amount`,
- * a few lines away in this same codebase, is in CENTS. Two adjacent money APIs with different
- * units is a 100× error waiting to happen, so the conversion is a named function with its own
- * tests rather than an inline `/ 100`.
+ * ⚠️ THE 100× TRAP. Whop takes DOLLARS everywhere; what differs is where OUR code converts.
+ * `createBookingCheckoutConfig` accepts CENTS and divides at the boundary; `createTransfer`
+ * accepts DOLLARS and divides nowhere. Both are plain `number`, so reading one signature and
+ * assuming the other is off by 100× with no type error — hence a named, tested conversion.
  *
  * ⚠️ WHAT IS STILL UNKNOWN. Transfers to a NON-PARENT destination carry a measured 3% surcharge;
  * child → parent carries none. Whether parent → sibling carries it cannot be measured until the
@@ -327,7 +327,7 @@ describe('promoteHeldToPayable — ruling 6’s retroactive settlement', () => {
       held: [{ id: 'led_h', state: 'HELD', referrerPractitionerId: 'payable-ref', referrerShareUsdCents: 2_000 }],
     });
 
-    const promoted = await promoteHeldToPayable(db, { at: new Date() });
+    const promoted = await promoteHeldToPayable(db);
 
     expect(promoted).toBe(1);
     expect(db.ledger.get('led_h')!.state).toBe('PAYABLE');
@@ -338,7 +338,7 @@ describe('promoteHeldToPayable — ruling 6’s retroactive settlement', () => {
       held: [{ id: 'led_h', state: 'HELD', referrerPractitionerId: 'not-payable', referrerShareUsdCents: 2_000 }],
     });
 
-    expect(await promoteHeldToPayable(db, { at: new Date() })).toBe(0);
+    expect(await promoteHeldToPayable(db)).toBe(0);
     expect(db.ledger.get('led_h')!.state).toBe('HELD');
   });
 
@@ -354,7 +354,7 @@ describe('promoteHeldToPayable — ruling 6’s retroactive settlement', () => {
       ],
     });
 
-    expect(await promoteHeldToPayable(db, { at: new Date() })).toBe(0);
+    expect(await promoteHeldToPayable(db)).toBe(0);
     expect(db.ledger.get('led_x')!.state).toBe('EXPIRED_UNCLAIMED');
   });
 });

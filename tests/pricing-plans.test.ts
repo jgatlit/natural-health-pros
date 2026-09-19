@@ -166,3 +166,30 @@ describe('plan copy cannot disagree with what the checkout actually charges', ()
     }
   });
 });
+
+describe('the deprecated once-per-client flag is inert, and must stay inert', () => {
+  /**
+   * `firstSessionFeeOnce` expressed a rule the operator REVERSED on 2026-09-18. It is still on the
+   * type for one release, which means a boolean with a money-shaped name sits next to two rate
+   * fields — exactly the thing somebody re-wires in good faith. This is the tripwire.
+   */
+  for (const plan of ['PLAN_A', 'PLAN_B'] as const) {
+    for (const value of ['true', 'false']) {
+      it(`${plan} charges the same with the flag ${value}`, () => {
+        const term = ['NONE', 'IN_TERM', 'PENDING_ANCHOR', 'OUT_OF_TERM'] as const;
+        const before = term.map((t) => sessionFeeBps({ plan, term: t }));
+
+        process.env[`${plan}_FIRST_SESSION_FEE_ONCE`] = value;
+        try {
+          expect(
+            term.map((t) => sessionFeeBps({ plan, term: t })),
+            `${plan}_FIRST_SESSION_FEE_ONCE=${value} changed a fee — the reversed once-per-client ` +
+              `rule has been re-wired into the money path`,
+          ).toEqual(before);
+        } finally {
+          delete process.env[`${plan}_FIRST_SESSION_FEE_ONCE`];
+        }
+      });
+    }
+  }
+});
