@@ -16,16 +16,36 @@ const mocks = vi.hoisted(() => ({
   getIdentityProfile: vi.fn(),
   getPayoutStatus: vi.fn(),
   isWhopPlatformsReady: vi.fn<() => boolean>(),
+  ledgerFindMany: vi.fn<(args?: unknown) => Promise<unknown[]>>(),
+  ledgerUpdateMany: vi.fn<(args?: unknown) => Promise<{ count: number }>>(),
+  ledgerUpdate: vi.fn<(args?: unknown) => Promise<unknown>>(),
+  feeUpsert: vi.fn<(args?: unknown) => Promise<unknown>>(),
+  feeUpdateMany: vi.fn<(args?: unknown) => Promise<{ count: number }>>(),
+  createTransfer: vi.fn<(args?: unknown) => Promise<{ transferId: string }>>(),
 }));
 
 vi.mock('@/lib/prisma', () => ({
-  prisma: { practitioner: { findMany: mocks.findMany, update: mocks.update } },
+  prisma: {
+    practitioner: { findMany: mocks.findMany, update: mocks.update },
+    // The referrer-settlement pass (spec §6.2). Stubbed rather than omitted: a model the route
+    // reads but the mock lacks throws inside the handler, and the route's per-step catch would
+    // then report it as a settlement error — a plausible-looking failure instead of an obvious
+    // one.
+    referralLedgerEntry: {
+      findMany: mocks.ledgerFindMany,
+      updateMany: mocks.ledgerUpdateMany,
+      update: mocks.ledgerUpdate,
+    },
+    feeLedgerEntry: { upsert: mocks.feeUpsert, updateMany: mocks.feeUpdateMany },
+  },
 }));
 
 vi.mock('@/lib/whop', () => ({
   getIdentityProfile: mocks.getIdentityProfile,
   getPayoutStatus: mocks.getPayoutStatus,
   isWhopPlatformsReady: mocks.isWhopPlatformsReady,
+  // ⚠️ NEVER the real one. This test must not be one refactor away from posting a live transfer.
+  createTransfer: mocks.createTransfer,
 }));
 
 // Imported inside beforeAll, not at module top level: a top-level await here is valid for
@@ -58,6 +78,12 @@ beforeEach(() => {
   vi.clearAllMocks();
   delete process.env.CRON_SECRET;
   mocks.isWhopPlatformsReady.mockReturnValue(true);
+  mocks.ledgerFindMany.mockResolvedValue([]);
+  mocks.ledgerUpdateMany.mockResolvedValue({ count: 0 });
+  mocks.ledgerUpdate.mockResolvedValue({});
+  mocks.feeUpsert.mockResolvedValue({});
+  mocks.feeUpdateMany.mockResolvedValue({ count: 0 });
+  mocks.createTransfer.mockResolvedValue({ transferId: 'tr_test' });
   mocks.update.mockResolvedValue({});
   mocks.findMany.mockResolvedValue([]);
 });
@@ -220,5 +246,78 @@ describe('whop-reconcile — honest reporting', () => {
 
     expect(body.unpollable).toEqual(['sarah']);
     expect(res.status).toBe(207);
+  });
+});
+
+describe('referrer settlement pass (spec v1.4 §6.2, rulings 6 and 7)', () => {
+  /**
+   * ⚠️ The ledger mocks default to EMPTY in `beforeEach`, so every other test in this file passes
+   * whether or not the settlement pass does anything at all. These exercise it directly.
+   */
+
+  const payable = {
+    id: 'led_1',
+    referrerShareUsdCents: 2_000,
+    referrerPractitionerId: 'prac_x',
+    referrerPractitioner: { whopCompanyId: 'biz_x', whopPayoutsEnabled: true },
+  };
+
+  it('does NOT call Whop while payouts are blocked, and says why in the response', async () => {
+    delete process.env.WHOP_TRANSFERS_ENABLED;
+    mocks.ledgerFindMany.mockImplementation(async (args) => {
+      const where = (args as { where?: { state?: string } })?.where;
+      return where?.state === 'PAYABLE' ? [payable] : [];
+    });
+
+    const res = await GET(req());
+    const body = (await res.json()) as { referrals: { blocked: string | null; settled: number } };
+
+    expect(mocks.createTransfer).not.toHaveBeenCalled();
+    expect(body.referrals.blocked).toMatch(/verif/i);
+    expect(body.referrals.settled).toBe(0);
+  });
+
+  it('records the blocked debt rather than leaving it merely unpaid', async () => {
+    delete process.env.WHOP_TRANSFERS_ENABLED;
+    mocks.ledgerFindMany.mockImplementation(async (args) => {
+      const where = (args as { where?: { state?: string } })?.where;
+      return where?.state === 'PAYABLE' ? [payable] : [];
+    });
+
+    await GET(req());
+
+    const upsert = mocks.feeUpsert.mock.calls[0]?.[0] as { create: Record<string, unknown> };
+    expect(upsert.create).toMatchObject({
+      kind: 'REFERRER_TRANSFER',
+      status: 'BLOCKED',
+      amountUsdCents: 2_000,
+    });
+  });
+
+  it('transfers in DOLLARS once the operator switches payouts on', async () => {
+    process.env.WHOP_TRANSFERS_ENABLED = 'true';
+    process.env.WHOP_PARENT_COMPANY_ID = 'biz_parent';
+    process.env.WHOP_COMPANY_API_KEY = 'apik_x';
+    mocks.ledgerFindMany.mockImplementation(async (args) => {
+      const where = (args as { where?: { state?: string } })?.where;
+      return where?.state === 'PAYABLE' ? [payable] : [];
+    });
+    // Claim-then-call: the conditional write must report a claim or nothing is sent.
+    mocks.feeUpdateMany.mockResolvedValue({ count: 1 });
+
+    const res = await GET(req());
+    const body = (await res.json()) as { referrals: { settled: number } };
+
+    // 20, not 2000. `application_fee_amount` next door is in CENTS; this endpoint is in DOLLARS.
+    expect(mocks.createTransfer).toHaveBeenCalledWith({
+      originId: 'biz_parent',
+      destinationId: 'biz_x',
+      amountUsdDollars: 20,
+    });
+    expect(body.referrals.settled).toBe(1);
+
+    delete process.env.WHOP_TRANSFERS_ENABLED;
+    delete process.env.WHOP_PARENT_COMPANY_ID;
+    delete process.env.WHOP_COMPANY_API_KEY;
   });
 });

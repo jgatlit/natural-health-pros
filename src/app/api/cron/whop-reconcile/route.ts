@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
-import { getIdentityProfile, getPayoutStatus, isWhopPlatformsReady } from '@/lib/whop';
+import { createTransfer, getIdentityProfile, getPayoutStatus, isWhopPlatformsReady } from '@/lib/whop';
+import {
+  expireLapsedHolds,
+  promoteHeldToPayable,
+  settlePayableShares,
+} from '@/lib/referral-payouts';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -136,6 +141,43 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  // ── Referrer settlement (spec v1.4 §6.2, operator rulings 6 and 7) ─────────────────────────
+  //
+  // Here rather than in a new cron: this route already runs hourly and already owns "reconcile
+  // our Whop state", and every cron route has to appear in vercel.json or it never runs at all —
+  // a route that shipped written, documented and unregistered is exactly how /api/cron/whop-
+  // reconcile itself spent its first weeks.
+  //
+  // Order matters. Promote first so a referrer who became payable since the last run is settled
+  // on THIS run rather than waiting another hour; expire last so a hold cannot lapse in the same
+  // pass that would have paid it.
+  const now = new Date();
+  const promoted = await promoteHeldToPayable(prisma, { at: now }).catch((e) => {
+    errors.push(`promote-held: ${e instanceof Error ? e.message : String(e)}`);
+    return 0;
+  });
+
+  const settlement = await settlePayableShares(prisma, {
+    transfer: createTransfer,
+    at: now,
+  }).catch((e) => {
+    errors.push(`settle-referrals: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  });
+
+  const expired = await expireLapsedHolds(prisma, { at: now }).catch((e) => {
+    errors.push(`expire-holds: ${e instanceof Error ? e.message : String(e)}`);
+    return 0;
+  });
+
+  // A BLOCKED payout is not an error — it is the expected state until the parent company is
+  // business-verified — but it must be visible in the response rather than inferred from
+  // `settled: 0`. "We owe referrers money and here is exactly why it has not moved" should be
+  // answerable from one cron response.
+  if (settlement?.blocked) {
+    console.warn('whop-reconcile: referrer payouts BLOCKED:', settlement.blocked);
+  }
+
   if (unpollable.length > 0) {
     console.error(
       `whop-reconcile: ${unpollable.length} connected account(s) have NO Whop resource ids — ` +
@@ -151,7 +193,15 @@ export async function GET(request: NextRequest) {
   // to Vercel cron monitoring — the silent-success shape this route exists to eliminate.
   const ok = errors.length === 0 && unpollable.length === 0;
   return NextResponse.json(
-    { ok, checked: practitioners.length, corrected: drift.length, drift, unpollable, errors },
+    {
+      ok,
+      checked: practitioners.length,
+      corrected: drift.length,
+      drift,
+      unpollable,
+      referrals: { promoted, expired, ...(settlement ?? {}) },
+      errors,
+    },
     { status: ok ? 200 : 207 },
   );
 }

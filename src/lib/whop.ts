@@ -459,6 +459,46 @@ export async function createBookingCheckoutConfig(params: {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Transfers — settling a referrer's share (spec v1.4 §6.2)
+// ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Move money from the parent company to a connected account.
+ *
+ * ⚠️ `amount` IS IN DOLLARS. Every other money field in this file — `application_fee_amount`,
+ * `initial_price` — is in CENTS, converted at the call site. This one is not: `amount: 24999`
+ * produced "-$24,999.00" in a live rejection probe. Two adjacent money APIs with different units
+ * is a 100x error waiting to happen, so the caller must hand this DOLLARS and the conversion
+ * lives in `toTransferDollars()`, which validates the input rather than dividing quietly.
+ *
+ * ⚠️ NO IDEMPOTENCY KEY IS AVAILABLE. Whop exposes none on this endpoint, so a retry is a second
+ * payout. The caller claims the ledger row BEFORE calling and reconciles a crash-in-flight against
+ * `GET /transfers?origin_id=` — never by retrying blind.
+ *
+ * 🚧 The parent company is not business-verified, so every call currently fails with "Please
+ * verify your business before transferring funds". `payoutsGuard()` is what stops us reaching here
+ * at all; this function is what runs the moment that clears.
+ */
+export async function createTransfer(params: {
+  originId: string;
+  destinationId: string;
+  /** DOLLARS. See the warning above. */
+  amountUsdDollars: number;
+}): Promise<{ transferId: string }> {
+  const res = await whopPost<{ id: string }>(
+    '/transfers',
+    {
+      origin_id: params.originId,
+      destination_id: params.destinationId,
+      amount: params.amountUsdDollars,
+      currency: 'usd',
+    },
+    'transfer a referrer share',
+  );
+  return { transferId: res.id };
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Webhooks
 // ──────────────────────────────────────────────────────────────────────────────
 
