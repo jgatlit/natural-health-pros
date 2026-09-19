@@ -6,6 +6,9 @@ import {
   platformFeeCents,
   practitionerNetCents,
   practitionerPlans,
+  planComparison,
+  sessionFeeBps,
+  sourcedSessionFeeBps,
 } from '@/lib/pricing-plans';
 
 const PLAN_ENV = [
@@ -103,5 +106,63 @@ describe('pricing-plans', () => {
     expect(isPlanKey('PLAN_A')).toBe(true);
     expect(isPlanKey('plan_a')).toBe(false);
     expect(isPlanKey(undefined)).toBe(false);
+  });
+});
+
+describe('plan copy cannot disagree with what the checkout actually charges', () => {
+  /**
+   * ⚠️ THE BUG THIS EXISTS FOR. The plan cards showed "First session we source" / "After that",
+   * reading `laterSessionPlatformFeeBps` for the second row — which is 0 on Plan B. So the card
+   * told a practitioner we take nothing on Plan B after the first session, while the shipped fee
+   * rule charged 40% on every sourced session inside the term. Copy that disagrees with the charge
+   * is worse than no copy: it is the thing a practitioner points at when they dispute an invoice.
+   */
+  it('quotes the rate the fee rule uses, for every sourced session', () => {
+    const { cards } = planComparison();
+    for (const card of cards) {
+      const expected = formatBpsAsPercent(sourcedSessionFeeBps(card.key));
+      expect(card.sourcedSessionLabel, `${card.key} sourced rate`).toContain(expected);
+    }
+  });
+
+  it('says 0% after the term on BOTH plans — operator ruling 5', () => {
+    for (const card of planComparison().cards) {
+      expect(card.afterTermLabel, `${card.key} post-term`).toBe('We take nothing');
+    }
+  });
+
+  it('never claims a post-term rate that the fee rule would actually charge', () => {
+    // Mutation guard on the ruling: if OUT_OF_TERM ever stops being free on one plan, this card
+    // becomes a false statement and this is what catches it.
+    for (const card of planComparison().cards) {
+      expect(
+        sessionFeeBps({ plan: card.key, term: 'OUT_OF_TERM' }),
+        `${card.key} charges after the term but the card says we take nothing`,
+      ).toBe(0);
+    }
+  });
+
+  it('computes the break-even as subscription ÷ rate gap, not as a typed-in number', () => {
+    const { breakEvenMonthlyLabel } = planComparison();
+    // $39 / (40% - 20%) = $195. The default config is the ruled one, so this is the §8.1 figure.
+    expect(breakEvenMonthlyLabel).toBe('$195');
+  });
+
+  it('moves the break-even when the monthly fee moves', () => {
+    process.env.PLAN_A_MONTHLY_FEE_CENTS = '2900';
+    try {
+      expect(planComparison().breakEvenMonthlyLabel).toBe('$145');
+    } finally {
+      delete process.env.PLAN_A_MONTHLY_FEE_CENTS;
+    }
+  });
+
+  it('says "never" rather than rendering infinity when the two rates are equal', () => {
+    process.env.PLAN_B_FIRST_SESSION_FEE_BPS = '2000';
+    try {
+      expect(planComparison().breakEvenMonthlyLabel).toBe('never');
+    } finally {
+      delete process.env.PLAN_B_FIRST_SESSION_FEE_BPS;
+    }
   });
 });

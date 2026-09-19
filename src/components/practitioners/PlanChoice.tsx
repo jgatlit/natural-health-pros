@@ -7,8 +7,8 @@ export type PlanCardView = {
   key: 'PLAN_A' | 'PLAN_B';
   label: string;
   monthlyLabel: string;
-  firstSessionLabel: string;
-  laterSessionLabel: string;
+  sourcedSessionLabel: string;
+  afterTermLabel: string;
   suits: string;
 };
 
@@ -17,6 +17,12 @@ type Props = {
   plans: PlanCardView[];
   /** Rows of "at $X/mo of platform-sourced bookings you'd pay …" — computed server-side. */
   breakEven: { volumeLabel: string; planACost: string; planBCost: string; better: string }[];
+  /** "$195" — spec §8.1's break-even sentence, computed from the config, never written here. */
+  breakEvenMonthlyLabel: string;
+  /** The Lead Attribution Term, in months. From the admin setting, not a literal. */
+  termMonths: number;
+  /** "20%" — the cross-referral share, for §8.1's required disclosure. */
+  referralRateLabel: string;
   chooseAction: (formData: FormData) => void | Promise<void>;
 };
 
@@ -35,7 +41,15 @@ type Props = {
  * Every number comes from src/lib/pricing-plans.ts. No price is ever written into this file: the
  * figures are still Amy's decision and are expected to change before launch.
  */
-export function PlanChoice({ chosen, plans, breakEven, chooseAction }: Props) {
+export function PlanChoice({
+  chosen,
+  plans,
+  breakEven,
+  breakEvenMonthlyLabel,
+  termMonths,
+  referralRateLabel,
+  chooseAction,
+}: Props) {
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-2">
@@ -69,13 +83,19 @@ export function PlanChoice({ chosen, plans, breakEven, chooseAction }: Props) {
                   <dt className="text-muted-foreground">Monthly</dt>
                   <dd className="font-medium">{plan.monthlyLabel}</dd>
                 </div>
+                {/* "Every session … for N months", not "first session / after that". The old
+                    pair read `laterSessionPlatformFeeBps`, which is 0 on Plan B — telling a
+                    practitioner we take nothing after the first session, which the shipped fee
+                    rule contradicts. */}
                 <div className="flex justify-between gap-2">
-                  <dt className="text-muted-foreground">First session we source</dt>
-                  <dd className="font-medium">{plan.firstSessionLabel}</dd>
+                  <dt className="text-muted-foreground">
+                    Every session we send you, for {termMonths} months
+                  </dt>
+                  <dd className="font-medium">{plan.sourcedSessionLabel}</dd>
                 </div>
                 <div className="flex justify-between gap-2">
-                  <dt className="text-muted-foreground">After that</dt>
-                  <dd className="font-medium">{plan.laterSessionLabel}</dd>
+                  <dt className="text-muted-foreground">After {termMonths} months</dt>
+                  <dd className="font-medium">{plan.afterTermLabel}</dd>
                 </div>
               </dl>
 
@@ -106,8 +126,8 @@ export function PlanChoice({ chosen, plans, breakEven, chooseAction }: Props) {
       <Card className="p-4">
         <p className="text-xs font-medium">What each plan would cost you</p>
         <p className="mt-0.5 text-[11px] text-muted-foreground">
-          Based on first sessions we source for you in a month. Sessions you book yourself are never
-          counted.
+          Based on what clients we send you pay in a month. Clients on your own list — and anyone
+          you invite — are always 0%, on either plan, and are never counted here.
         </p>
         <table className="mt-2 w-full text-xs">
           <thead className="text-muted-foreground">
@@ -130,6 +150,22 @@ export function PlanChoice({ chosen, plans, breakEven, chooseAction }: Props) {
           </tbody>
         </table>
       </Card>
+
+      {/* §8.1's break-even sentence, in Amy's own framing. Computed, never typed: the crossover is
+          `monthly fee ÷ (Plan B rate − Plan A rate)` and moves the moment either number does. */}
+      <p className="text-[11px] text-muted-foreground">
+        {plans[0]?.label} is the better deal once clients we send you bring in more than about{' '}
+        <strong>{breakEvenMonthlyLabel} a month</strong>.
+      </p>
+
+      {/* REQUIRED DISCLOSURE (§8.1). It sits with the plan choice because it is the one cost that
+          does NOT depend on which plan you pick — a practitioner comparing the two cards above
+          would otherwise reasonably conclude referred clients are cheaper on one of them. */}
+      <p className="text-[11px] text-muted-foreground">
+        When another practitioner refers a client to you, {referralRateLabel} of those sessions
+        goes to them and {referralRateLabel} to Natural Health Pros, for {termMonths} months, on
+        either plan. The same {referralRateLabel} is what you earn when you refer a client out.
+      </p>
 
       <p className="text-[11px] text-muted-foreground">
         You can switch plans later from this page. Both plans need a connected Whop account —

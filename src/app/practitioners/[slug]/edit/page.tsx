@@ -809,6 +809,9 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
           chosen={isPlanKey(practitioner.plan) ? practitioner.plan : null}
           plans={comparison.cards}
           breakEven={comparison.breakEven}
+          breakEvenMonthlyLabel={comparison.breakEvenMonthlyLabel}
+          termMonths={leadAttributionTermMonths}
+          referralRateLabel={referralRateLabel}
           chooseAction={choosePlanAction}
         />
 

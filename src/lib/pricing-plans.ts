@@ -158,11 +158,15 @@ export function planComparison(): {
     key: PlanKey;
     label: string;
     monthlyLabel: string;
-    firstSessionLabel: string;
-    laterSessionLabel: string;
+    /** Every platform-sourced session INSIDE the term — there is only one sourced rate per plan. */
+    sourcedSessionLabel: string;
+    /** After the term. Zero on both plans (operator ruling 5). */
+    afterTermLabel: string;
     suits: string;
   }[];
   breakEven: { volumeLabel: string; planACost: string; planBCost: string; better: string }[];
+  /** "$195" — the monthly sourced volume at which Plan A becomes the cheaper plan (spec §8.1). */
+  breakEvenMonthlyLabel: string;
 } {
   const plans = practitionerPlans();
   const dollars = (cents: number) =>
@@ -171,21 +175,28 @@ export function planComparison(): {
   const share = (bps: number) =>
     bps === 0 ? 'We take nothing' : `We take ${formatBpsAsPercent(bps)}`;
 
+  // ⚠️ ONE SOURCED RATE PER PLAN, AND THE CARDS SAID OTHERWISE UNTIL NOW.
+  //
+  // The cards used to show "First session we source" and "After that", reading
+  // `laterSessionPlatformFeeBps` for the second row — which is 0 on Plan B. That told a
+  // practitioner we take nothing on Plan B after the first session, which the shipped fee rule
+  // contradicts: since the 2026-09-18 recurrence ruling, Plan B charges its share on EVERY
+  // sourced session inside the term. Copy that disagrees with the charge is worse than no copy.
   const cards = [
     {
       key: 'PLAN_A' as const,
       label: plans.PLAN_A.label,
       monthlyLabel: monthlyFeeLabel('PLAN_A'),
-      firstSessionLabel: share(plans.PLAN_A.firstSessionPlatformFeeBps),
-      laterSessionLabel: share(plans.PLAN_A.laterSessionPlatformFeeBps),
+      sourcedSessionLabel: share(sourcedSessionFeeBps('PLAN_A')),
+      afterTermLabel: share(0),
       suits: 'Steadier if we send you regular work, and the simplest option if you have no payment processing of your own.',
     },
     {
       key: 'PLAN_B' as const,
       label: plans.PLAN_B.label,
       monthlyLabel: monthlyFeeLabel('PLAN_B'),
-      firstSessionLabel: share(plans.PLAN_B.firstSessionPlatformFeeBps),
-      laterSessionLabel: share(plans.PLAN_B.laterSessionPlatformFeeBps),
+      sourcedSessionLabel: share(sourcedSessionFeeBps('PLAN_B')),
+      afterTermLabel: share(0),
       suits: 'Costs you nothing until we actually send you someone. Suits you if you just want the pipeline.',
     },
   ];
@@ -199,12 +210,15 @@ export function planComparison(): {
   const sessionPriceCents = envInt('PLAN_COMPARISON_SESSION_PRICE_CENTS', 10_000);
   const breakEven = [1, 2, 4, 8].map((count) => {
     const gross = sessionPriceCents * count;
+    // `sourcedSessionFeeBps`, not the deprecated first/later pair: under the recurrence ruling
+    // there is ONE sourced rate per plan, and reading the old pair here is how the cards came to
+    // disagree with what the checkout actually charges.
     const a =
       plans.PLAN_A.monthlyFeeUsdCents +
-      platformFeeCents({ plan: 'PLAN_A', priceUsdCents: gross, isFirstSession: true });
+      Math.floor((gross * sourcedSessionFeeBps('PLAN_A')) / BPS_DENOMINATOR);
     const b =
       plans.PLAN_B.monthlyFeeUsdCents +
-      platformFeeCents({ plan: 'PLAN_B', priceUsdCents: gross, isFirstSession: true });
+      Math.floor((gross * sourcedSessionFeeBps('PLAN_B')) / BPS_DENOMINATOR);
     return {
       volumeLabel: `${count} × ${dollars(sessionPriceCents)}`,
       planACost: dollars(a),
@@ -213,7 +227,24 @@ export function planComparison(): {
     };
   });
 
-  return { cards, breakEven };
+  // THE CROSSOVER IS EXACT, so it is solved rather than read off the table above.
+  //
+  // Both plans charge on the same sessions inside the same term, so Plan B's fee is a fixed
+  // multiple of Plan A's on identical volume and the crossover is
+  // `subscription / (planB_rate - planA_rate)` — independent of session price and of how often
+  // clients rebook. See docs/2026-09-18-plan-ab-one-year-projection.md.
+  const rateGapBps =
+    sourcedSessionFeeBps('PLAN_B') - sourcedSessionFeeBps('PLAN_A');
+  const breakEvenMonthlyLabel =
+    rateGapBps > 0
+      ? dollars(
+          Math.round((plans.PLAN_A.monthlyFeeUsdCents * BPS_DENOMINATOR) / rateGapBps),
+        )
+      : // No gap means Plan A's subscription buys nothing back, so there is no crossover to
+        // quote. Saying so beats rendering "$Infinity" or silently omitting the sentence.
+        'never';
+
+  return { cards, breakEven, breakEvenMonthlyLabel };
 }
 
 /**
