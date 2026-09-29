@@ -27,7 +27,7 @@ type Props = {
 };
 
 /**
- * Plan A / Plan B choice, rendered at the TOP of "Premium Accounts & Directory Listing".
+ * Plan A / Plan B choice. Step 2 of the setup checklist, directly above the plan billing status.
  *
  * It is a step of its own rather than a field in the profile form on purpose: it is a commercial
  * commitment, and a pricing term buried among bio fields is how someone later says they never
@@ -62,6 +62,11 @@ export function PlanChoice({
           </Badge>
         )}
       </div>
+
+      <p className="text-xs text-muted-foreground">
+        Clients on your own list, and anyone you invite, are <strong>always 0%</strong> on either
+        plan.
+      </p>
 
       <div className="grid gap-3 sm:grid-cols-2">
         {plans.map((plan) => {

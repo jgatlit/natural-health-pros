@@ -4,6 +4,8 @@ import { SpecialtyComboboxField } from '@/components/practitioners/SpecialtyComb
 import { OnboardingSubmitButton } from '@/components/practitioners/OnboardingSubmitButton';
 import { CityField } from '@/components/practitioners/CityField';
 import { TermsAcknowledgment } from '@/components/practitioners/TermsAcknowledgment';
+import { PlanTermsSummary } from '@/components/practitioners/PlanTermsSummary';
+import type { PlanCardView } from '@/components/practitioners/PlanChoice';
 
 type Props = {
   action: (formData: FormData) => void | Promise<void>;
@@ -22,6 +24,7 @@ type Props = {
   aliases: { label: string; specialtyId: string }[];
   initialSpecialties: { specialtyId: string; rawLabel: string }[];
   termsAcceptedAt: Date | null;
+  planTerms: { plans: PlanCardView[]; termMonths: number; referralRateLabel: string };
 };
 
 /**
@@ -39,6 +42,7 @@ export function OnboardingForm({
   aliases,
   initialSpecialties,
   termsAcceptedAt,
+  planTerms,
 }: Props) {
   return (
     <main className="min-h-screen bg-muted/30 px-4 py-10 sm:py-14">
@@ -132,6 +136,8 @@ export function OnboardingForm({
             </Field>
 
             <Separator />
+
+            <PlanTermsSummary {...planTerms} />
 
             <TermsAcknowledgment acceptedAt={termsAcceptedAt} />
 

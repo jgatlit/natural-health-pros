@@ -8,7 +8,7 @@ import { DirectoryRail } from '@/components/frontier/DirectoryRail';
 import { ProcessDiagram } from '@/components/frontier/ProcessDiagram';
 import { ScopeBoundary } from '@/components/frontier/ScopeBoundary';
 import { Ledger } from '@/components/frontier/Ledger';
-import { TrustCheck, FilamentRule } from '@/components/frontier/Wordmark';
+import { TrustCheck } from '@/components/frontier/Wordmark';
 import { SiteHeader } from '@/components/site/SiteHeader';
 import { siteIdentity } from '@/lib/site-identity';
 import { SiteFooter } from '@/components/site/SiteFooter';
@@ -143,11 +143,7 @@ export default async function Home({
                 <HeroSearch specialties={specialties} cities={cities} />
               </div>
 
-              <p className="mt-7 text-base font-medium text-white sm:text-lg">
-                {hero.priceBand}
-              </p>
-
-              <ul className="mt-6 grid max-w-2xl gap-x-6 gap-y-3 sm:grid-cols-2">
+              <ul className="mt-8 grid max-w-2xl gap-x-6 gap-y-3 sm:grid-cols-2">
                 {trustRow.map((item) => (
                   <li key={item} className="flex items-center gap-2.5 text-sm text-white/85">
                     <TrustCheck />
@@ -253,62 +249,67 @@ export default async function Home({
           </div>
         </section>
 
-        {/* ── GET LISTED (Layer X) ─────────────────────────────────────── */}
+        {/* ── GET LISTED (Layer X) ─────────────────────────────────────────
+            Two plans at EQUAL weight — Amy: "tiers imply hierarchy", so no highlighted card and no
+            "recommended" badge. No prices or percentages here (operator ruling 2026-09-28); the
+            exact rates are shown after sign-in, in the plan choice on the edit page. */}
         <section
           id="get-listed"
           className="relative isolate scroll-mt-20 overflow-hidden py-20 sm:py-28"
           style={{ background: 'var(--gradient-nav-bar)' }}
           data-surface="field"
         >
-          <div className="relative mx-auto grid max-w-6xl gap-12 px-4 sm:px-6 lg:grid-cols-[1.15fr_1fr] lg:items-center">
-            <div>
+          <div className="relative mx-auto max-w-6xl px-4 sm:px-6">
+            <div className="max-w-3xl">
               <p className="eyebrow text-rose-light/80">{getListed.eyebrow}</p>
               <h2 className="mt-3 font-serif text-3xl leading-tight tracking-[-0.015em] text-white sm:text-[2.5rem]">
                 {getListed.heading}
               </h2>
-              <p className="mt-5 max-w-lg text-base leading-relaxed text-white/75">
+              <p className="mt-5 max-w-2xl text-base leading-relaxed text-white/75">
                 {getListed.body}
               </p>
-              <ul className="mt-8 space-y-3">
-                {getListed.bullets.map((b) => (
-                  <li key={b} className="flex gap-3 text-[0.9375rem] leading-relaxed text-white/80">
-                    <span className="mt-2 h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--rose-light)]" aria-hidden="true" />
-                    {b}
-                  </li>
-                ))}
-              </ul>
             </div>
 
-            <div className="rounded-2xl border border-white/15 bg-white/[0.06] p-7 backdrop-blur sm:p-9">
-              {/* The currency mark is set in the sans face at label size:
-                  Playfair's dollar sign is a thin, full-height glyph that
-                  fights the numeral beside it. */}
-              <div className="flex items-baseline gap-2">
-                <span className="text-lg font-medium text-white/70">
-                  {getListed.price.slice(0, 1)}
-                </span>
-                <span className="-ml-1 font-serif text-5xl leading-none tracking-tight text-white">
-                  {getListed.price.slice(1)}
-                </span>
-                <span className="text-sm text-white/60">{getListed.interval}</span>
-              </div>
-              <FilamentRule className="my-6 opacity-40" />
-              <p className="text-sm leading-relaxed text-white/70">
-                One listing fee. No commission on your sessions, and no cut of what you charge.
-              </p>
+            <h3 className="sr-only">{getListed.plansHeading}</h3>
+            <div className="mt-10 grid gap-5 sm:grid-cols-2">
+              {getListed.plans.map((plan) => (
+                <div
+                  key={plan.name}
+                  className="rounded-2xl border border-white/15 bg-white/[0.06] p-7 backdrop-blur"
+                >
+                  <div className="flex items-baseline justify-between gap-3">
+                    <p className="font-serif text-2xl text-white">{plan.name}</p>
+                    <p className="text-sm text-white/60">{plan.kicker}</p>
+                  </div>
+                  <p className="mt-4 text-base leading-relaxed text-white/80">{plan.body}</p>
+                </div>
+              ))}
+            </div>
+
+            <ul className="mt-10 grid gap-x-8 gap-y-6 border-t border-white/15 pt-8 md:grid-cols-3">
+              {getListed.guarantees.map((g) => (
+                <li key={g.title}>
+                  <p className="text-base font-medium text-white">{g.title}</p>
+                  <p className="mt-2 text-[0.9375rem] leading-relaxed text-white/70">{g.body}</p>
+                </li>
+              ))}
+            </ul>
+
+            <div className="mt-10 flex flex-wrap items-center gap-x-6 gap-y-3">
               <a
                 href={`${SITE_URL}/onboarding`}
-                className="mt-7 inline-flex h-12 w-full items-center justify-center rounded-lg text-[0.9375rem] font-medium text-white transition-shadow hover:[box-shadow:var(--shadow-glow-rose)]"
+                className="inline-flex h-12 items-center justify-center rounded-lg px-8 text-[0.9375rem] font-medium text-white transition-shadow hover:[box-shadow:var(--shadow-glow-rose)]"
                 style={{ background: 'var(--gradient-rose-cta)' }}
               >
                 {getListed.cta}
               </a>
               <a
                 href={`${SITE_URL}/auth/signin`}
-                className="mt-3 inline-flex w-full items-center justify-center rounded-lg py-2.5 text-sm text-white/70 transition-colors hover:text-white"
+                className="text-sm text-white/80 underline-offset-4 transition-colors hover:text-white hover:underline"
               >
                 {getListed.secondary}
               </a>
+              <p className="text-sm text-white/60">{getListed.ratesNote}</p>
             </div>
           </div>
         </section>

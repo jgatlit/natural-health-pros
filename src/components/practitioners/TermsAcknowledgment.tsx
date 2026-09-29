@@ -128,9 +128,13 @@ function TermsBody() {
       </Section>
 
       <Section n={7} title="Fees and subscription">
-        Directory listing is billed at <strong>$39/month</strong> following a{' '}
-        <strong>90-day trial</strong>, during which no payment is required. Subscriptions may be
-        canceled at any time; your profile is never deleted, only unlisted or archived.
+        Each practitioner chooses Plan A (a monthly fee and a smaller share of sessions with clients
+        Natural Health Pros sends you) or Plan B (no monthly fee and a larger share). The current
+        rates, and how long the share applies from each client&apos;s first payment, are shown in
+        the summary above and again when you choose a plan; you can switch plans later. Sessions
+        with clients on your own list, or whom you invite, carry no share on either plan.
+        Subscriptions may be canceled at any time; your profile is never deleted, only unlisted or
+        archived.
       </Section>
 
       <Section n={8} title="No warranty; limitation of liability">

@@ -32,7 +32,7 @@ const STEPS = [
   {
     n: '03',
     title: 'Book straight with them',
-    body: 'You book on the practitioner’s own calendar. Natural Health Pros is not in the middle of the session, the notes, or the fee.',
+    body: 'You book on the practitioner’s own calendar and pay their listed price. Your session is between you and them.',
   },
 ];
 

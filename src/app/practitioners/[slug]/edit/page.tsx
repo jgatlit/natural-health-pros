@@ -4,7 +4,7 @@ import { ArrowLeft, Check, AlertCircle, X, Sparkles } from 'lucide-react';
 import { auth } from '@/auth';
 import { QUALIFICATIONS_HEADING } from '@/lib/profile-sections';
 import { prisma } from '@/lib/prisma';
-import { isPlanKey, monthlyFeeLabel, planComparison } from '@/lib/pricing-plans';
+import { effectivePlan, isPlanKey, monthlyFeeLabel, planComparison } from '@/lib/pricing-plans';
 import { PlanChoice } from '@/components/practitioners/PlanChoice';
 import { isWhopPlatformsReady } from '@/lib/whop';
 import { profileCompletenessSignals } from '@/lib/practitioner-indexer';
@@ -37,6 +37,7 @@ import {
 import { OfferingsEditor } from '@/components/practitioners/OfferingsEditor';
 import { resolveHeroLink, offeringsForLink, ctaLabelFor } from '@/lib/profile-ctas';
 import { SubscriptionSection } from '@/components/practitioners/SubscriptionSection';
+import { SetupChecklist, type SetupStep } from '@/components/practitioners/SetupChecklist';
 import { PaymentsSection } from '@/components/practitioners/PaymentsSection';
 import { AccountEmailSection } from '@/components/practitioners/AccountEmailSection';
 import { BookingsSection, type BookingRow } from '@/components/practitioners/BookingsSection';
@@ -356,6 +357,80 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
   const comparison = planComparison();
   const requestAccountEmailChangeAction = requestAccountEmailChange.bind(null, params.slug);
 
+  // ── Setup path ─────────────────────────────────────────────────────────────────────────────
+  //
+  // Derived only from state that already exists; nothing here is stored. While setup is incomplete
+  // the page is laid out in this same order (profile → plan → payments → offerings) so the
+  // checklist and the page agree; once every step is done the checklist goes away and the page
+  // reorders around running the practice, with Bookings and Clients first.
+  const platformReady = isWhopPlatformsReady();
+  const setupSteps: SetupStep[] = [
+    {
+      key: 'profile',
+      label: 'Complete your profile',
+      hint: 'Display name, city, bio and a specialty. Until then you are hidden from search.',
+      done: missing.length === 0,
+      href: '#profile',
+      cta: 'Edit profile',
+    },
+    {
+      key: 'plan',
+      label: 'Choose your plan',
+      hint: 'Plan A or Plan B. Every rate is shown before you choose.',
+      done: isPlanKey(practitioner.plan),
+      href: '#plan',
+      cta: 'Choose plan',
+    },
+    // Left out entirely while Whop payouts are not switched on: a step nobody can complete is a
+    // checklist that never finishes.
+    ...(platformReady
+      ? [
+          {
+            key: 'payments',
+            label: 'Connect Whop',
+            hint: 'Needed on both plans. This is how clients pay you.',
+            done: practitioner.whopPayoutsEnabled,
+            href: '#payments',
+            cta: 'Connect Whop',
+          },
+        ]
+      : []),
+    {
+      key: 'offering',
+      label: 'Add what clients can book',
+      hint: 'An offering with a price, or a link to your own scheduler.',
+      done: practitioner.whopProducts.length > 0 || practitioner.bookingLinks.length > 0,
+      href: '#offerings',
+      cta: 'Add offering',
+    },
+  ];
+  const isSetUp = setupSteps.every((step) => step.done);
+
+  const bookingsAndClients = (
+    <>
+        {/* Above billing and offerings deliberately: someone holding a slot on this
+            practitioner's calendar is the most time-sensitive thing on the page. */}
+        <BookingsSection rows={bookingRows} />
+
+        {/* The same population one step later, and above commercial configuration for the same
+            reason: a client on this list BEFORE their first booking is 0% forever, so it belongs
+            next to the bookings it exempts rather than next to the plan it modifies. */}
+        <ClientsAndReferralsSection
+          slug={params.slug}
+          rows={clientRows}
+          referable={referable}
+          newReferralLink={newReferralLink}
+          referralRateLabel={referralRateLabel}
+          termMonths={leadAttributionTermMonths}
+          addAction={addClients.bind(null, params.slug)}
+          inviteAction={inviteClients.bind(null, params.slug)}
+          referByEmailAction={referClientByEmail.bind(null, params.slug)}
+          createLinkAction={createReferralLinkFor.bind(null, params.slug)}
+          notice={clientsNotice}
+        />
+    </>
+  );
+
   return (
     <main className="min-h-screen bg-muted/30 px-4 py-10 sm:py-14">
       <div className="mx-auto max-w-2xl space-y-4">
@@ -538,7 +613,10 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
           </Card>
         )}
 
-        <Card className="p-6 sm:p-8">
+        {!isSetUp && <SetupChecklist steps={setupSteps} />}
+        {isSetUp && bookingsAndClients}
+
+        <Card id="profile" className="scroll-mt-24 p-6 sm:p-8">
           <form id={PROFILE_FORM_ID} action={action} className="space-y-5">
             {/* Optimistic-concurrency token. Compared server-side before any write, so a save from
                 a stale tab (or from an admin editing this profile in support) is refused instead of
@@ -784,27 +862,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
           </Card>
         )}
 
-        {/* Above billing and offerings deliberately: someone holding a slot on this
-            practitioner's calendar is the most time-sensitive thing on the page. */}
-        <BookingsSection rows={bookingRows} />
-
-        {/* The same population one step later, and above commercial configuration for the same
-            reason: a client on this list BEFORE their first booking is 0% forever, so it belongs
-            next to the bookings it exempts rather than next to the plan it modifies. */}
-        <ClientsAndReferralsSection
-          slug={params.slug}
-          rows={clientRows}
-          referable={referable}
-          newReferralLink={newReferralLink}
-          referralRateLabel={referralRateLabel}
-          termMonths={leadAttributionTermMonths}
-          addAction={addClients.bind(null, params.slug)}
-          inviteAction={inviteClients.bind(null, params.slug)}
-          referByEmailAction={referClientByEmail.bind(null, params.slug)}
-          createLinkAction={createReferralLinkFor.bind(null, params.slug)}
-          notice={clientsNotice}
-        />
-
+        <div id="plan" className="scroll-mt-24 space-y-4">
         <PlanChoice
           chosen={isPlanKey(practitioner.plan) ? practitioner.plan : null}
           plans={comparison.cards}
@@ -819,6 +877,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
           status={practitioner.subscriptionStatus}
           trialEndsAt={practitioner.trialEndsAt}
           isAdmin={ownerIsAdmin}
+          plan={effectivePlan(practitioner.plan)}
           isComplete={missing.length === 0}
           // The action mints a per-practitioner checkout carrying metadata.practitioner_id and
           // reuses whopSubscriptionCheckoutUrl once minted. The generic hosted URL is the last
@@ -828,7 +887,22 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
           fallbackCheckoutUrl={process.env.WHOP_PLATFORM_CHECKOUT_URL ?? null}
           priceLabel={monthlyFeeLabel('PLAN_A')}
         />
+        </div>
 
+        <div id="payments" className="scroll-mt-24">
+        <PaymentsSection
+          slug={params.slug}
+          whopCompanyId={practitioner.whopCompanyId}
+          payoutStatus={practitioner.whopPayoutStatus}
+          payoutsEnabled={practitioner.whopPayoutsEnabled}
+          platformReady={platformReady}
+          whopParam={searchParams.whop}
+          startWhopOnboardingAction={startWhopOnboardingAction}
+          openPayoutPortalAction={openPayoutPortalAction}
+        />
+        </div>
+
+        <div id="offerings" className="scroll-mt-24">
         {/* OFFERINGS ABOVE BOOKING LINKS, STACKED FULL-WIDTH — operator ruling 2026-08-27,
             reversing the side-by-side pairing added 2026-08-25 (queue item 7).
 
@@ -944,17 +1018,9 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
             />
           </Card>
         </div>
+        </div>
 
-        <PaymentsSection
-          slug={params.slug}
-          whopCompanyId={practitioner.whopCompanyId}
-          payoutStatus={practitioner.whopPayoutStatus}
-          payoutsEnabled={practitioner.whopPayoutsEnabled}
-          platformReady={isWhopPlatformsReady()}
-          whopParam={searchParams.whop}
-          startWhopOnboardingAction={startWhopOnboardingAction}
-          openPayoutPortalAction={openPayoutPortalAction}
-        />
+        {!isSetUp && bookingsAndClients}
 
         <AccountEmailSection
           // The OWNER's address, deliberately — not session.user.email, which is the VIEWER's

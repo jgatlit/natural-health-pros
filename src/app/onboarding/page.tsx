@@ -6,6 +6,9 @@ import { isLlmConfigured } from '@/lib/onboarding-draft';
 import { SPECIALTY_ORDER } from '@/lib/practitioner-ordering';
 import { submitOnboarding } from '@/app/practitioners/[slug]/edit/actions';
 import { OnboardingForm } from '@/components/practitioners/OnboardingForm';
+import { formatBpsAsPercent, planComparison } from '@/lib/pricing-plans';
+import { crossReferralRates } from '@/lib/referral-fees';
+import { loadSettings } from '@/lib/platform-settings';
 
 type Props = { searchParams: { invitation?: string } };
 
@@ -169,6 +172,7 @@ export default async function OnboardingPage({ searchParams }: Props) {
   );
 
   const action = submitOnboarding.bind(null, practitioner.slug);
+  const { leadAttributionTermMonths } = await loadSettings(prisma);
 
   return (
     <OnboardingForm
@@ -188,6 +192,11 @@ export default async function OnboardingPage({ searchParams }: Props) {
       aliases={approvedAliases}
       initialSpecialties={initialSpecialties}
       termsAcceptedAt={practitioner.user.termsAcceptedAt}
+      planTerms={{
+        plans: planComparison().cards,
+        termMonths: leadAttributionTermMonths,
+        referralRateLabel: formatBpsAsPercent(crossReferralRates().referrerFeeBps),
+      }}
     />
   );
 }

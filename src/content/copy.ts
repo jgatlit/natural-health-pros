@@ -32,27 +32,23 @@ export const hero = {
     "No need to find your alternatives to mainstream medicine through TikTok, ChatGPT, or your grandma's old medicine cabinet.",
   primaryCta: 'Book a session with a trained professional in the health and wellness field.',
   wordmark: 'Natural Health Pros',
-  /** UNSUBSTANTIATED (2026-08-10): 0 of 13 listed practitioners have a price set,
-   *  and 0 Offering rows exist. Client's wording, restored on operator decision. */
+  /** HELD, NOT RENDERED (2026-09-28). 0 of 13 listed practitioners had a price set when this was
+   *  flagged. Client's wording is kept here for when prices exist; re-enable per
+   *  docs/brand/2026-08-10-client-landing-copy.md → "Re-enable conditions". */
   priceBand: 'Sessions from $29 – $219+',
 } as const;
 
 /*
- * Client's wording, restored as written 2026-08-10.
- *
- * Row 0 "Training and credential-verified" — UNSUBSTANTIATED. `hheCertified` is
- *   `@default(true)` in prisma/schema.prisma and no code path ever sets it, so
- *   this asserts a verification step that has never run for any practitioner.
- *   It is also the product's core value proposition, which makes it the most
- *   expensive of the four to be wrong about.
- * Row 2 "Easy scheduling" — UNSUBSTANTIATED. 1 of 13 listed practitioners has a
- *   booking link.
+ * Reworded 2026-09-28 (operator ruling, agreed with the flagged-claims review). The client's
+ * original rows "Training and credential-verified" and "Easy scheduling" asserted things no code
+ * path supported (`hheCertified` is `@default(true)`; 1 of 13 listed practitioners had a booking
+ * link), and "Affordable pricing" has no price data behind it. These three describe only what the
+ * product does. The original wording is in docs/brand/2026-08-10-client-landing-copy.md.
  */
 export const trustRow = [
-  'Training and credential-verified',
-  'Affordable pricing',
-  'Easy scheduling',
-  'Searchable directory',
+  'Trained through HHE programs',
+  'Search by specialty, city or concern',
+  'Book directly with the practitioner',
 ] as const;
 
 export const scopeOfService = {
@@ -84,19 +80,47 @@ export const footerIdentity = [
 export const disclaimer =
   'DISCLAIMER: This is not a replacement for medical care. The practitioners listed in this directory provide holistic and complementary services that are not intended to diagnose, treat, cure, or prevent any disease. Always consult your physician or a qualified healthcare provider before making changes to your health, and never disregard or delay professional medical advice because of something you accessed through this site. If you are experiencing a medical emergency, call 911.';
 
-/** Layer X — the practitioner-acquisition funnel. Build-authored copy. */
+/**
+ * Layer X — the practitioner-acquisition funnel. Build-authored copy.
+ *
+ * NO PRICES OR PERCENTAGES HERE, on operator ruling 2026-09-28 (Amy, 09-18: nothing public until
+ * terms are firm). The exact rates are shown after sign-in, in the plan choice on the edit page,
+ * which reads them from src/lib/pricing-plans.ts. Two statements ARE public and are shipped rules:
+ * an invited or listed client is always 0%, and our share ends after a fixed term.
+ */
 export const getListed = {
   authoredByBuild: true,
   eyebrow: 'For practitioners',
-  heading: 'Trained through HHE? Take the listing.',
-  body: 'Your listing carries your training, your specialties, your own booking link, and your own prices. You keep the client relationship — Natural Health Pros just makes you findable.',
-  price: '$39',
-  interval: 'per month',
-  bullets: [
-    'A profile page you control, with your photo, bio, and specialties',
-    'Your own scheduling link — Cal.com, Calendly, Acuity, whatever you already use',
-    'Listed in search the moment your profile is complete',
+  heading: 'Trained through HHE? Be found by people who are looking for you.',
+  body: 'Your listing carries your training and specialties. Clients book on your own calendar and pay you through Whop. You choose how Natural Health Pros is paid.',
+  plansHeading: 'Two ways to be listed',
+  plans: [
+    {
+      name: 'Plan A',
+      kicker: 'Monthly',
+      body: 'A small monthly fee and a smaller share on clients we send you.',
+    },
+    {
+      name: 'Plan B',
+      kicker: 'No monthly fee',
+      body: 'No subscription and a larger share on clients we send you.',
+    },
   ],
+  guarantees: [
+    {
+      title: 'Your own clients are always 0%',
+      body: 'Add the people you already see. We take nothing on their sessions, on either plan.',
+    },
+    {
+      title: 'Our share has an end date',
+      body: 'It applies only to clients we send you, for a fixed term from their first payment. After that, 0%.',
+    },
+    {
+      title: 'Refer a colleague, earn a share',
+      body: 'Send a client to another practitioner and earn a share of their sessions for the same term.',
+    },
+  ],
+  ratesNote: 'Exact rates are shown before you choose a plan.',
   cta: 'Get listed',
   secondary: 'Already listed? Sign in',
 } as const;
