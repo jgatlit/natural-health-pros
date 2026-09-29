@@ -1,87 +1,44 @@
-'use client';
-
 /*
- * Class 8 — SVG GENERATION.
+ * The brand mark is the Natural Health Pros symbol: a practitioner figure rising from leaves.
+ * Files live in public/brand/ and are the same artwork (natural-health-pros-d5-icon-only).
  *
- * The mark is the directory's own data structure: three practitioner nodes on
- * an arc, tied by filaments to a shared training node. It is not a leaf, a
- * lotus, or a pair of cupped hands — the three defaults of this category.
+ * TWO FILES, ONE DESIGN. The header sits on the navy field, and the symbol's dark right-hand
+ * leaf (#2F5B46) is only ~1.8:1 against it — it drops out and the mark reads lopsided. The
+ * `-on-dark` file is transparent like the original and lightens ONLY that one leaf (~3.3:1);
+ * every other shape is identical. Use the plain file on light surfaces.
  *
- * D4: prefers-reduced-motion renders every path at full stroke immediately.
- * D7: N/A — inline SVG with no external dependency, cannot fail independently.
+ * This replaces the earlier node-and-filament glyph, which was drawn specifically to avoid
+ * leaf imagery. The brand has since chosen a leaf mark deliberately (2026-09-29).
+ *
+ * The image is decorative (alt=""): the wordmark text beside it already names the brand, and
+ * announcing it twice is noise for screen readers. No client hooks are needed any more, so this
+ * is no longer a client component.
  */
 
-import { useEffect, useRef } from 'react';
-import { useReducedMotion } from '@/lib/use-reduced-motion';
+import Image from 'next/image';
 import { cn } from '@/lib/utils';
+
+const MARK = '/brand/natural-health-pros-mark.svg';
+const MARK_ON_DARK = '/brand/natural-health-pros-mark-on-dark.svg';
 
 export function Wordmark({
   className,
   tone = 'ink',
-  animate = false,
 }: {
   className?: string;
   tone?: 'ink' | 'inverse';
-  animate?: boolean;
 }) {
-  const reduced = useReducedMotion();
-  const svgRef = useRef<SVGSVGElement>(null);
-  const noMotion = reduced || !animate;
-
-  useEffect(() => {
-    if (noMotion || !svgRef.current) return;
-    const paths = svgRef.current.querySelectorAll<SVGPathElement>('.mark-draw');
-    const cleanups: (() => void)[] = [];
-
-    paths.forEach((path, i) => {
-      const len = path.getTotalLength();
-      path.style.strokeDasharray = `${len}`;
-      path.style.strokeDashoffset = `${len}`;
-      // Two frames of settle before transitioning, so the dash offset is
-      // committed before the animation begins — otherwise Safari skips it.
-      const raf = requestAnimationFrame(() =>
-        requestAnimationFrame(() => {
-          path.style.transition = `stroke-dashoffset 900ms cubic-bezier(0.4, 0, 0.2, 1) ${i * 110}ms`;
-          path.style.strokeDashoffset = '0';
-        }),
-      );
-      cleanups.push(() => cancelAnimationFrame(raf));
-    });
-
-    return () => cleanups.forEach((c) => c());
-  }, [noMotion]);
-
-  const stroke = tone === 'inverse' ? 'rgba(255,255,255,0.92)' : 'var(--field)';
-  const node = tone === 'inverse' ? '#F2D0DE' : 'var(--cta)';
-
   return (
     <span className={cn('inline-flex items-center gap-2.5', className)}>
-      <svg
-        ref={svgRef}
-        viewBox="0 0 40 40"
-        className="h-7 w-7 shrink-0"
-        fill="none"
-        role="img"
-        aria-label="Natural Health Pros"
-      >
-        {/* filaments: each practitioner node tied back to shared training */}
-        <path className="mark-draw" d="M20 31 L9 14" stroke={stroke} strokeWidth="1.4" strokeLinecap="round" />
-        <path className="mark-draw" d="M20 31 L20 8" stroke={stroke} strokeWidth="1.4" strokeLinecap="round" />
-        <path className="mark-draw" d="M20 31 L31 14" stroke={stroke} strokeWidth="1.4" strokeLinecap="round" />
-        {/* the arc the three practitioners sit on */}
-        <path
-          className="mark-draw"
-          d="M6 17 Q20 3 34 17"
-          stroke={stroke}
-          strokeWidth="1.4"
-          strokeLinecap="round"
-          opacity="0.5"
-        />
-        <circle cx="9" cy="14" r="2.4" fill={node} />
-        <circle cx="20" cy="8" r="2.4" fill={node} />
-        <circle cx="31" cy="14" r="2.4" fill={node} />
-        <circle cx="20" cy="31" r="3.2" fill="none" stroke={stroke} strokeWidth="1.4" />
-      </svg>
+      <Image
+        src={tone === 'inverse' ? MARK_ON_DARK : MARK}
+        alt=""
+        width={914}
+        height={840}
+        unoptimized
+        priority={tone === 'inverse'} // the header instance is above the fold: load it eagerly, not lazily
+        className="h-9 w-auto shrink-0"
+      />
       <span
         className={cn(
           'whitespace-nowrap font-serif text-[0.9375rem] font-semibold leading-none tracking-[-0.01em] sm:text-[1.0625rem]',

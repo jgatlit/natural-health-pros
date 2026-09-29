@@ -8,6 +8,8 @@
 
 **Brand note**: Product name lineage: "PracticeNear" (discontinued 2026-05-24) → "HHE Directory" (interim) → **"Natural Health Pros"** (canonical go-forward, rebranded 2026-06-29; domain `naturalhealthpros.com`). User-facing product copy uses "Natural Health Pros"; "Holistic Health Educators / HHE" is retained wherever it denotes the school/credential (positioning, "HHE program lead", "graduates of HHE programs"). Historical artifacts (joint-call meeting note, decisions JSON, reconciliation doc, vault project entity filename) retain the "PracticeNear" name as point-in-time references; do not rename them.
 
+**Logo & favicon** (2026-09-29): the mark is the leaf-and-figure symbol (`natural-health-pros-d5-icon-only`). `public/brand/natural-health-pros-mark.svg` (light surfaces) and `…-mark-on-dark.svg` (navy header / OG card — lightens only the dark right leaf for contrast) drive `<Wordmark>`; `src/app/favicon.ico`, `icon.png`, `apple-icon.png` are the favicon set; `src/lib/brand-mark-data.ts` inlines the on-dark mark for the OG card. Masters and variants (SVG/PNG) live in `logo/master/`. This replaced the older node-and-filament glyph.
+
 ## Stack (Phase 0 + Block A — live)
 
 - Next.js 14.2.35 (App Router, `src/`, TS strict)
