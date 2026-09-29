@@ -88,7 +88,7 @@ export function SiteHeader({ profileHref = null, signedIn = false }: Props) {
 
       <div className="mx-auto flex h-16 max-w-6xl items-center justify-between gap-4 px-4 sm:px-6">
         <a href="/" className="rounded-md" aria-label="Natural Health Pros — home">
-          <Wordmark tone="inverse" animate />
+          <Wordmark tone="inverse" />
         </a>
 
         <nav aria-label="Main" className="hidden items-center gap-7 md:flex">

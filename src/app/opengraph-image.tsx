@@ -1,5 +1,6 @@
 import { ImageResponse } from 'next/og';
 import { getDirectory } from '@/lib/directory';
+import { MARK_ON_DARK_PNG } from '@/lib/brand-mark-data';
 
 /*
  * The social card. Rendered at request time from the brand tokens and the live
@@ -34,16 +35,8 @@ export default async function OpengraphImage() {
         }}
       >
         <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-          <svg width="44" height="44" viewBox="0 0 40 40" fill="none">
-            <path d="M20 31 L9 14" stroke="rgba(255,255,255,0.85)" strokeWidth="1.6" strokeLinecap="round" />
-            <path d="M20 31 L20 8" stroke="rgba(255,255,255,0.85)" strokeWidth="1.6" strokeLinecap="round" />
-            <path d="M20 31 L31 14" stroke="rgba(255,255,255,0.85)" strokeWidth="1.6" strokeLinecap="round" />
-            <path d="M6 17 Q20 3 34 17" stroke="rgba(255,255,255,0.45)" strokeWidth="1.6" strokeLinecap="round" />
-            <circle cx="9" cy="14" r="2.6" fill="#F2D0DE" />
-            <circle cx="20" cy="8" r="2.6" fill="#F2D0DE" />
-            <circle cx="31" cy="14" r="2.6" fill="#F2D0DE" />
-            <circle cx="20" cy="31" r="3.4" fill="none" stroke="rgba(255,255,255,0.85)" strokeWidth="1.6" />
-          </svg>
+          {/* eslint-disable-next-line @next/next/no-img-element -- next/og renders <img>; next/image is not available here */}
+          <img src={MARK_ON_DARK_PNG} width={56} height={51} alt="" />
           <span style={{ fontSize: 30, letterSpacing: -0.5 }}>Natural Health Pros</span>
         </div>
 

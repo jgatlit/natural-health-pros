@@ -134,5 +134,7 @@ export const config = {
   // domain-association file, which Apple requires be "served with the correct content (no
   // modifications)". The pass-through branch runs stampAttribution(), so leaving the path
   // matched would put a cookie-writing wrapper in front of a file Apple fetches and compares.
-  matcher: ['/((?!api|_next/static|_next/image|favicon.ico|\\.well-known).*)'],
+  // Brand icons (icon.png, apple-icon.png) and public/brand/* are static files too: same reasoning,
+  // no reason to run the attribution wrapper in front of an icon fetch.
+  matcher: ['/((?!api|_next/static|_next/image|favicon.ico|icon.png|apple-icon.png|brand/|\\.well-known).*)'],
 };
