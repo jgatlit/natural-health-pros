@@ -7,6 +7,9 @@ import { fileURLToPath } from 'node:url';
  * the whole suite runs with no database, no network, and no Whop credentials.
  */
 export default defineConfig({
+  // Lets a test render a component with renderToStaticMarkup; tsconfig's `jsx: preserve` is for
+  // Next and would otherwise leave JSX untransformed under vitest.
+  esbuild: { jsx: 'automatic' },
   test: {
     environment: 'node',
     include: ['tests/**/*.test.ts'],

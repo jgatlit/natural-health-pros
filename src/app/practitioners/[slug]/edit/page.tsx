@@ -360,7 +360,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
   // ── Setup path ─────────────────────────────────────────────────────────────────────────────
   //
   // Derived only from state that already exists; nothing here is stored. While setup is incomplete
-  // the page is laid out in this same order (profile → plan → payments → offerings) so the
+  // the page is laid out in this same order (profile → plan → payments → offerings and booking link) so the
   // checklist and the page agree; once every step is done the checklist goes away and the page
   // reorders around running the practice, with Bookings and Clients first.
   const platformReady = isWhopPlatformsReady();
@@ -381,30 +381,50 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
       href: '#plan',
       cta: 'Choose plan',
     },
-    // Left out entirely while Whop payouts are not switched on: a step nobody can complete is a
-    // checklist that never finishes.
-    ...(platformReady
-      ? [
-          {
-            key: 'payments',
-            label: 'Connect Whop',
-            hint: 'Needed on both plans. This is how clients pay you.',
-            done: practitioner.whopPayoutsEnabled,
-            href: '#payments',
-            cta: 'Connect Whop',
-          },
-        ]
-      : []),
+    {
+      key: 'payments',
+      label: 'Connect Whop',
+      hint: 'Needed on both plans. This is how clients pay you.',
+      done: practitioner.whopPayoutsEnabled,
+      href: '#payments',
+      cta: 'Connect Whop',
+      // Shown rather than dropped while Whop is not configured here: a practitioner should see
+      // the step is coming, and it must not hold the checklist open for something nobody can do.
+      state: platformReady ? undefined : 'coming-soon',
+    },
     {
       key: 'offering',
-      label: 'Add what clients can book',
-      hint: 'An offering with a price, or a link to your own scheduler.',
-      done: practitioner.whopProducts.length > 0 || practitioner.bookingLinks.length > 0,
+      label: 'Add an offering',
+      hint: 'What you sell: a name, a length and a price.',
+      done: practitioner.whopProducts.length > 0,
       href: '#offerings',
       cta: 'Add offering',
     },
+    {
+      key: 'booking-link',
+      label: 'Add your booking link',
+      hint: 'Where clients pick a time: Cal.com, Calendly, Acuity and similar.',
+      done: practitioner.bookingLinks.length > 0,
+      href: '#booking-links',
+      cta: 'Add link',
+    },
+    {
+      key: 'accept-payments',
+      label: 'Start accepting payments',
+      hint: 'Publish an offering so clients can pay you through Whop.',
+      done: practitioner.whopProducts.some((o) =>
+        paymentsLive({
+          acceptsPayments: o.acceptsPayments,
+          practitionerPayoutsEnabled: practitioner.whopPayoutsEnabled,
+          whopPlanId: o.whopPlanId,
+        }),
+      ),
+      href: '#offerings',
+      cta: 'Publish offering',
+      state: platformReady ? undefined : 'coming-soon',
+    },
   ];
-  const isSetUp = setupSteps.every((step) => step.done);
+  const isSetUp = setupSteps.every((step) => step.done || step.state === 'coming-soon');
 
   const bookingsAndClients = (
     <>
@@ -960,7 +980,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
             reorderAction={reorderOfferingsAction}
           />
 
-          <Card className="space-y-3 p-6 sm:p-8">
+          <Card id="booking-links" className="scroll-mt-24 space-y-3 p-6 sm:p-8">
             <div className="space-y-1">
               <h2 className="text-sm font-semibold">Booking links</h2>
               <p className="text-xs text-muted-foreground">

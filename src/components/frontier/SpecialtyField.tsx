@@ -34,6 +34,12 @@
  * against the route instead of hiding in a lazy chunk. The 2 kB buys server-rendered, crawlable
  * specialty links. Removing three.js entirely is a separate decision about PracticeField.
  *
+ * ⚠️ THE CURSOR DOES NOT CHASE-AND-FLEE ANY MORE. It used to repel every word within 150px, so the
+ * word you were reaching for ran away as you approached. Now the word the pointer is heading for is
+ * LOCKED (it stops), and the words around it make room for IT, not for the pointer. See
+ * src/lib/specialty-field-lock.ts for the rule and its hysteresis. A word also has a hit area a few
+ * pixels larger than its text, and a click just off a locked word still goes to it.
+ *
  * D4: prefers-reduced-motion → the simulation is stepped to a settled layout once and never
  *     animated, cursor reactivity is off, and hover still works. Nothing is lost but the motion.
  * D7: there is no WebGL context to lose, so the old failure overlay has no analogue. The static
@@ -45,6 +51,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { DirectorySpecialty } from '@/lib/directory';
 import type { SpecialtyLink } from '@/lib/specialty-graph';
 import { searchUrl } from '@/lib/search-url';
+import { boxDistance, pickLockTarget } from '@/lib/specialty-field-lock';
 import { useReducedMotion } from '@/lib/use-reduced-motion';
 import { cn } from '@/lib/utils';
 
@@ -148,6 +155,10 @@ export function SpecialtyField({ specialties, links }: Props) {
     const pointer = { x: -1e5, y: -1e5, on: false };
     let dragging: Node | null = null;
     let raf = 0;
+    /** Index of the word the pointer is heading for, or -1. Frozen in place while set. */
+    let locked = -1;
+    let dragStart: { x: number; y: number; i: number } | null = null;
+    let didDrag = false;
 
     function measure() {
       const r = stage!.getBoundingClientRect();
@@ -195,9 +206,8 @@ export function SpecialtyField({ specialties, links }: Props) {
       for (let i = 0; i < N.length; i++) {
         const n = N[i];
         const c = n.cluster >= 0 ? centers[n.cluster] : { x: W / 2, y: H / 2 };
-        // Floored, NOT scaled to zero with alpha: cursor repulsion is applied at full strength
-        // regardless of alpha, so without a floor a node shoved aside at rest could never come
-        // back and the layout would degrade with every pass of the mouse.
+        // Floored, NOT scaled to zero with alpha: words displaced to make room for a locked word
+        // must be able to come home once it is released, however long the field has been at rest.
         const home = Math.max(alpha, 0.22) * 0.0042;
         n.vx += (c.x - n.x) * home;
         n.vy += (c.y - n.y) * home;
@@ -212,34 +222,33 @@ export function SpecialtyField({ specialties, links }: Props) {
           n.vy -= (dy / d) * rep;
           m.vx += (dx / d) * rep;
           m.vy += (dy / d) * rep;
-          // Rectangle overlap resolve — words must never sit on top of words.
-          const ox = (n.w + m.w) / 2 + 10 - Math.abs(dx);
-          const oy = (n.h + m.h) / 2 + 4 - Math.abs(dy);
+          // Rectangle overlap resolve — words must never sit on top of words. Around the LOCKED
+          // word the clearance is larger and the shove is stronger, so its neighbours make room for
+          // it; the locked word itself is frozen at integration and never gives way.
+          const lk = i === locked || j === locked;
+          const ox = (n.w + m.w) / 2 + 10 + (lk ? 16 : 0) - Math.abs(dx);
+          const oy = (n.h + m.h) / 2 + 4 + (lk ? 10 : 0) - Math.abs(dy);
           if (ox > 0 && oy > 0) {
+            const gain = lk ? 0.42 : 0.22;
             if (ox < oy) {
-              const s = (dx < 0 ? -1 : 1) * ox * 0.22;
+              const s = (dx < 0 ? -1 : 1) * ox * gain;
               n.vx -= s;
               m.vx += s;
             } else {
-              const s = (dy < 0 ? -1 : 1) * oy * 0.22;
+              const s = (dy < 0 ? -1 : 1) * oy * gain;
               n.vy -= s;
               m.vy += s;
             }
           }
         }
-        if (pointer.on) {
-          const dx = n.x - pointer.x;
-          const dy = n.y - pointer.y;
-          const d = Math.hypot(dx, dy);
-          if (d < 150 && d > 0.1) {
-            const f = (1 - d / 150) * 2.6;
-            n.vx += (dx / d) * f;
-            n.vy += (dy / d) * f;
-          }
-        }
       }
-      for (const n of N) {
-        if (n === dragging) continue;
+      for (let i = 0; i < N.length; i++) {
+        const n = N[i];
+        if (n === dragging || i === locked) {
+          n.vx = 0;
+          n.vy = 0;
+          continue;
+        }
         n.vx *= 0.86;
         n.vy *= 0.86;
         n.x += n.vx;
@@ -298,10 +307,12 @@ export function SpecialtyField({ specialties, links }: Props) {
     }
 
     for (let k = 0; k < 90; k++) step();
-    const settled = () => alpha === 0 && !pointer.on && !dragging;
+    // At rest only when the field has cooled AND nobody is mid-drag. A locked word does not keep
+    // the loop alive: it is frozen, so there is nothing left to simulate.
+    const settled = () => alpha === 0 && !dragging;
     const loop = () => {
-      // Skip the work entirely once the layout is at rest and nobody is interacting. The frame
-      // still fires so interaction resumes instantly, but nothing is simulated or drawn.
+      // Skip the work entirely once the layout is at rest. The frame still fires so interaction
+      // resumes instantly, but nothing is simulated or drawn.
       if (!settled()) {
         step();
         paint();
@@ -315,42 +326,88 @@ export function SpecialtyField({ specialties, links }: Props) {
       measure();
       alpha = 0.7;
     };
+
+    const setLock = (next: number) => {
+      if (next === locked) return;
+      locked = next;
+      // A light nudge, not a re-heat of the whole field: only the neighbours of the locked word
+      // need to move, and only by a little.
+      alpha = Math.max(alpha, 0.16);
+    };
+
     const onMove = (e: PointerEvent) => {
+      // Touch has no hover, so there is nothing to lock — and a touch drag is a page scroll.
+      if (e.pointerType === 'touch') return;
       const r = stage!.getBoundingClientRect();
       pointer.x = e.clientX - r.left;
       pointer.y = e.clientY - r.top;
       pointer.on = true;
-      // Re-heat: this is what makes the field tactile after it has come to rest.
-      alpha = Math.max(alpha, 0.3);
+
+      // A drag starts only once the pointer has actually travelled: a plain click must never
+      // move the word it lands on, and must never be swallowed as a drag.
+      if (dragStart && !dragging && Math.hypot(pointer.x - dragStart.x, pointer.y - dragStart.y) > 6) {
+        dragging = N[dragStart.i];
+        didDrag = true;
+      }
       if (dragging) {
         dragging.x = pointer.x;
         dragging.y = pointer.y;
         dragging.vx = 0;
         dragging.vy = 0;
         alpha = Math.max(alpha, 0.5);
+        setLock(N.indexOf(dragging));
+        return;
       }
+      setLock(pickLockTarget(N, pointer, locked));
     };
     const onLeave = () => {
       pointer.on = false;
       pointer.x = -1e5;
       pointer.y = -1e5;
+      if (!dragging) setLock(-1);
     };
     const onDown = (e: PointerEvent) => {
+      if (e.pointerType === 'touch') return;
       const target = (e.target as HTMLElement | null)?.closest('a');
       if (!target) return;
       const i = nodeEls.current.indexOf(target as HTMLAnchorElement);
       if (i < 0) return;
-      dragging = N[i];
-      alpha = Math.max(alpha, 0.6);
+      const r = stage!.getBoundingClientRect();
+      dragStart = { x: e.clientX - r.left, y: e.clientY - r.top, i };
+      didDrag = false;
     };
     const onUp = () => {
       dragging = null;
+      dragStart = null;
+      // Keep the flag through the click that follows pointerup, then clear it.
+      setTimeout(() => {
+        didDrag = false;
+      }, 0);
+      if (!pointer.on) setLock(-1);
+    };
+    /**
+     * Two click jobs. (1) A drag ends in a click on the same anchor — swallow it, or letting go of
+     * a word you were repositioning would navigate away. (2) A click that lands in the gap just
+     * beside a locked word still goes to it: the target that is highlighted is the target you get.
+     */
+    const onClick = (e: MouseEvent) => {
+      if (didDrag) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      if ((e.target as HTMLElement | null)?.closest('a')) return;
+      if (locked < 0) return;
+      const r = stage!.getBoundingClientRect();
+      const d = boxDistance(N[locked], e.clientX - r.left, e.clientY - r.top);
+      if (d <= 24) nodeEls.current[locked]?.click();
     };
 
     window.addEventListener('resize', onResize);
     stage.addEventListener('pointermove', onMove);
     stage.addEventListener('pointerleave', onLeave);
     stage.addEventListener('pointerdown', onDown);
+    stage.addEventListener('click', onClick, true);
     window.addEventListener('pointerup', onUp);
 
     return () => {
@@ -359,6 +416,7 @@ export function SpecialtyField({ specialties, links }: Props) {
       stage.removeEventListener('pointermove', onMove);
       stage.removeEventListener('pointerleave', onLeave);
       stage.removeEventListener('pointerdown', onDown);
+      stage.removeEventListener('click', onClick, true);
       window.removeEventListener('pointerup', onUp);
     };
   }, [edges, parents, reduced]);
@@ -369,7 +427,7 @@ export function SpecialtyField({ specialties, links }: Props) {
     <div>
       <div
         ref={stageRef}
-        className="relative h-[460px] w-full touch-none overflow-hidden rounded-xl border border-border bg-secondary/40 sm:h-[560px]"
+        className="relative h-[460px] w-full touch-pan-y overflow-hidden rounded-xl border border-border bg-secondary/40 sm:h-[560px]"
         style={{ ['--specialty-link' as string]: 'color-mix(in oklch, var(--primary) 28%, transparent)' }}
       >
         <canvas ref={canvasRef} aria-hidden className="absolute inset-0 h-full w-full" />
@@ -387,6 +445,8 @@ export function SpecialtyField({ specialties, links }: Props) {
             onBlur={() => setHot((h) => (h === i ? null : h))}
             className={cn(
               'absolute left-0 top-0 select-none whitespace-nowrap rounded-md px-1.5 py-0.5 text-primary no-underline',
+              // Hit area a few px larger than the text, so a near miss is still a hit.
+              "after:absolute after:-inset-2 after:content-['']",
               'transition-[color,opacity,background-color] duration-150',
               'hover:bg-background hover:text-cta focus-visible:bg-background focus-visible:text-cta',
               'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-cta',
