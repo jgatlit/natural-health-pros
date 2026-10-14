@@ -14,6 +14,7 @@ import {
   offeringAnchorId,
 } from '@/components/practitioners/OfferingsSummaryRail';
 import { OfferingDetailOpener } from '@/components/practitioners/OfferingDetailOpener';
+import { CustomSections } from '@/components/practitioners/CustomSections';
 import { Card } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { PractitionerHero } from '@/components/practitioners/PractitionerHero';
@@ -46,6 +47,11 @@ async function loadPractitioner(slug: string) {
       specialties: { include: { specialty: true }, orderBy: SPECIALTY_ORDER },
       bookingLinks: { orderBy: { sortOrder: 'asc' } },
       caseStudies: { orderBy: { createdAt: 'desc' } },
+      // Unpublished custom sections never leave the database on the public route.
+      profileSections: {
+        where: { published: true },
+        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+      },
       // No `active` filter: that column is dead and was a trap — it reads like a hidden/visible
       // toggle and is not one, and because it filtered HERE it would have removed an Offering
       // from every public surface at once, chooser included, with no UI to explain why.
@@ -404,6 +410,8 @@ export default async function PractitionerPage({ params, searchParams }: PagePro
                   </ul>
                 </section>
               )}
+
+              <CustomSections sections={p.profileSections} practitionerId={p.id} />
 
               {/* Queue item 8 (2026-08-25) — coming-soon placeholder ONLY. Reviews aren't built:
                   Jonathan deferred them on the 08-18 call until there's "a critical mass of

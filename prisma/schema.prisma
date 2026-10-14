@@ -233,6 +233,7 @@ model Practitioner {
   city        City?                   @relation(fields: [cityId], references: [id])
   specialties PractitionerSpecialty[]
   caseStudies CaseStudy[]
+  profileSections ProfileSection[]
 
   latitude  Float?
   longitude Float?
@@ -1351,4 +1352,27 @@ model RateScheduleAssignment {
 
   @@index([practitionerId, effectiveFrom])
   @@index([rateScheduleId])
+}
+
+// L1b - practitioner-authored profile sections (sanitized text + one media item).
+// Not indexed in Typesense. bodyHtml is sanitize-html output; media fields are only ever set from
+// server-validated values (see src/lib/custom-sections.ts).
+model ProfileSection {
+  id             String       @id @default(cuid())
+  practitionerId String
+  practitioner   Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
+  title          String
+  bodyHtml       String?      @db.Text
+  mediaKind      String? // EMBED | VIDEO_UPLOAD | IMAGE_UPLOAD
+  mediaUrl       String?
+  embedProvider  String? // YOUTUBE | VIMEO | LOOM
+  embedId        String?
+  posterUrl      String?
+  caption        String?
+  sortOrder      Int
+  published      Boolean      @default(true)
+  createdAt      DateTime     @default(now())
+  updatedAt      DateTime     @updatedAt
+
+  @@index([practitionerId, sortOrder])
 }
