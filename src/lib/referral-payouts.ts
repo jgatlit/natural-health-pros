@@ -146,6 +146,36 @@ export type SettlementSummary = {
 
 const TRANSFER_BATCH = 50;
 
+/**
+ * Record "not sent, and why" as a BLOCKED fee-ledger row WITHOUT ever downgrading a row that means
+ * something stronger. BLOCKED is claimable (payouts were merely off, or the share was too small
+ * then), whereas FAILED and SENDING mean "a transfer may have left: a human must look" and SETTLED
+ * means paid. An unconditional overwrite would turn the first group into the second and let the
+ * next sweep pay twice, so: create if missing, then change status ONLY from PENDING or BLOCKED.
+ */
+async function parkBlocked(
+  db: PayoutsDb,
+  dedupeKey: string,
+  v: { practitionerId: string; amountUsdCents: number; note: string },
+): Promise<void> {
+  await db.feeLedgerEntry.upsert({
+    where: { dedupeKey },
+    create: {
+      dedupeKey,
+      kind: 'REFERRER_TRANSFER',
+      status: 'BLOCKED',
+      practitionerId: v.practitionerId,
+      amountUsdCents: v.amountUsdCents,
+      note: v.note,
+    },
+    update: {},
+  });
+  await db.feeLedgerEntry.updateMany({
+    where: { dedupeKey, status: { in: ['PENDING', 'BLOCKED'] } },
+    data: { status: 'BLOCKED', note: v.note },
+  });
+}
+
 export async function settlePayableShares(
   db: PayoutsDb,
   opts: { transfer: TransferFn; at: Date },
@@ -177,17 +207,10 @@ export async function settlePayableShares(
     })) as Array<{ id: string; referrerShareUsdCents: number; referrerPractitionerId: string }>;
     for (const t of tiny) {
       const note = `${BELOW_FEE_REASON}: share ${t.referrerShareUsdCents}c is below the ${minShare}c minimum that covers the transfer fee`;
-      await db.feeLedgerEntry.upsert({
-        where: { dedupeKey: `REFERRER_TRANSFER:${t.id}` },
-        create: {
-          dedupeKey: `REFERRER_TRANSFER:${t.id}`,
-          kind: 'REFERRER_TRANSFER',
-          status: 'BLOCKED',
-          practitionerId: t.referrerPractitionerId,
-          amountUsdCents: t.referrerShareUsdCents,
-          note,
-        },
-        update: { status: 'BLOCKED', note },
+      await parkBlocked(db, `REFERRER_TRANSFER:${t.id}`, {
+        practitionerId: t.referrerPractitionerId,
+        amountUsdCents: t.referrerShareUsdCents,
+        note,
       });
     }
   }
@@ -224,17 +247,10 @@ export async function settlePayableShares(
       // invisible; this row is what makes "we owe N referrers M dollars and here is why it has
       // not moved" answerable from the database rather than from somebody's memory.
       summary.blocked = guard.reason;
-      await db.feeLedgerEntry.upsert({
-        where: { dedupeKey },
-        create: {
-          dedupeKey,
-          kind: 'REFERRER_TRANSFER',
-          status: 'BLOCKED',
-          practitionerId: row.referrerPractitionerId,
-          amountUsdCents: row.referrerShareUsdCents,
-          note: guard.reason,
-        },
-        update: { status: 'BLOCKED', note: guard.reason },
+      await parkBlocked(db, dedupeKey, {
+        practitionerId: row.referrerPractitionerId,
+        amountUsdCents: row.referrerShareUsdCents,
+        note: guard.reason,
       });
       continue;
     }

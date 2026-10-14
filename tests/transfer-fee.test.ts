@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -75,7 +78,7 @@ describe('planTransfer: tiny and degenerate shares are NOT sent', () => {
   });
 });
 
-describe('planTransfer invariants over a sweep: NHP never absorbs a cent, net = gross - fee, never negative', () => {
+describe('planTransfer invariants over a sweep: at the configured rate the outlay never exceeds the gross, net = gross - fee, never negative', () => {
   it.each([0, 100, 300, 1000, 2000])('bps %i, both modes, gross 1..4000', (bps) => {
     for (const mode of ['charged-to-sender', 'deducted-from-recipient'] as const) {
       for (let g = 1; g <= 4000; g++) {
@@ -109,5 +112,12 @@ describe('dollars vs cents boundary', () => {
   it('5c is 0.05 and 100c is 1, never 5 or 100', () => {
     expect(toTransferDollars(5)).toBe(0.05);
     expect(toTransferDollars(100)).toBe(1);
+  });
+});
+
+describe('payee copy', () => {
+  it.each(['ClientsAndReferralsSection', 'RecruitedPractitionersSection'])('%s tells the payee payouts are net of the transfer fee', (name) => {
+    const src = readFileSync(path.join(__dirname, '..', 'src', 'components', 'practitioners', `${name}.tsx`), 'utf8');
+    expect(src).toMatch(/Payouts are net of Whop(&apos;|')s transfer fee\./);
   });
 });

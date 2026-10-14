@@ -1,22 +1,21 @@
 /**
- * RECONCILE REFERRAL LEDGER ROWS MINTED BEFORE FEE RULE v1.5 (spec v1.5 section 4).
+ * RECONCILE REFERRAL LEDGER ROWS MINTED BEFORE FEE RULE v1.5 (spec v1.5 section 4): DRY RUN ONLY.
  *
- * The rule is `repriceReferralRow()` in src/lib/referral-reprice.ts; this file only reads rows,
- * logs one JSON line per decision, and (only when asked) hands the decisions to the apply module.
- *
- * DEFAULT MODE IS A DRY RUN. It issues SELECT, SHOW and one session SET, nothing else. Its first
- * statement forces the connection read-only, and it refuses to continue unless the server confirms
- * that. The statements that write live in a separate file (reconcile-referral-v15-apply.ts), which
- * is loaded only after every guard below has passed.
+ * The rule is `repriceReferralRow()` in src/lib/referral-reprice.ts; this file only reads rows and
+ * logs one JSON line per decision plus a summary. It CANNOT write: it issues SELECT, SHOW and one
+ * session SET, and it does not import the writer. Its first statement forces the connection
+ * read-only and it refuses to continue unless the server confirms that. The separate entry point
+ * `reconcile-referral-v15-apply.ts` is the only code that can change data, and it carries its own
+ * guards.
  *
  *   RECONCILE_DATABASE_URL=postgres://... npx tsx scripts/reconcile-referral-v15.ts
  *
  * The URL comes from RECONCILE_DATABASE_URL and nowhere else. No env file is read and there is no
  * fallback to a production variable.
  *
- * --apply additionally requires RECONCILE_CONFIRM=<today's date, YYYY-MM-DD, UTC>, and refuses a
- * *.neon.tech host unless --i-know-this-is-production is also passed. Running on production is a
- * pre-activation operator step, not part of the build.
+ * ⚠️ THE SUMMARY'S `nhpExcessUsdCents` / `practitionerOverchargedUsdCents` ARE AN OPERATOR
+ * DECISION. Zeroing past-term referrer shares leaves that money with NHP while the practitioner
+ * stays charged the old rule's rate. Applying needs the operator's sign-off on those totals.
  */
 
 import { repriceReferralRow, type RepriceChange, type RepriceDecision } from '../src/lib/referral-reprice';
@@ -41,6 +40,10 @@ export type LedgerRow = {
   schedTotalBps: number | null;
   schedReferrerTermMonths: number | null;
   schedLeadTermMonths: number | null;
+  schedPlanASourcedBps: number | null;
+  schedPlanBSourcedBps: number | null;
+  plan: string | null;
+  transferStatus: string | null;
 };
 
 /** Rows priced before the schedule existed: their fee snapshot carries no schedule id. */
@@ -54,19 +57,22 @@ SELECT r."id", r."bookingIntentId", r."referrerPractitionerId", r."state"::text 
        s."referrerBps" AS "schedReferrerBps",
        s."referralTotalBps" AS "schedTotalBps",
        s."referrerTermMonths" AS "schedReferrerTermMonths",
-       s."leadTermMonths" AS "schedLeadTermMonths"
+       s."leadTermMonths" AS "schedLeadTermMonths",
+       s."planASourcedBps" AS "schedPlanASourcedBps",
+       s."planBSourcedBps" AS "schedPlanBSourcedBps",
+       sp."plan" AS "plan",
+       t."status" AS "transferStatus"
   FROM "ReferralLedgerEntry" r
   LEFT JOIN "BookingFeeSnapshot" f ON f."bookingIntentId" = r."bookingIntentId"
   LEFT JOIN "AttributedClient" ac
          ON ac."practitionerId" = r."servingPractitionerId" AND ac."emailHash" = r."clientEmailHash"
   LEFT JOIN "Practitioner" sp ON sp."id" = r."servingPractitionerId"
+  LEFT JOIN "FeeLedgerEntry" t ON t."dedupeKey" = 'REFERRER_TRANSFER:' || r."id"
   LEFT JOIN "RateSchedule" s ON s."id" = COALESCE(ac."rateScheduleId", sp."rateScheduleId")
  WHERE f."rateScheduleId" IS NULL
  ORDER BY r."createdAt", r."id"`;
 
 export type RunOptions = {
-  apply: boolean;
-  now: Date;
   log: (line: Record<string, unknown>) => void;
 };
 
@@ -77,10 +83,25 @@ export type RunSummary = {
   noop: number;
   flaggedSettled: number;
   skipped: number;
-  totalDeltaUsdCents: number;
-  nhpOverCollectedUsdCents: number;
+  /** Sum of referrer shares taken away (positive cents). */
+  referrerSharesRemovedUsdCents: number;
+  /** Of which: shares zeroed because the payment was past the referrer term. */
+  referrerSharesZeroedUsdCents: number;
+  /** Over every non-skipped row: what was collected, what NHP retains, what v1.5 would have charged / kept. */
+  collectedUsdCents: number;
+  nhpRetainsUsdCents: number;
+  v15ChargeUsdCents: number;
+  v15NhpWouldKeepUsdCents: number;
+  nhpExcessUsdCents: number;
+  practitionerOverchargedUsdCents: number;
+  /** Rows whose v1.5 charge could not be priced (practitioner plan unknown); excluded from the totals above. */
+  unpricedRows: number;
+  /** What those unpriced rows collected and what NHP retains of it, so they are never silently absent. */
+  unpricedCollectedUsdCents: number;
+  unpricedNhpRetainsUsdCents: number;
   applied: number;
   alreadyApplied: number;
+  note: string;
 };
 
 const num = (v: unknown): number | null => (v === null || v === undefined ? null : Number(v));
@@ -101,8 +122,12 @@ function toDecision(r: LedgerRow): RepriceDecision {
     anchorAt: r.anchorAt,
     storedReferrerTermMonths: r.storedReferrerTermMonths,
     storedLeadTermMonths: r.storedLeadTermMonths,
+    plan: r.plan,
+    transferStatus: r.transferStatus,
     schedule: haveSchedule
       ? {
+          planASourcedBps: r.schedPlanASourcedBps ?? 0,
+          planBSourcedBps: r.schedPlanBSourcedBps ?? 0,
           referrerBps: r.schedReferrerBps as number,
           referralTotalBps: r.schedTotalBps as number,
           referrerTermMonths: r.schedReferrerTermMonths as number,
@@ -112,7 +137,16 @@ function toDecision(r: LedgerRow): RepriceDecision {
   });
 }
 
-export async function runReconcile(client: PgLike, opts: RunOptions): Promise<RunSummary> {
+export const SIGN_OFF_NOTE =
+  'Applying needs operator sign-off on nhpExcessUsdCents and practitionerOverchargedUsdCents: re-priced rows keep the old rule\'s collected fee with NHP.';
+
+export type Planned = { row: LedgerRow; decision: RepriceChange };
+
+/** SET read-only, verify, SELECT, decide, log. Never writes; the apply entry point reuses it. */
+export async function collectReconcile(
+  client: PgLike,
+  opts: RunOptions & { mode?: 'dry-run' | 'apply' },
+): Promise<{ summary: RunSummary; planned: Planned[] }> {
   // FIRST STATEMENT, ALWAYS: read-only by default for every statement that follows.
   await client.query('SET default_transaction_read_only = on');
   const shown = await client.query('SHOW default_transaction_read_only');
@@ -138,65 +172,73 @@ export async function runReconcile(client: PgLike, opts: RunOptions): Promise<Ru
     schedTotalBps: num(r.schedTotalBps),
     schedReferrerTermMonths: num(r.schedReferrerTermMonths),
     schedLeadTermMonths: num(r.schedLeadTermMonths),
+    schedPlanASourcedBps: num(r.schedPlanASourcedBps),
+    schedPlanBSourcedBps: num(r.schedPlanBSourcedBps),
+    plan: r.plan === null || r.plan === undefined ? null : String(r.plan),
+    transferStatus: r.transferStatus === null || r.transferStatus === undefined ? null : String(r.transferStatus),
   }));
 
   const summary: RunSummary = {
-    mode: opts.apply ? 'apply' : 'dry-run',
+    mode: opts.mode ?? 'dry-run',
     rows: rows.length,
     reprice: 0,
     noop: 0,
     flaggedSettled: 0,
     skipped: 0,
-    totalDeltaUsdCents: 0,
-    nhpOverCollectedUsdCents: 0,
+    referrerSharesRemovedUsdCents: 0,
+    referrerSharesZeroedUsdCents: 0,
+    collectedUsdCents: 0,
+    nhpRetainsUsdCents: 0,
+    v15ChargeUsdCents: 0,
+    v15NhpWouldKeepUsdCents: 0,
+    nhpExcessUsdCents: 0,
+    practitionerOverchargedUsdCents: 0,
+    unpricedRows: 0,
+    unpricedCollectedUsdCents: 0,
+    unpricedNhpRetainsUsdCents: 0,
     applied: 0,
     alreadyApplied: 0,
+    note: SIGN_OFF_NOTE,
   };
-  const toApply: Array<{ row: LedgerRow; decision: RepriceChange }> = [];
+  const planned: Planned[] = [];
 
   for (const row of rows) {
     const d = toDecision(row);
     opts.log({ event: 'row', mode: summary.mode, ...d });
-    if (d.action === 'SKIP') summary.skipped += 1;
+    if (d.action === 'SKIP') {
+      summary.skipped += 1;
+      continue;
+    }
+    if (d.v15ChargeUsdCents === null || d.v15NhpWouldKeepUsdCents === null) {
+      summary.unpricedRows += 1;
+      summary.unpricedCollectedUsdCents += d.collectedUsdCents;
+      summary.unpricedNhpRetainsUsdCents += d.nhpRetainsUsdCents;
+    }
     else {
-      summary.nhpOverCollectedUsdCents += d.nhpOverCollectedUsdCents ?? 0;
-      if (d.action === 'NOOP') summary.noop += 1;
-      else if (d.action === 'FLAG_SETTLED') summary.flaggedSettled += 1;
-      else if (d.action === 'REPRICE') {
-        summary.reprice += 1;
-        summary.totalDeltaUsdCents += d.deltaUsdCents;
-        toApply.push({ row, decision: d });
-      }
+      summary.collectedUsdCents += d.collectedUsdCents;
+      summary.nhpRetainsUsdCents += d.nhpRetainsUsdCents;
+      summary.v15ChargeUsdCents += d.v15ChargeUsdCents;
+      summary.v15NhpWouldKeepUsdCents += d.v15NhpWouldKeepUsdCents;
+      summary.nhpExcessUsdCents += d.nhpExcessUsdCents ?? 0;
+      summary.practitionerOverchargedUsdCents += d.practitionerOverchargedUsdCents ?? 0;
+    }
+    if (d.action === 'NOOP') summary.noop += 1;
+    else if (d.action === 'FLAG_SETTLED') summary.flaggedSettled += 1;
+    else if (d.action === 'REPRICE') {
+      summary.reprice += 1;
+      summary.referrerSharesRemovedUsdCents += -d.deltaUsdCents;
+      if (d.newShareUsdCents === 0) summary.referrerSharesZeroedUsdCents += d.currentShareUsdCents;
+      planned.push({ row, decision: d });
     }
   }
 
-  if (opts.apply && toApply.length > 0) {
-    const { applyRepricing } = await import('./reconcile-referral-v15-apply');
-    const out = await applyRepricing(client, toApply, opts.now);
-    summary.applied = out.applied;
-    summary.alreadyApplied = out.alreadyApplied;
-  }
-
-  opts.log({ event: 'summary', ...summary });
-  return summary;
+  return { summary, planned };
 }
 
-/** Guards for the apply flag. Pure, so the CLI and the tests share them. */
-export function checkApplyGuards(args: {
-  argv: string[];
-  env: Record<string, string | undefined>;
-  host: string;
-  now: Date;
-}): string | null {
-  if (!args.argv.includes('--apply')) return null;
-  const today = args.now.toISOString().slice(0, 10);
-  if (args.env.RECONCILE_CONFIRM !== today) {
-    return `--apply needs RECONCILE_CONFIRM=${today} (today's date, UTC)`;
-  }
-  if (/\.neon\.tech$/i.test(args.host) && !args.argv.includes('--i-know-this-is-production')) {
-    return `host ${args.host} is a Neon host: --apply also needs --i-know-this-is-production`;
-  }
-  return null;
+export async function runReconcile(client: PgLike, opts: RunOptions): Promise<RunSummary> {
+  const { summary } = await collectReconcile(client, opts);
+  opts.log({ event: 'summary', ...summary });
+  return summary;
 }
 
 async function main(): Promise<void> {
@@ -205,23 +247,15 @@ async function main(): Promise<void> {
     console.error('RECONCILE_DATABASE_URL is required (no other variable is read).');
     process.exit(2);
   }
-  const host = new URL(url).hostname;
-  const apply = process.argv.includes('--apply');
-  const refusal = checkApplyGuards({ argv: process.argv, env: process.env, host, now: new Date() });
-  if (refusal) {
-    console.error(refusal);
+  if (process.argv.includes('--apply')) {
+    console.error('This entry point is read-only. Use scripts/reconcile-referral-v15-apply.ts to apply.');
     process.exit(2);
   }
-
   const { Client } = await import('pg');
   const client = new Client({ connectionString: url });
   await client.connect();
   try {
-    await runReconcile(client as unknown as PgLike, {
-      apply,
-      now: new Date(),
-      log: (line) => console.log(JSON.stringify(line)),
-    });
+    await runReconcile(client as unknown as PgLike, { log: (line) => console.log(JSON.stringify(line)) });
   } finally {
     await client.end();
   }

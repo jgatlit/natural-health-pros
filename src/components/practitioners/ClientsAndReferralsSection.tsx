@@ -119,7 +119,7 @@ export function ClientsAndReferralsSection({
           <h3 className="text-xs font-semibold">Refer a client to another practitioner</h3>
           <p className="text-xs text-muted-foreground">
             Earn {referral.referrerRateLabel} of what they book with that practitioner for{' '}
-            {referral.referrerTermMonths} months from that client&rsquo;s first payment.
+            {referral.referrerTermMonths} months from that client&rsquo;s first payment. Payouts are net of Whop&apos;s transfer fee.
           </p>
         </div>
 

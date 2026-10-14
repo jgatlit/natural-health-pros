@@ -21,12 +21,14 @@
  *   2. Only rows still owed can change: PAYABLE, HELD, EXPIRED_UNCLAIMED. A SETTLED row has already
  *      been paid: it is reported (FLAG_SETTLED, with the overpaid amount) and never touched.
  *   3. No anchor or no schedule: SKIP with the reason. A guess would move money.
- *   4. Over-collection from the practitioner is REPORTED, never repaired here. The old rule charged
- *      NHP's 20% where v1.5 charges 10%; for an in-term row the difference
- *      (collected - oldShare) - floor(gross x (totalBps - referrerBps) / 10000) is
- *      `nhpOverCollectedUsdCents`. Whether and how to refund it is an operator decision (spec 6).
- *      Past-term rows depend on the practitioner's plan, which the ledger row does not carry, so
- *      theirs is reported as null.
+ *   4. Rows with a REFERRER_TRANSFER fee-ledger entry that is not PENDING/BLOCKED (SENDING, FAILED,
+ *      SETTLED: a transfer may have left) are SKIPPED with IN_FLIGHT_TRANSFER.
+ *   5. THE MONEY IS REPORTED, NEVER REPAIRED. Zeroing a past-term share leaves the old rule's NHP
+ *      take AND the former referrer share with NHP, and the practitioner stays charged what the
+ *      old rule took (up to 40%, above the 30% cap). Per row: what was collected, what v1.5 would
+ *      have charged (in term: referralTotalBps; past the referrer term: the plan's sourced rate;
+ *      past the lead term: 0), what NHP retains vs would have kept, the excess, and the
+ *      practitioner's overcharge. Whether to refund is an OPERATOR decision (spec section 6).
  *
  * IDEMPOTENT: a repriced row's share equals its target, so a second pass decides NOOP.
  */
@@ -48,7 +50,18 @@ export type RepriceInput = {
   /** The client's anchor with the serving practitioner; null when no attribution row exists. */
   anchorAt: Date | null;
   /** The schedule's v1.5 numbers; null when the practitioner has no schedule. */
-  schedule: { referrerBps: number; referralTotalBps: number; referrerTermMonths: number; leadTermMonths: number } | null;
+  schedule: {
+    referrerBps: number;
+    referralTotalBps: number;
+    referrerTermMonths: number;
+    leadTermMonths: number;
+    planASourcedBps: number;
+    planBSourcedBps: number;
+  } | null;
+  /** The serving practitioner's plan ('PLAN_A' | 'PLAN_B'); needed only to price past-referrer-term rows. */
+  plan?: string | null;
+  /** Status of this row's REFERRER_TRANSFER fee-ledger entry, when one exists. */
+  transferStatus?: string | null;
   /** Term lengths stored on the client's attribution row win over the schedule (forward-only). */
   storedReferrerTermMonths?: number | null;
   storedLeadTermMonths?: number | null;
@@ -61,7 +74,20 @@ type RepriceDetail = {
   deltaUsdCents: number;
   inReferrerTerm: boolean;
   referrerTermEndsAt: string;
-  nhpOverCollectedUsdCents: number | null;
+  /**
+   * THE MONEY, per row. `collected` is what the practitioner was actually charged (old rule).
+   * `v15Charge` is what v1.5 would have charged for the same session (null when the plan is needed
+   * and unknown). `nhpRetains` is what NHP keeps after the re-priced referrer share
+   * (collected - newShare); `v15NhpWouldKeep` is what NHP would have kept under v1.5.
+   * `nhpExcess` = nhpRetains - v15NhpWouldKeep and `practitionerOvercharged` = collected - v15Charge,
+   * both floored at 0 and null when v15Charge is unknown. Nothing here repays anyone.
+   */
+  collectedUsdCents: number;
+  v15ChargeUsdCents: number | null;
+  nhpRetainsUsdCents: number;
+  v15NhpWouldKeepUsdCents: number | null;
+  nhpExcessUsdCents: number | null;
+  practitionerOverchargedUsdCents: number | null;
   reason: string;
 };
 
@@ -80,6 +106,14 @@ export function repriceReferralRow(input: RepriceInput): RepriceDecision {
     return { action: 'SKIP', id, reason: 'MALFORMED: non-integer cents' };
   }
 
+  if (input.transferStatus && input.transferStatus !== 'PENDING' && input.transferStatus !== 'BLOCKED') {
+    return {
+      action: 'SKIP',
+      id,
+      reason: `IN_FLIGHT_TRANSFER: fee-ledger transfer entry is ${input.transferStatus}; a transfer may have left, a human must look`,
+    };
+  }
+
   const s = input.schedule;
   const lead = input.storedLeadTermMonths && input.storedLeadTermMonths > 0 ? input.storedLeadTermMonths : s.leadTermMonths;
   const refRaw =
@@ -94,14 +128,18 @@ export function repriceReferralRow(input: RepriceInput): RepriceDecision {
   const ceiling = Math.floor((input.grossUsdCents * s.referrerBps) / BPS);
   const target = inReferrerTerm ? Math.min(current, ceiling) : 0;
 
-  const nhpOverCollected = inReferrerTerm
-    ? Math.max(
-        0,
-        input.collectedFeeUsdCents -
-          current -
-          Math.floor((input.grossUsdCents * (s.referralTotalBps - s.referrerBps)) / BPS),
-      )
-    : null;
+  // What v1.5 would have charged the practitioner for this same session.
+  const leadEnds = addMonths(input.anchorAt, lead);
+  const inLead = input.paidAt.getTime() < leadEnds.getTime();
+  let v15Charge: number | null;
+  if (!inLead) v15Charge = 0;
+  else if (inReferrerTerm) v15Charge = Math.floor((input.grossUsdCents * s.referralTotalBps) / BPS);
+  else if (input.plan === 'PLAN_A') v15Charge = Math.floor((input.grossUsdCents * s.planASourcedBps) / BPS);
+  else if (input.plan === 'PLAN_B') v15Charge = Math.floor((input.grossUsdCents * s.planBSourcedBps) / BPS);
+  else v15Charge = null;
+  const nhpRetains = input.collectedFeeUsdCents - target;
+  const v15NhpWouldKeep =
+    v15Charge === null ? null : Math.max(0, v15Charge - (inReferrerTerm ? Math.floor((input.grossUsdCents * s.referrerBps) / BPS) : 0));
 
   const base = {
     id,
@@ -110,7 +148,12 @@ export function repriceReferralRow(input: RepriceInput): RepriceDecision {
     deltaUsdCents: target - current,
     inReferrerTerm,
     referrerTermEndsAt: endsAt.toISOString(),
-    nhpOverCollectedUsdCents: nhpOverCollected,
+    collectedUsdCents: input.collectedFeeUsdCents,
+    v15ChargeUsdCents: v15Charge,
+    nhpRetainsUsdCents: nhpRetains,
+    v15NhpWouldKeepUsdCents: v15NhpWouldKeep,
+    nhpExcessUsdCents: v15NhpWouldKeep === null ? null : Math.max(0, nhpRetains - v15NhpWouldKeep),
+    practitionerOverchargedUsdCents: v15Charge === null ? null : Math.max(0, input.collectedFeeUsdCents - v15Charge),
   };
 
   if (target === current) return { action: 'NOOP', ...base, reason: 'ALREADY_AT_V15_SHARE' };

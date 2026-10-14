@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { repriceReferralRow, type RepriceInput } from '@/lib/referral-reprice';
 
-const SCHEDULE = { referrerBps: 2000, referralTotalBps: 3000, referrerTermMonths: 4, leadTermMonths: 8 };
+const SCHEDULE = { referrerBps: 2000, referralTotalBps: 3000, referrerTermMonths: 4, leadTermMonths: 8, planASourcedBps: 1000, planBSourcedBps: 3000 };
 const ANCHOR = new Date(Date.UTC(2026, 8, 1)); // 2026-09-01
 
 // Old rule: gross $100, referrer 20% = 2000c, NHP 20% = 2000c, so 4000c collected.
@@ -15,6 +15,7 @@ const base = (over: Partial<RepriceInput> = {}): RepriceInput => ({
   paidAt: new Date(Date.UTC(2026, 9, 1)),
   anchorAt: ANCHOR,
   schedule: SCHEDULE,
+  plan: 'PLAN_B',
   ...over,
 });
 
@@ -26,7 +27,12 @@ describe('repriceReferralRow', () => {
       currentShareUsdCents: 2000,
       newShareUsdCents: 2000,
       inReferrerTerm: true,
-      nhpOverCollectedUsdCents: 1000,
+      collectedUsdCents: 4000,
+      v15ChargeUsdCents: 3000,
+      nhpRetainsUsdCents: 2000,
+      v15NhpWouldKeepUsdCents: 1000,
+      nhpExcessUsdCents: 1000,
+      practitionerOverchargedUsdCents: 1000,
     });
   });
 
@@ -47,8 +53,45 @@ describe('repriceReferralRow', () => {
       newShareUsdCents: 0,
       deltaUsdCents: -2000,
       inReferrerTerm: false,
-      nhpOverCollectedUsdCents: null,
+      // Past the referrer term the old rule still took 40%. NHP keeps all 4000; v1.5 on Plan B
+      // would have charged 3000 (all NHP's). The practitioner was over-charged 1000.
+      collectedUsdCents: 4000,
+      nhpRetainsUsdCents: 4000,
+      v15ChargeUsdCents: 3000,
+      v15NhpWouldKeepUsdCents: 3000,
+      nhpExcessUsdCents: 1000,
+      practitionerOverchargedUsdCents: 1000,
     });
+  });
+
+  it('past the referrer term the v1.5 charge follows the PLAN (A = 10%), and is unknown without one', () => {
+    const late = new Date(Date.UTC(2027, 1, 1));
+    expect(repriceReferralRow(base({ paidAt: late, plan: 'PLAN_A' }))).toMatchObject({
+      v15ChargeUsdCents: 1000,
+      nhpExcessUsdCents: 3000,
+      practitionerOverchargedUsdCents: 3000,
+    });
+    expect(repriceReferralRow(base({ paidAt: late, plan: null }))).toMatchObject({
+      v15ChargeUsdCents: null,
+      nhpExcessUsdCents: null,
+    });
+  });
+
+  it('past the 8-month lead term v1.5 charges nothing: the whole collected fee is excess', () => {
+    const d = repriceReferralRow(base({ paidAt: new Date(Date.UTC(2027, 5, 1)) }));
+    expect(d).toMatchObject({ v15ChargeUsdCents: 0, nhpExcessUsdCents: 4000, practitionerOverchargedUsdCents: 4000 });
+  });
+
+  it('SKIPS a row whose transfer entry is in flight, failed or settled; PENDING / BLOCKED / none are fine', () => {
+    for (const transferStatus of ['SENDING', 'FAILED', 'SETTLED']) {
+      expect(repriceReferralRow(base({ referrerShareUsdCents: 2500, transferStatus }))).toMatchObject({
+        action: 'SKIP',
+        reason: expect.stringMatching(/IN_FLIGHT_TRANSFER/),
+      });
+    }
+    for (const transferStatus of ['PENDING', 'BLOCKED', null]) {
+      expect(repriceReferralRow(base({ referrerShareUsdCents: 2500, transferStatus })).action).toBe('REPRICE');
+    }
   });
 
   it('the referrer term end is EXCLUSIVE: exactly anchor + 4 months is outside, one ms before is inside', () => {

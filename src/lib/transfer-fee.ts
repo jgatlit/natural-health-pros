@@ -1,19 +1,27 @@
 /**
  * PAYEE ABSORBS WHOP'S TRANSFER FEE (spec v1.5 section 4, operator ruling 2026-10-14).
  *
- * The practitioner receiving a referral or affiliate share bears Whop's transfer charge. NHP never
- * pays it. This module is the ONE place that arithmetic lives; the referral settle and the
+ * The practitioner receiving a referral or affiliate share is meant to bear Whop's transfer
+ * charge. This module is the ONE place that arithmetic lives; the referral settle and the
  * affiliate settle both call `planTransfer()` and nothing else decides an amount.
  *
- * ASSUMPTION, STATED ONCE. We do not yet know on which side Whop charges parent -> sibling
- * transfers (a measured 3% applies to non-parent destinations; parent -> sibling is unmeasurable
- * until the parent is business-verified). So the side is ONE explicit config:
+ * ⚠️ THE GUARANTEE IS CONDITIONAL. NHP is kept whole ONLY IF `WHOP_TRANSFER_FEE_BPS` is at least
+ * Whop's real rate AND `WHOP_TRANSFER_FEE_MODE` matches Whop's real behaviour. Neither is known
+ * for parent -> sibling (the measured 3% is for non-parent destinations; parent -> sibling is
+ * unmeasurable until the parent is business-verified). Examples of how a wrong setting costs NHP:
+ *   - charged-to-sender with a configured 3% while Whop really bills 4%: NHP's outlay exceeds the
+ *     gross share by the difference;
+ *   - deducted-from-recipient while Whop really bills the sender on top: NHP pays the whole fee.
+ * So the first real $1 parent -> sibling transfer, measured, is a HARD ACTIVATION GATE. Do not set
+ * WHOP_TRANSFERS_ENABLED=true, and do not use the non-default mode, before it.
+ *
+ * The side Whop charges is ONE explicit config:
  *
  *   WHOP_TRANSFER_FEE_MODE = 'charged-to-sender'          (DEFAULT, the conservative one for NHP)
  *     Whop bills the SENDER on top of the amount sent, so NHP's outlay = S + fee(S). We therefore
- *     send S = the largest amount whose outlay does not exceed the gross share. The payee's net is
- *     S, and the fee recorded against them is gross - S (Whop's fee plus any rounding cent we
- *     keep). NHP's outlay is <= gross, i.e. NHP never pays a cent of fee.
+ *     send S = the largest amount whose outlay does not exceed the gross share (given the
+ *     configured rate). The payee's net is S, and the fee recorded against them is gross - S
+ *     (Whop's fee plus any rounding cent we keep).
  *   WHOP_TRANSFER_FEE_MODE = 'deducted-from-recipient'
  *     Whop deducts the fee from what the destination receives. We send the whole gross share; the
  *     payee receives gross - fee. Outlay = gross.
@@ -21,13 +29,9 @@
  *   WHOP_TRANSFER_FEE_BPS (DEFAULT 300 = 3%, measured for non-parent destinations; replace after
  *   the first real $1 transfer measures parent -> sibling).
  *
- * If the default mode is wrong the failure is SAFE in the direction that matters: if Whop actually
- * deducts from the recipient while we run charged-to-sender, the payee receives slightly less than
- * our recorded net (fee taken twice-ish) - which the first real transfer exposes and the operator
- * corrects before enabling. It can never leave NHP out of pocket.
- *
- * ROUNDING: the fee is rounded UP (ceil) in NHP's favour - NHP never absorbs a fraction of a cent.
- * Net is always gross - fee exactly, never negative. A share whose net would be <= 0 is NOT sent.
+ * ROUNDING: the fee is rounded UP (ceil), in NHP's favour, so a configured rate never under-recovers
+ * by a fraction of a cent. Net is always gross - fee exactly, never negative. A share whose net
+ * would be <= 0 is NOT sent.
  *
  * UNITS: everything here is CENTS. `/transfers` takes DOLLARS; the conversion is
  * `toTransferDollars()` in referral-payouts.ts, applied to `sendCents` only, at the boundary.

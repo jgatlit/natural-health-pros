@@ -506,6 +506,72 @@ describe('L2a: payee absorbs the transfer fee (referral path, mocked /transfers)
     expect(db.ledger.get('led_1')).toMatchObject({ state: 'PAYABLE' });
   });
 
+  it('MAJOR 1 sequence: flag on, ambiguous failure, flag off, flag on -> NO second transfer', async () => {
+    const db = fakeDb({ payable: [payableRow()] });
+    await settlePayableShares(db, {
+      transfer: async () => {
+        throw new Error('timeout after server accepted');
+      },
+      at: new Date(),
+    });
+    expect(Array.from(db.feeLedger.values())[0]).toMatchObject({ status: 'FAILED' });
+
+    delete process.env.WHOP_TRANSFERS_ENABLED; // the guard flaps closed: the park write runs
+    await settlePayableShares(db, { transfer: async () => ({ transferId: 'never' }), at: new Date() });
+    expect(Array.from(db.feeLedger.values())[0]).toMatchObject({ status: 'FAILED' }); // NOT downgraded
+
+    process.env.WHOP_TRANSFERS_ENABLED = 'true';
+    const { calls, go } = run(db);
+    await go();
+    expect(calls).toEqual([]);
+  });
+
+  it('a SENDING (crashed mid-transfer) or SETTLED fee row survives the park write, then is never re-claimed', async () => {
+    for (const status of ['SENDING', 'SETTLED']) {
+      const db = fakeDb({ payable: [payableRow()] });
+      db.feeLedger.set('REFERRER_TRANSFER:led_1', {
+        dedupeKey: 'REFERRER_TRANSFER:led_1',
+        kind: 'REFERRER_TRANSFER',
+        status,
+        amountUsdCents: 2000,
+      });
+      delete process.env.WHOP_TRANSFERS_ENABLED;
+      await settlePayableShares(db, { transfer: async () => ({ transferId: 'never' }), at: new Date() });
+      expect(db.feeLedger.get('REFERRER_TRANSFER:led_1')).toMatchObject({ status });
+      process.env.WHOP_TRANSFERS_ENABLED = 'true';
+      const { calls, go } = run(db);
+      await go();
+      expect(calls).toEqual([]);
+    }
+  });
+
+  it('a tiny-share park cannot downgrade a FAILED row either', async () => {
+    const db = fakeDb({ payable: [payableRow({ referrerShareUsdCents: 1 })] });
+    db.feeLedger.set('REFERRER_TRANSFER:led_1', {
+      dedupeKey: 'REFERRER_TRANSFER:led_1',
+      kind: 'REFERRER_TRANSFER',
+      status: 'FAILED',
+      amountUsdCents: 1,
+    });
+    const { go } = run(db);
+    await go();
+    expect(db.feeLedger.get('REFERRER_TRANSFER:led_1')).toMatchObject({ status: 'FAILED' });
+  });
+
+  it('in-loop guard: an unsendable share that slips past the query filter is neither claimed nor sent', async () => {
+    const db = fakeDb({ payable: [payableRow({ referrerShareUsdCents: 1 })] });
+    // A fake that ignores the share filter, so the row reaches the loop (a refund racing the query).
+    const all = Array.from(db.ledger.values());
+    db.referralLedgerEntry.findMany = async (args: { where?: { state?: string } }) =>
+      all.filter((r) => !args.where?.state || r.state === args.where.state);
+    const { calls, go } = run(db);
+    const res = await go();
+    expect(calls).toEqual([]);
+    expect(res.skipped).toBe(1);
+    // Parked by the tiny-share pass, never claimed: still BLOCKED, never SENDING.
+    expect(Array.from(db.feeLedger.values()).map((r) => r.status)).toEqual(['BLOCKED']);
+  });
+
   it('flag false: no transfer is made and a bad fee config is never read', async () => {
     delete process.env.WHOP_TRANSFERS_ENABLED;
     process.env.WHOP_TRANSFER_FEE_BPS = 'garbage';
