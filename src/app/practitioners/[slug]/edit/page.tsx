@@ -13,6 +13,7 @@ import { isLlmConfigured } from '@/lib/onboarding-draft';
 import { Card } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { CityField } from '@/components/practitioners/CityField';
+import { OutsideWorkToggle } from '@/components/practitioners/OutsideWorkToggle';
 import { UnsavedChangesBar } from '@/components/practitioners/UnsavedChangesBar';
 import {
   updatePractitioner,
@@ -33,6 +34,7 @@ import {
   inviteClients,
   referClientByEmail,
   createReferralLinkFor,
+  setOpenToOutsideWork,
 } from './actions';
 import { OfferingsEditor } from '@/components/practitioners/OfferingsEditor';
 import { resolveHeroLink, offeringsForLink, ctaLabelFor } from '@/lib/profile-ctas';
@@ -566,6 +568,14 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
             <p className="text-xs text-destructive">Display name is required.</p>
           </Card>
         )}
+        {searchParams.error === 'outside-work-required' && (
+          <Card className="border-destructive/30 bg-destructive/5 p-3">
+            <p className="text-xs text-destructive">
+              Please answer the question about outside work and collaboration. You can answer it
+              below under your profile, and change it any time.
+            </p>
+          </Card>
+        )}
         {searchParams.error === 'terms-required' && (
           <Card className="border-destructive/30 bg-destructive/5 p-3">
             <p className="text-xs text-destructive">
@@ -853,6 +863,11 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
             </div>
             <UnsavedChangesBar />
           </form>
+          <Separator className="my-5" />
+          <OutsideWorkToggle
+            initial={practitioner.openToOutsideWork}
+            action={setOpenToOutsideWork.bind(null, params.slug)}
+          />
         </Card>
 
         {practitioner.caseStudies.length > 0 && (

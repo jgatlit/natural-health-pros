@@ -364,6 +364,13 @@ model Practitioner {
   /// discovery AND out of booking, and hides the row from the admin list by default. Reversible.
   archivedAt DateTime?
 
+  /// "Open to outside work and collaboration" (v1.5 L1c). PRIVATE: read only by the owner's /edit
+  /// toggle and the admin list; never on the public profile, never in the Typesense document.
+  /// Existing rows are false by the column default; `openToOutsideWorkUpdatedAt` is null until
+  /// the practitioner has answered, so null means "never asked", not "no".
+  openToOutsideWork          Boolean   @default(false)
+  openToOutsideWorkUpdatedAt DateTime?
+
   /// Per-practitioner recruiter token: the value carried by `?nhpa=` on /join/<cohort>. Random,
   /// URL-safe, NEVER the id. Generated in app code for new rows; backfilled by the L0b migration.
   recruiterToken String?        @unique

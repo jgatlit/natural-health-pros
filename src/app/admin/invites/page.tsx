@@ -20,6 +20,7 @@ import {
 import { DeleteInviteButton } from './DeleteInviteButton';
 import { ConfirmActionButton } from './ConfirmActionButton';
 import { EditEmailControl } from './EditEmailControl';
+import { matchesOutsideWorkFilter, parseOutsideWorkFilter, type OutsideWorkFilter } from '@/lib/outside-work';
 
 export const dynamic = 'force-dynamic';
 
@@ -34,6 +35,7 @@ export default async function AdminInvitesPage({
   }
 
   const showArchived = searchParams?.archived === '1';
+  const outsideWorkFilter = parseOutsideWorkFilter(searchParams?.ow);
   const errorCode = typeof searchParams?.error === 'string' ? searchParams.error : null;
   const notice = typeof searchParams?.notice === 'string' ? searchParams.notice : null;
   const bulkCreated = typeof searchParams?.bulk_created === 'string' ? searchParams.bulk_created : null;
@@ -72,6 +74,7 @@ export default async function AdminInvitesPage({
               subscriptionStatus: true,
               delistedAt: true,
               archivedAt: true,
+              openToOutsideWork: true,
             },
           },
         },
@@ -104,6 +107,7 @@ export default async function AdminInvitesPage({
               subscriptionStatus: true,
               delistedAt: true,
               archivedAt: true,
+              openToOutsideWork: true,
             },
           },
         },
@@ -127,9 +131,23 @@ export default async function AdminInvitesPage({
       .map((p) => p!.id),
   );
   const archivedCount = archivedPractitionerIds.size;
-  const invitations = showArchived
+  const visibleInvitations = showArchived
     ? allInvitations
     : allInvitations.filter((inv) => !resolve(inv.email)?.practitioner?.archivedAt);
+  // "Open to outside work" filter. Rows with no profile can never match Open / Not open.
+  const invitations = visibleInvitations.filter((inv) =>
+    matchesOutsideWorkFilter(
+      outsideWorkFilter,
+      inv.acceptedByUser?.practitioner ?? resolve(inv.email)?.practitioner,
+    ),
+  );
+  const filterHref = (f: OutsideWorkFilter) => {
+    const q = new URLSearchParams();
+    if (showArchived) q.set('archived', '1');
+    if (f !== 'all') q.set('ow', f);
+    const qs = q.toString();
+    return qs ? `/admin/invites?${qs}` : '/admin/invites';
+  };
 
   const now = new Date();
 
@@ -288,7 +306,15 @@ export default async function AdminInvitesPage({
             </h2>
             {(archivedCount > 0 || showArchived) && (
               <Link
-                href={showArchived ? '/admin/invites' : '/admin/invites?archived=1'}
+                href={
+                  showArchived
+                    ? outsideWorkFilter === 'all'
+                      ? '/admin/invites'
+                      : `/admin/invites?ow=${outsideWorkFilter}`
+                    : outsideWorkFilter === 'all'
+                    ? '/admin/invites?archived=1'
+                    : `/admin/invites?archived=1&ow=${outsideWorkFilter}`
+                }
                 className="text-xs text-muted-foreground underline-offset-2 hover:underline"
               >
                 {showArchived
@@ -297,6 +323,32 @@ export default async function AdminInvitesPage({
               </Link>
             )}
           </div>
+          <nav
+            aria-label="Filter by open to outside work"
+            className="flex items-center gap-3 border-b px-5 py-2 text-xs"
+          >
+            <span className="text-muted-foreground">Open to outside work:</span>
+            {(
+              [
+                ['all', 'All'],
+                ['open', 'Open'],
+                ['not-open', 'Not open'],
+              ] as const
+            ).map(([f, label]) => (
+              <Link
+                key={f}
+                href={filterHref(f)}
+                aria-current={outsideWorkFilter === f ? 'true' : undefined}
+                className={
+                  outsideWorkFilter === f
+                    ? 'font-semibold underline underline-offset-2'
+                    : 'text-muted-foreground underline-offset-2 hover:underline'
+                }
+              >
+                {label}
+              </Link>
+            ))}
+          </nav>
           {invitations.length === 0 ? (
             <p className="px-5 py-8 text-center text-sm text-muted-foreground">
               No invitations yet. Send your first one above.
@@ -355,6 +407,15 @@ export default async function AdminInvitesPage({
                       <span className="whitespace-nowrap text-[10px] text-muted-foreground">
                         {trialLabel}
                       </span>
+                    )}
+                    {practitioner && (
+                      <Badge
+                        variant={practitioner.openToOutsideWork ? 'default' : 'outline'}
+                        className="whitespace-nowrap text-[10px]"
+                        title="Open to outside work and collaboration"
+                      >
+                        {practitioner.openToOutsideWork ? 'Open' : 'Not open'}
+                      </Badge>
                     )}
                     {status === 'pending' && (
                       <Badge variant="default" className="gap-1 text-[10px]">

@@ -228,6 +228,9 @@ export default async function OnboardingPage({ searchParams }: Props) {
         yearsInPractice: practitioner.yearsInPractice,
         telehealth: practitioner.telehealth ?? false,
         inPerson: practitioner.inPerson ?? false,
+        openToOutsideWork: practitioner.openToOutsideWorkUpdatedAt
+          ? practitioner.openToOutsideWork
+          : null,
       }}
       specialties={specialties.map((s) => ({ id: s.id, name: s.name }))}
       aliases={approvedAliases}
