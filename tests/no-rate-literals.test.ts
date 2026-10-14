@@ -111,3 +111,34 @@ describe('plan-card and referral copy contains no literal rate numbers', () => {
     expect(numbers.filter((n) => !allowed.has(n))).toEqual([]);
   });
 });
+
+describe('no literal plan price or rate in anything that sends email', () => {
+  // Review round 1: the trial-expiry email carried a hard-coded Plan A price that would silently
+  // drift the first time an admin saved a different one. Anything that mails a practitioner must
+  // take its numbers from the schedule.
+  const SENDERS = [
+    'src/app/api/cron/trial-sweep/route.ts',
+    'src/app/api/cron/booking-sweep/route.ts',
+    'src/lib/referral-notifications.ts',
+  ];
+
+  it('the senders it is meant to police still send mail (the list cannot go stale silently)', () => {
+    for (const rel of SENDERS) {
+      expect(read(rel), rel).toMatch(/sendEmail|html:/);
+    }
+  });
+
+  it.each(SENDERS)('%s states no literal price or percentage', (rel) => {
+    const src = code(read(rel));
+    expect(src, `${rel} has a literal price`).not.toMatch(/\$\d/);
+    expect(src, `${rel} has a literal percentage`).not.toMatch(/(?<![\d.])[1-9]\d*(\.\d+)?\s*%/);
+  });
+
+  it('no file in src/ quotes a plan price as a literal "$NN/mo"', () => {
+    const hits = files
+      .filter((f) => f.startsWith(join(ROOT, 'src')))
+      .filter((f) => /\$\d+(\.\d+)?\s*\/\s*(mo|month)/i.test(code(readFileSync(f, 'utf8'))))
+      .map((f) => relative(ROOT, f));
+    expect(hits).toEqual([]);
+  });
+});

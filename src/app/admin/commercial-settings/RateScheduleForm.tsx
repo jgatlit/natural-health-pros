@@ -12,7 +12,12 @@ import {
   type RateScheduleNumbers,
 } from '@/lib/rate-schedule';
 
-import { migrateRateScheduleCohort, saveRateSchedule, type SettingFormState } from './actions';
+import {
+  assignSchedulesToUnassigned,
+  migrateRateScheduleCohort,
+  saveRateSchedule,
+  type SettingFormState,
+} from './actions';
 
 function Button({ children }: { children: React.ReactNode }) {
   const { pending } = useFormStatus();
@@ -187,6 +192,36 @@ export function MigrateCohortForm({
           />
         </label>
         <Button>Migrate cohort</Button>
+      </div>
+      <Result state={state} />
+    </form>
+  );
+}
+
+export function AssignUnassignedForm({ count }: { count: number }) {
+  const [state, action] = useFormState<SettingFormState, FormData>(assignSchedulesToUnassigned, null);
+  return (
+    <form action={action} className="rounded-lg border border-red-300 bg-red-50 p-5">
+      <h2 className="text-sm font-semibold text-red-900">
+        {count} practitioner{count === 1 ? ' has' : 's have'} no rate schedule
+      </h2>
+      <p className="mt-1 max-w-2xl text-sm leading-relaxed text-red-800">
+        Checkout refuses them, and charges nothing, until they have one. This assigns the{' '}
+        <strong>current</strong> schedule to every practitioner who has none. It touches only
+        practitioners with no schedule, writes one history row each, and is recorded in the change
+        history. Running it twice changes nothing.
+      </p>
+      <div className="mt-3 flex flex-wrap items-end gap-3">
+        <label className="min-w-[16rem] flex-1 text-sm">
+          <span className="block font-medium text-red-900">Reason (required)</span>
+          <input
+            name="reason"
+            required
+            minLength={3}
+            className="mt-1 w-full rounded-md border border-slate-300 px-3 py-2 text-sm"
+          />
+        </label>
+        <Button>Assign current schedule to unassigned</Button>
       </div>
       <Result state={state} />
     </form>

@@ -12,7 +12,13 @@ import {
   annualPlanAPriceCents,
   type RateScheduleNumbers,
 } from '@/lib/rate-schedule';
-import { CohortMigrationError, migrateCohort, saveCurrentSchedule } from '@/lib/rate-schedules';
+import {
+  assignCurrentToUnassigned,
+  CohortMigrationError,
+  migrateCohort,
+  saveCurrentSchedule,
+} from '@/lib/rate-schedules';
+import { NoRateScheduleError } from '@/lib/rate-schedule';
 
 async function authorizeAdmin() {
   const session = await auth();
@@ -145,4 +151,59 @@ export async function migrateRateScheduleCohort(
     }
     return { ok: false, message: err instanceof Error ? err.message : 'Could not migrate.' };
   }
+}
+
+/**
+ * ASSIGN THE CURRENT SCHEDULE TO EVERY PRACTITIONER WHO HAS NONE (the in-app deploy-window remedy).
+ *
+ * Practitioners with no schedule are refused at checkout; this is how an admin fixes that without a
+ * manual production write. ADMIN only, reason required, audited, and idempotent: each update is
+ * guarded on `rateScheduleId IS NULL`, so it can never move someone who already has a schedule.
+ */
+export async function assignSchedulesToUnassigned(
+  _prev: SettingFormState,
+  formData: FormData,
+): Promise<SettingFormState> {
+  const session = await authorizeAdmin();
+  try {
+    const { assigned } = await prisma.$transaction((tx) =>
+      assignCurrentToUnassigned(tx, {
+        reason: String(formData.get('reason') ?? ''),
+        byUserId: session.user.id ?? null,
+      }),
+    );
+    revalidatePath('/admin/commercial-settings');
+    revalidatePath('/admin/invites');
+    return {
+      ok: true,
+      message:
+        assigned === 0
+          ? 'Nobody was unassigned, so nothing changed.'
+          : `Assigned the current schedule to ${assigned} practitioner${assigned === 1 ? '' : 's'}.`,
+    };
+  } catch (err) {
+    if (err instanceof CohortMigrationError || err instanceof NoRateScheduleError) {
+      return { ok: false, message: err.message };
+    }
+    return { ok: false, message: err instanceof Error ? err.message : 'Could not assign.' };
+  }
+}
+
+/**
+ * The per-practitioner version, for the practitioner's row on /admin/invites. Same guarantees:
+ * ADMIN only, reason required, audited, touches the row ONLY if its schedule is still NULL.
+ */
+export async function assignScheduleToPractitioner(formData: FormData): Promise<void> {
+  const session = await authorizeAdmin();
+  const practitionerId = String(formData.get('practitionerId') ?? '');
+  if (!practitionerId) throw new Error('Missing practitioner.');
+  await prisma.$transaction((tx) =>
+    assignCurrentToUnassigned(tx, {
+      reason: String(formData.get('reason') ?? ''),
+      byUserId: session.user.id ?? null,
+      practitionerId,
+    }),
+  );
+  revalidatePath('/admin/commercial-settings');
+  revalidatePath('/admin/invites');
 }

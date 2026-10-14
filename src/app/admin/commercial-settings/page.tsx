@@ -9,7 +9,7 @@ import { planComparison } from '@/lib/pricing-plans';
 import { getCurrentSchedule } from '@/lib/rate-schedules';
 import { scheduleNumbers } from '@/lib/rate-schedule';
 
-import { MigrateCohortForm, RateScheduleForm } from './RateScheduleForm';
+import { AssignUnassignedForm, MigrateCohortForm, RateScheduleForm } from './RateScheduleForm';
 import { SettingForm } from './SettingForm';
 
 export const dynamic = 'force-dynamic';
@@ -84,16 +84,21 @@ export default async function CommercialSettingsPage() {
       {!current ? (
         <section className="mt-6 rounded-lg border border-red-300 bg-red-50 p-5 text-sm text-red-800">
           <strong>No current rate schedule is configured.</strong> New sign-ups cannot be created and
-          checkout refuses practitioners without a schedule. Save one below.
+          checkout refuses practitioners without a schedule. Save one below, then assign it to anyone who has none.
         </section>
       ) : (
         <PlanTermsInForce schedule={current} />
       )}
 
-      {noSchedule > 0 && (
+      {noSchedule > 0 && current && (
+        <div className="mt-4">
+          <AssignUnassignedForm count={noSchedule} />
+        </div>
+      )}
+      {noSchedule > 0 && !current && (
         <p className="mt-4 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-800">
-          {noSchedule} practitioner{noSchedule === 1 ? ' has' : 's have'} no rate schedule. Checkout
-          refuses them until they are assigned one.
+          {noSchedule} practitioner{noSchedule === 1 ? ' has' : 's have'} no rate schedule. Save a current
+          schedule below first, then assign it to them here.
         </p>
       )}
 

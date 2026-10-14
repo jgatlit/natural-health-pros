@@ -194,14 +194,40 @@ async function reverseReferrerShare(
   if (!row || row.referrerShareUsdCents <= 0) return none;
 
   const refundUsdCents = Math.round(input.refundAmountUsdDollars * 100);
-  // PROPORTIONAL, and capped at what is owed. A refund can only ever take money back, so the
-  // reversal is bounded by the share — an over-large or mis-parsed refund amount must not produce
-  // a negative balance the settlement sweep would then try to transfer.
-  const reversal = proRataShare(row.referrerShareUsdCents, refundUsdCents, row.grossUsdCents);
-  if (reversal <= 0) return none;
-
   const alreadyPaid = row.state === 'SETTLED';
   const dedupeKey = `REFUND_REVERSAL:${input.refundId}:${row.id}`;
+
+  // THE ARITHMETIC RULE (also stated on `proRataShare`):
+  //   - every refund is measured against the ORIGINAL share, never against whatever is left. Measured
+  //     against the remainder, two 50% refunds of a fully refunded payment reversed 50% + 25% = 75%.
+  //   - each refund reverses floor(original x refund / gross), CAPPED at what is still un-reversed, so
+  //     the total can never exceed the share (never an over-reversal), and the shortfall against exact
+  //     pro-rata is under one cent per refund event (floor), always in the payee's favour.
+  //   - a refund of the whole payment (>= gross) reverses everything that remains.
+  // The original is rebuilt from the append-only ledger: for an unpaid row the stored share was
+  // decremented by earlier reversals, for a paid row it was not.
+  const prior = (await db.feeLedgerEntry.findMany({
+    where: { kind: 'REFUND_REVERSAL', whopPaymentId: input.whopPaymentId },
+    select: { dedupeKey: true, amountUsdCents: true, status: true },
+  })) as Array<{ dedupeKey: string; amountUsdCents: number }>;
+
+  // REDELIVERY: Whop sends the same refund 3x. The decrement below is not idempotent by itself, so
+  // a refund whose ledger entry already exists is answered from that entry and mutates NOTHING.
+  const mine = prior.find((e) => e.dedupeKey === dedupeKey);
+  if (mine) {
+    const done = -mine.amountUsdCents;
+    return {
+      reversedUsdCents: alreadyPaid ? 0 : done,
+      recoveryOwedUsdCents: alreadyPaid ? done : 0,
+      matched: true,
+    };
+  }
+
+  const reversedBefore = prior.reduce((sum, e) => sum - e.amountUsdCents, 0);
+  const original = alreadyPaid ? row.referrerShareUsdCents : row.referrerShareUsdCents + reversedBefore;
+  const remaining = original - reversedBefore;
+  const reversal = Math.min(remaining, proRataShare(original, refundUsdCents, row.grossUsdCents));
+  if (reversal <= 0) return none;
 
   if (!alreadyPaid) {
     await db.referralLedgerEntry.update({

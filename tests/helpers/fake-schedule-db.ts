@@ -13,6 +13,7 @@ export function fakeScheduleDb(seed: {
   schedules?: RateSchedule[];
   current?: string | null;
   practitioners?: Array<{ id: string; rateScheduleId: string | null }>;
+  clients?: Array<{ id: string; practitionerId: string; rateScheduleId: string | null }>;
 } = {}) {
   const schedules = new Map<string, Record<string, any>>();
   for (const s of seed.schedules ?? []) {
@@ -21,11 +22,16 @@ export function fakeScheduleDb(seed: {
   const settings = new Map<string, string>();
   if (seed.current) settings.set('current_rate_schedule_id', seed.current);
   const practitioners = new Map((seed.practitioners ?? []).map((p) => [p.id, { ...p }]));
+  const clients = new Map((seed.clients ?? []).map((c) => [c.id, { ...c }]));
   const changes: Record<string, any>[] = [];
   const assignments: Record<string, any>[] = [];
   let seq = 0;
 
+  /** Test hook: runs once, just before the NEXT guarded updateMany, to simulate a concurrent writer. */
+  const hooks: { beforeUpdate?: () => void } = {};
   const db = {
+    hooks,
+    clients,
     schedules,
     settings,
     practitioners,
@@ -36,12 +42,22 @@ export function fakeScheduleDb(seed: {
         if (args.where.id) return schedules.get(args.where.id) ?? null;
         return Array.from(schedules.values()).find((s) => s.contentHash === args.where.contentHash) ?? null;
       },
-      async create(args: any) {
-        const dup = Array.from(schedules.values()).some((s) => s.contentHash === args.data.contentHash);
-        if (dup) throw new Error('Unique constraint failed on contentHash');
-        const row = { id: `rs_${++seq}`, ...args.data };
-        schedules.set(row.id, row);
-        return row;
+      // NO `create`: a plain create that loses the unique-hash race aborts a Postgres transaction
+      // (25P02), so the code under test must use INSERT ... ON CONFLICT DO NOTHING (createMany with
+      // skipDuplicates). A fake that offered `create` would let a regression pass silently.
+      async createMany(args: any) {
+        let count = 0;
+        for (const data of args.data) {
+          const dup = Array.from(schedules.values()).some((x) => x.contentHash === data.contentHash);
+          if (dup) {
+            if (args.skipDuplicates) continue;
+            throw new Error('Unique constraint failed on contentHash');
+          }
+          const row = { id: `rs_${++seq}`, ...data };
+          schedules.set(row.id, row);
+          count += 1;
+        }
+        return { count };
       },
     },
     platformSetting: {
@@ -74,14 +90,40 @@ export function fakeScheduleDb(seed: {
       },
       async findMany(args: any) {
         return Array.from(practitioners.values())
-          .filter((p) => p.rateScheduleId === args.where.rateScheduleId)
+          .filter(
+            (p) =>
+              p.rateScheduleId === args.where.rateScheduleId && (!args.where.id || p.id === args.where.id),
+          )
           .map((p) => ({ id: p.id }));
       },
+      async count(args: any) {
+        return Array.from(practitioners.values()).filter((p) => p.rateScheduleId === args.where.rateScheduleId)
+          .length;
+      },
       async updateMany(args: any) {
+        if (hooks.beforeUpdate) {
+          const h = hooks.beforeUpdate;
+          hooks.beforeUpdate = undefined;
+          h();
+        }
+        const ids: string[] | null = args.where.id?.in ?? (typeof args.where.id === 'string' ? [args.where.id] : null);
         let count = 0;
         for (const p of Array.from(practitioners.values())) {
-          if (args.where.id.in.includes(p.id) && p.rateScheduleId === args.where.rateScheduleId) {
+          // Honours the guard (`rateScheduleId` must still equal the expected value), including NULL.
+          if ((!ids || ids.includes(p.id)) && p.rateScheduleId === args.where.rateScheduleId) {
             p.rateScheduleId = args.data.rateScheduleId;
+            count += 1;
+          }
+        }
+        return { count };
+      },
+    },
+    attributedClient: {
+      async updateMany(args: any) {
+        let count = 0;
+        for (const c of Array.from(clients.values())) {
+          if (args.where.practitionerId.in.includes(c.practitionerId) && c.rateScheduleId === args.where.rateScheduleId) {
+            c.rateScheduleId = args.data.rateScheduleId;
             count += 1;
           }
         }

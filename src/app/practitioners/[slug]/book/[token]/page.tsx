@@ -86,6 +86,8 @@ export default async function BookingFlowPage({ params }: Props) {
           whopCheckoutConfigId: true,
           purchaseUrl: true,
           priceUsdCents: true,
+          /// What the offering's own (hosted-link) Whop plan collects as an application fee.
+          applicationFeeCents: true,
         },
       },
       bookingLink: { select: { url: true, label: true } },
@@ -244,6 +246,23 @@ export default async function BookingFlowPage({ params }: Props) {
         });
         return null;
       });
+
+    // A FAILED MINT MAY NOT QUIETLY BECOME AN UNDER-COLLECTION. The hosted-link fallback pays into the
+    // offering's own plan, whose application fee was fixed when the offering was published
+    // (`applicationFeeCents`) - Whop cannot patch it - so it collects that fee, not this booking's.
+    // It is therefore offered only when the two are EQUAL (typically both 0: an own client, or a
+    // client past the term). Otherwise fail closed: no payment now, a logged error, and the buyer is
+    // told it is unavailable. (Pre-existing fallback; the spec s8 intent is to not strand a buyer,
+    // which this keeps for every booking the hosted plan prices correctly.)
+    if (!minted && fee && fee.applicationFeeUsdCents !== (offering!.applicationFeeCents ?? 0)) {
+      console.error('[booking] REFUSING payment - checkout mint failed and the hosted link would not collect the fee', {
+        intentId: intent.id,
+        practitionerId: intent.practitionerId,
+        feeCents: fee.applicationFeeUsdCents,
+        hostedPlanFeeCents: offering!.applicationFeeCents ?? 0,
+      });
+      feeRefused = true;
+    }
 
     if (minted && fee) {
       // Guarded write, not a bare update. Two requests can reach the mint before either stores

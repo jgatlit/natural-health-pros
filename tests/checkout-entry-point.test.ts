@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 
-import { V1 } from './helpers/rate-schedule';
+import { V1, V2 } from './helpers/rate-schedule';
 
 /**
  * THE REAL CHECKOUT ENTRY POINT (spec v1.5 §2 — FAIL CLOSED; §1 — the $100 table through the real
@@ -105,6 +105,7 @@ function intent(over: { rateScheduleId?: string | null; plan?: string | null; to
       whopCheckoutConfigId: 'cfg_1',
       purchaseUrl: HOSTED_URL,
       priceUsdCents: 10_000,
+      applicationFeeCents: 0,
     },
     bookingLink: null,
   };
@@ -187,6 +188,67 @@ describe('FAIL CLOSED — a practitioner with no rate schedule never reaches a c
 
     expect(mocks.createBookingCheckoutConfig).toHaveBeenCalledTimes(1);
     expect(html).toContain('data-checkout="ch_minted"');
+  });
+});
+
+describe('a FAILED Whop mint never becomes a quiet under-collection (review round 1, MINOR 7)', () => {
+  beforeEach(() => {
+    mocks.createBookingCheckoutConfig.mockRejectedValue(new Error('Whop 500'));
+  });
+
+  it('a booking that owes a fee is REFUSED: the hosted link would collect the offering plan’s fee, not this one', async () => {
+    const html = await render(intent({ plan: 'PLAN_B' })); // fee = $30, hosted plan fee = $0
+    expect(html).not.toContain(HOSTED_URL);
+    expect(html).not.toContain('data-checkout');
+    expect(html).toContain('Online payment isn&#x27;t available');
+    expect(mocks.snapshotUpsert).not.toHaveBeenCalled();
+    expect(errors).toHaveBeenCalledWith(
+      expect.stringContaining('hosted link would not collect the fee'),
+      expect.objectContaining({ feeCents: 3_000, hostedPlanFeeCents: 0 }),
+    );
+  });
+
+  it('a booking whose fee EQUALS the hosted plan’s (an own client: $0 = $0) still gets the hosted link', async () => {
+    mocks.listFindFirst.mockResolvedValue({ addedAt: new Date(NOW.getTime() - 30 * DAY) });
+    const html = await render(intent({ plan: 'PLAN_B' }));
+    expect(html).toContain(HOSTED_URL);
+    expect(html).not.toContain('Online payment isn&#x27;t available');
+  });
+
+  it('a hosted plan that carries a different fee is not treated as equivalent', async () => {
+    mocks.listFindFirst.mockResolvedValue({ addedAt: new Date(NOW.getTime() - 30 * DAY) });
+    const i = intent({ plan: 'PLAN_B' });
+    i.offering.applicationFeeCents = 500; // would over-collect from an own client
+    const html = await render(i);
+    expect(html).not.toContain(HOSTED_URL);
+  });
+});
+
+describe('an in-flight client keeps the schedule it was sold under, through the real page (review: the old test was tautological)', () => {
+  it('the practitioner has since moved to a cheaper schedule, but a client stored on V1 is still charged V1', async () => {
+    mocks.practitionerFindUnique.mockResolvedValue({ rateSchedule: V2 }); // Plan B 20% now
+    mocks.scheduleFindUnique.mockImplementation(async (a: { where: { id: string } }) =>
+      a.where.id === V1.id ? V1 : a.where.id === V2.id ? V2 : null,
+    );
+    mocks.attributedFindUnique.mockResolvedValue({
+      owner: 'NHP',
+      decidedAt: new Date(NOW.getTime() - 40 * DAY),
+      referrerPractitionerId: null,
+      termAnchorAt: new Date(NOW.getTime() - 30 * DAY),
+      termEndsAt: new Date(NOW.getTime() + 200 * DAY),
+      termMonths: 8,
+      rateScheduleId: V1.id,
+    });
+    await render(intent({ plan: 'PLAN_B', rateScheduleId: V2.id }));
+    expect(mocks.createBookingCheckoutConfig.mock.calls[0][0].applicationFeeCents).toBe(3_000);
+    expect(mocks.snapshotUpsert.mock.calls[0][0].create.rateScheduleId).toBe(V1.id);
+
+    // A brand-new client of the same practitioner is priced on the new schedule.
+    mocks.createBookingCheckoutConfig.mockClear();
+    mocks.snapshotUpsert.mockClear();
+    mocks.attributedFindUnique.mockResolvedValue(null);
+    await render(intent({ plan: 'PLAN_B', rateScheduleId: V2.id }));
+    expect(mocks.createBookingCheckoutConfig.mock.calls[0][0].applicationFeeCents).toBe(2_000);
   });
 });
 

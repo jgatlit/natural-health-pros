@@ -2,6 +2,8 @@ import { describe, expect, it } from 'vitest';
 
 import {
   assignCurrentScheduleAtSignup,
+  assignCurrentToUnassigned,
+  countUnassigned,
   CohortMigrationError,
   findOrCreateSchedule,
   getCurrentSchedule,
@@ -59,21 +61,32 @@ describe('saving a schedule: find-by-hash or create (immutable rows)', () => {
     });
   });
 
-  it('loses a create race gracefully: the unique-hash loser returns the winner’s row', async () => {
+  it('loses a create race gracefully AND without a raising insert: ON CONFLICT DO NOTHING, then SELECT', async () => {
+    // Inside the admin action's $transaction a unique violation would abort the whole transaction
+    // (Postgres 25P02), so a catch-and-re-read cannot work. The fake has no `create` at all, and its
+    // createMany throws on a duplicate unless skipDuplicates is set - so this only passes if the code
+    // inserts with ON CONFLICT DO NOTHING.
     const db = seeded();
     const fields = { ...V1_NUMBERS, planASourcedBps: 900 };
-    // Simulate "someone else created it between my lookup and my create".
     const realFind = db.rateSchedule.findUnique;
     let lookups = 0;
     db.rateSchedule.findUnique = async (args: unknown) => {
       lookups += 1;
-      return lookups === 1 ? null : realFind(args);
+      // The first lookup misses; then "someone else" inserts before our insert runs.
+      if (lookups === 1) {
+        await db.rateSchedule.createMany({
+          data: [{ contentHash: rateScheduleContentHash(fields), label: 'Winner', ...fields }],
+        });
+        return null;
+      }
+      return realFind(args);
     };
-    await db.rateSchedule.create({ data: { contentHash: rateScheduleContentHash(fields), label: 'Winner', ...fields } });
 
     const { schedule, created } = await findOrCreateSchedule(db, fields, { label: 'Loser' });
     expect(created).toBe(false);
     expect(schedule.label).toBe('Winner');
+    expect(db.schedules.size).toBe(2);
+    expect((db.rateSchedule as Record<string, unknown>).create).toBeUndefined();
   });
 
   it('REFUSES an invalid schedule before touching the database — the cap cannot be bypassed', async () => {
@@ -252,6 +265,29 @@ describe('migrate cohort X → Y', () => {
     ).rejects.toBeInstanceOf(CohortMigrationError);
   });
 
+  it('writes assignment rows ONLY for practitioners it actually moved (a concurrent writer is not dragged along)', async () => {
+    const db = withV2();
+    // Between the member read and p2's guarded write, someone else moves p2.
+    const real = db.practitioner.updateMany;
+    let n = 0;
+    db.practitioner.updateMany = async (args: unknown) => {
+      n += 1;
+      if (n === 2) db.practitioners.get('p2')!.rateScheduleId = V2.id; // concurrent move, before p2's turn
+      return real(args);
+    };
+
+    const { moved } = await migrateCohort(db, {
+      fromScheduleId: V1.id,
+      toScheduleId: V2.id,
+      reason: 'racing migration',
+      byUserId: 'usr_admin',
+    });
+
+    expect(moved).toBe(1);
+    expect(db.assignments.map((a) => a.practitionerId)).toEqual(['p1']);
+    expect(JSON.parse(db.changes[0].newValue).moved).toBe(1);
+  });
+
   it('an empty source cohort moves nobody and records nothing', async () => {
     const db = fakeScheduleDb({ schedules: [V1, V2], current: V1.id, practitioners: [] });
     const { moved } = await migrateCohort(db, {
@@ -293,5 +329,79 @@ describe('resolvePaymentTerms — which schedule starts the clock', () => {
   it('then the current schedule — recording WHEN a clock starts, never what anyone is charged', async () => {
     const terms = await resolvePaymentTerms(withSnapshot(null), { bookingIntentId: 'bi', practitionerId: 'p3' });
     expect(terms).toEqual({ rateScheduleId: V1.id, leadTermMonths: 8, referrerTermMonths: 4 });
+  });
+});
+
+describe('assign the current schedule to UNASSIGNED practitioners (the in-app deploy-window remedy)', () => {
+  const unassigned = () =>
+    fakeScheduleDb({
+      schedules: [V1, V2],
+      current: V2.id,
+      practitioners: [
+        { id: 'a', rateScheduleId: null },
+        { id: 'b', rateScheduleId: null },
+        { id: 'c', rateScheduleId: V1.id },
+      ],
+      clients: [
+        { id: 'ca', practitionerId: 'a', rateScheduleId: null },
+        { id: 'cc', practitionerId: 'c', rateScheduleId: null },
+        { id: 'cc2', practitionerId: 'c', rateScheduleId: V1.id },
+      ],
+    });
+
+  it('counts the unassigned', async () => {
+    expect(await countUnassigned(unassigned())).toBe(2);
+  });
+
+  it('assigns the CURRENT schedule to NULL rows only, with an ADMIN_MIGRATION row each and one audit row', async () => {
+    const db = unassigned();
+    const r = await assignCurrentToUnassigned(db, { reason: 'deploy-window sign-ups', byUserId: 'usr_admin' });
+
+    expect(r).toEqual({ assigned: 2, scheduleId: V2.id });
+    expect(db.practitioners.get('a')!.rateScheduleId).toBe(V2.id);
+    expect(db.practitioners.get('b')!.rateScheduleId).toBe(V2.id);
+    expect(db.practitioners.get('c')!.rateScheduleId).toBe(V1.id); // untouched
+    expect(db.assignments).toEqual([
+      { practitionerId: 'a', rateScheduleId: V2.id, reason: 'ADMIN_MIGRATION', byUserId: 'usr_admin' },
+      { practitionerId: 'b', rateScheduleId: V2.id, reason: 'ADMIN_MIGRATION', byUserId: 'usr_admin' },
+    ]);
+    expect(db.changes).toHaveLength(1);
+    expect(db.changes[0]).toMatchObject({ key: 'rate_schedule_unassigned_assignment', changedByUserId: 'usr_admin' });
+    expect(JSON.parse(db.changes[0].newValue)).toMatchObject({ to: V2.id, assigned: 2, reason: 'deploy-window sign-ups' });
+  });
+
+  it('pins the newly assigned practitioners’ NULL-snapshot clients to the same schedule, and nobody else’s', async () => {
+    const db = unassigned();
+    await assignCurrentToUnassigned(db, { reason: 'deploy-window sign-ups', byUserId: 'usr_admin' });
+    expect(db.clients.get('ca')!.rateScheduleId).toBe(V2.id);
+    expect(db.clients.get('cc')!.rateScheduleId).toBeNull(); // practitioner c was not unassigned
+    expect(db.clients.get('cc2')!.rateScheduleId).toBe(V1.id);
+  });
+
+  it('is idempotent: a second run assigns nobody and writes nothing', async () => {
+    const db = unassigned();
+    await assignCurrentToUnassigned(db, { reason: 'first run', byUserId: 'a' });
+    const again = await assignCurrentToUnassigned(db, { reason: 'second run', byUserId: 'a' });
+    expect(again.assigned).toBe(0);
+    expect(db.assignments).toHaveLength(2);
+    expect(db.changes).toHaveLength(1);
+  });
+
+  it('a single practitioner can be assigned by id, and an already-assigned one is left alone', async () => {
+    const db = unassigned();
+    expect((await assignCurrentToUnassigned(db, { reason: 'just a', byUserId: 'x', practitionerId: 'a' })).assigned).toBe(1);
+    expect(db.practitioners.get('b')!.rateScheduleId).toBeNull();
+    expect((await assignCurrentToUnassigned(db, { reason: 'try c', byUserId: 'x', practitionerId: 'c' })).assigned).toBe(0);
+    expect(db.practitioners.get('c')!.rateScheduleId).toBe(V1.id);
+  });
+
+  it('REQUIRES a reason and a current schedule', async () => {
+    const db = unassigned();
+    await expect(assignCurrentToUnassigned(db, { reason: ' ', byUserId: 'x' })).rejects.toBeInstanceOf(CohortMigrationError);
+    expect(db.assignments).toEqual([]);
+    const none = fakeScheduleDb({ schedules: [V1], current: null, practitioners: [{ id: 'a', rateScheduleId: null }] });
+    await expect(assignCurrentToUnassigned(none, { reason: 'because', byUserId: 'x' })).rejects.toBeInstanceOf(
+      NoRateScheduleError,
+    );
   });
 });

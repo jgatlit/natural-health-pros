@@ -40,7 +40,7 @@ export type AssignmentReason = 'SIGNUP' | 'COHORT_LINK' | 'ADMIN_MIGRATION' | 'C
 export type RateScheduleDb = {
   rateSchedule: {
     findUnique(args: any): Promise<any>;
-    create(args: any): Promise<any>;
+    createMany(args: any): Promise<{ count: number }>;
   };
   platformSetting: {
     findUnique(args: any): Promise<any>;
@@ -62,6 +62,9 @@ export type PractitionerScheduleDb = {
 };
 
 export type CohortMigrationDb = RateScheduleDb & {
+  attributedClient: {
+    updateMany(args: any): Promise<{ count: number }>;
+  };
   practitioner: {
     findMany(args: any): Promise<Array<{ id: string }>>;
     updateMany(args: any): Promise<{ count: number }>;
@@ -154,21 +157,25 @@ export async function findOrCreateSchedule(
   const existing = (await db.rateSchedule.findUnique({ where: { contentHash } })) as ScheduleRow | null;
   if (existing) return { schedule: toRateSchedule(existing), created: false };
 
-  try {
-    const row = (await db.rateSchedule.create({
-      data: {
+  // INSERT ... ON CONFLICT DO NOTHING (`createMany` + `skipDuplicates`), then SELECT. A plain
+  // `create` that loses the unique-`contentHash` race raises a constraint violation, and inside the
+  // admin action's `$transaction` Postgres ABORTS the whole transaction on it (25P02) - so a
+  // catch-and-re-read cannot work there. `ON CONFLICT DO NOTHING` does not raise, so it is valid
+  // inside a transaction; `count` says whether this call inserted the row.
+  const { count } = await db.rateSchedule.createMany({
+    data: [
+      {
         contentHash,
         label: meta.label,
         ...numbers,
         createdByUserId: meta.createdByUserId ?? null,
       },
-    })) as ScheduleRow;
-    return { schedule: toRateSchedule(row), created: true };
-  } catch (err) {
-    const again = (await db.rateSchedule.findUnique({ where: { contentHash } })) as ScheduleRow | null;
-    if (again) return { schedule: toRateSchedule(again), created: false };
-    throw err;
-  }
+    ],
+    skipDuplicates: true,
+  });
+  const row = (await db.rateSchedule.findUnique({ where: { contentHash } })) as ScheduleRow | null;
+  if (!row) throw new Error('Rate schedule vanished between insert and read');
+  return { schedule: toRateSchedule(row), created: count > 0 };
 }
 
 /** Make a stored schedule the one new sign-ups get, and audit the change. */
@@ -300,32 +307,110 @@ export async function migrateCohort(
     where: { rateScheduleId: from.id },
     select: { id: true },
   });
-  const ids = members.map((m) => m.id);
-  if (ids.length === 0) return { moved: 0 };
+  const moved = await moveGuarded(db, members.map((m) => m.id), from.id, to.id, input.byUserId);
+  if (moved.length === 0) return { moved: 0 };
 
-  // Scoped on BOTH id and the old schedule, so a practitioner who moved between the read above and
-  // this write is not dragged along without an assignment row.
-  const { count } = await db.practitioner.updateMany({
-    where: { id: { in: ids }, rateScheduleId: from.id },
-    data: { rateScheduleId: to.id },
-  });
-  await db.rateScheduleAssignment.createMany({
-    data: ids.map((practitionerId) => ({
-      practitionerId,
-      rateScheduleId: to.id,
-      reason: 'ADMIN_MIGRATION',
-      byUserId: input.byUserId,
-    })),
-  });
   await db.platformSettingChange.create({
     data: {
       key: COHORT_MIGRATION_AUDIT_KEY,
       oldValue: from.id,
-      newValue: JSON.stringify({ to: to.id, moved: count, reason }),
+      newValue: JSON.stringify({ to: to.id, moved: moved.length, reason }),
       changedByUserId: input.byUserId,
     },
   });
-  return { moved: count };
+  return { moved: moved.length };
+}
+
+/**
+ * Move each practitioner from `fromId` (a schedule id, or null = unassigned) to `toId`, ONE GUARDED
+ * UPDATE EACH, and write an `ADMIN_MIGRATION` assignment row ONLY for those whose update actually
+ * matched. A practitioner who changed schedule between the read and the write (a concurrent
+ * migration, an assignment) matches nothing and gets neither a move nor a history row, so the
+ * history, the audit count and the data cannot disagree.
+ */
+async function moveGuarded(
+  db: CohortMigrationDb,
+  ids: string[],
+  fromId: string | null,
+  toId: string,
+  byUserId: string | null,
+): Promise<string[]> {
+  const moved: string[] = [];
+  for (const id of ids) {
+    const { count } = await db.practitioner.updateMany({
+      where: { id, rateScheduleId: fromId },
+      data: { rateScheduleId: toId },
+    });
+    if (count > 0) moved.push(id);
+  }
+  if (moved.length > 0) {
+    await db.rateScheduleAssignment.createMany({
+      data: moved.map((practitionerId) => ({
+        practitionerId,
+        rateScheduleId: toId,
+        reason: 'ADMIN_MIGRATION',
+        byUserId,
+      })),
+    });
+  }
+  return moved;
+}
+
+/** How many practitioners have no schedule (and are therefore refused at checkout). */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+export async function countUnassigned(db: { practitioner: { count(args: any): Promise<number> } }) {
+  return db.practitioner.count({ where: { rateScheduleId: null } });
+}
+
+export const UNASSIGNED_AUDIT_KEY = 'rate_schedule_unassigned_assignment';
+
+/**
+ * ASSIGN THE CURRENT SCHEDULE TO EVERY UNASSIGNED PRACTITIONER (the in-app deploy-window remedy).
+ *
+ * Touches ONLY rows whose `rateScheduleId` is NULL - each update is guarded on that, so it is
+ * idempotent and can never move a practitioner who already has a schedule. Reason required;
+ * writes one `ADMIN_MIGRATION` assignment per practitioner actually assigned and one audit row.
+ * Pass `practitionerId` to assign a single practitioner (the per-row action).
+ */
+export async function assignCurrentToUnassigned(
+  db: CohortMigrationDb,
+  input: { reason: string; byUserId: string | null; practitionerId?: string },
+): Promise<{ assigned: number; scheduleId: string }> {
+  const reason = input.reason.trim();
+  if (reason.length < 3) {
+    throw new CohortMigrationError('A reason is required to assign a schedule.');
+  }
+  const current = await requireCurrentSchedule(db);
+  assertRateScheduleValid(current);
+
+  const unassigned = await db.practitioner.findMany({
+    where: { rateScheduleId: null, ...(input.practitionerId ? { id: input.practitionerId } : {}) },
+    select: { id: true },
+  });
+  const moved = await moveGuarded(db, unassigned.map((p) => p.id), null, current.id, input.byUserId);
+  if (moved.length > 0) {
+    // Their existing clients have no schedule snapshot either (nothing could be pinned while the
+    // practitioner had none). Pin them to the schedule just assigned - the same one the fee path
+    // would fall back to - so a later cohort migration cannot re-price them. NULL rows only.
+    await db.attributedClient.updateMany({
+      where: { practitionerId: { in: moved }, rateScheduleId: null },
+      data: { rateScheduleId: current.id },
+    });
+    await db.platformSettingChange.create({
+      data: {
+        key: UNASSIGNED_AUDIT_KEY,
+        oldValue: null,
+        newValue: JSON.stringify({
+          to: current.id,
+          assigned: moved.length,
+          reason,
+          ...(input.practitionerId ? { practitionerId: input.practitionerId } : {}),
+        }),
+        changedByUserId: input.byUserId,
+      },
+    });
+  }
+  return { assigned: moved.length, scheduleId: current.id };
 }
 
 /**

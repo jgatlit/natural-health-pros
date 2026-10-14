@@ -254,6 +254,11 @@ export function whopApplicationFeeCents(
 /**
  * Pro-rata slice of one share for a (possibly partial) refund, floored. Shared by every refund
  * path so the referrer, the affiliate and NHP are reversed by the same arithmetic.
+ *
+ * THE RULE: `floor(share x refund / gross)`, and the whole share once a single refund covers the
+ * gross. Callers measure against the ORIGINAL share and cap the running total at that share, so a
+ * sequence of partial refunds can never reverse MORE than the share (no over-reversal), and falls
+ * short of exact pro-rata by under one cent per refund event, always in the payee's favour.
  */
 export function proRataShare(shareUsdCents: number, refundedUsdCents: number, grossUsdCents: number): number {
   if (shareUsdCents <= 0 || refundedUsdCents <= 0) return 0;

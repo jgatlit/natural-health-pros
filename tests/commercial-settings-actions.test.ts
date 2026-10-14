@@ -145,3 +145,69 @@ describe('migrateRateScheduleCohort', () => {
     expect(db().changes).toEqual([]);
   });
 });
+
+describe('assignSchedulesToUnassigned / assignScheduleToPractitioner (the in-app remedy for a NULL schedule)', () => {
+  beforeEach(() => {
+    state.db = fakeScheduleDb({
+      schedules: [V1, V2],
+      current: V2.id,
+      practitioners: [
+        { id: 'a', rateScheduleId: null },
+        { id: 'b', rateScheduleId: null },
+        { id: 'c', rateScheduleId: V1.id },
+      ],
+    });
+  });
+
+  const fd = (over: Record<string, string> = {}) => {
+    const f = new FormData();
+    f.set('reason', 'deploy-window sign-ups');
+    for (const [k, v] of Object.entries(over)) f.set(k, v);
+    return f;
+  };
+
+  it('is ADMIN only', async () => {
+    state.role = 'PRACTITIONER';
+    await expect(actions.assignSchedulesToUnassigned(null, fd())).rejects.toThrow(/REDIRECT/);
+    await expect(actions.assignScheduleToPractitioner(fd({ practitionerId: 'a' }))).rejects.toThrow(/REDIRECT/);
+    expect(db().practitioners.get('a')!.rateScheduleId).toBeNull();
+  });
+
+  it('requires a reason and changes nothing without one', async () => {
+    const r = await actions.assignSchedulesToUnassigned(null, fd({ reason: '' }));
+    expect(r?.ok).toBe(false);
+    expect(r?.message).toMatch(/reason/i);
+    expect(db().practitioners.get('a')!.rateScheduleId).toBeNull();
+    expect(db().changes).toEqual([]);
+  });
+
+  it('assigns the current schedule to NULL rows only, audited, and is idempotent', async () => {
+    const r = await actions.assignSchedulesToUnassigned(null, fd());
+    expect(r?.ok).toBe(true);
+    expect(r?.message).toMatch(/2 practitioners/);
+    expect(db().practitioners.get('a')!.rateScheduleId).toBe(V2.id);
+    expect(db().practitioners.get('c')!.rateScheduleId).toBe(V1.id);
+    expect(db().assignments.map((x) => x.reason)).toEqual(['ADMIN_MIGRATION', 'ADMIN_MIGRATION']);
+    expect(db().changes).toHaveLength(1);
+
+    const again = await actions.assignSchedulesToUnassigned(null, fd());
+    expect(again?.message).toMatch(/nothing changed/);
+    expect(db().assignments).toHaveLength(2);
+  });
+
+  it('the per-practitioner action assigns exactly that practitioner and never an assigned one', async () => {
+    await actions.assignScheduleToPractitioner(fd({ practitionerId: 'a' }));
+    expect(db().practitioners.get('a')!.rateScheduleId).toBe(V2.id);
+    expect(db().practitioners.get('b')!.rateScheduleId).toBeNull();
+
+    await actions.assignScheduleToPractitioner(fd({ practitionerId: 'c' }));
+    expect(db().practitioners.get('c')!.rateScheduleId).toBe(V1.id);
+  });
+
+  it('with no current schedule it refuses with a clear message', async () => {
+    state.db = fakeScheduleDb({ schedules: [V1], current: null, practitioners: [{ id: 'a', rateScheduleId: null }] });
+    const r = await actions.assignSchedulesToUnassigned(null, fd());
+    expect(r?.ok).toBe(false);
+    expect(r?.message).toMatch(/No rate schedule/);
+  });
+});

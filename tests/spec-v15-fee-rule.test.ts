@@ -344,15 +344,10 @@ describe('spec v1.5 §1 pricing, snapshots, recruiter, refunds, fail-closed', ()
     expect(api.annualPlanAPriceCents(V1)).toBe(37_440);
   });
 
-  it('a later schedule change leaves an in-term client fee unchanged (snapshot carries the schedule)', () => {
-    const before = call(rows[1], 'PLAN_B', true, V1);
-    expect(before.rateScheduleId).toBe('rs_v1');
-    // A snapshot re-resolved against the schedule it was minted under is unchanged; only a NEW
-    // schedule passed explicitly yields a different number.
-    const v2: RateScheduleFields = { ...V1, id: 'rs_v2', planBSourcedBps: 2500 };
-    expect(call(rows[1], 'PLAN_B', true, V1)).toEqual(before);
-    expect(call(rows[1], 'PLAN_B', true, v2).nhpFeeUsdCents).toBe(2500);
-  });
+  // (The "a later schedule change leaves an in-term client's fee unchanged" case that lived here
+  // passed the schedule in explicitly, so it proved nothing. The real property - the client row's
+  // stored schedule id beats the practitioner's current one - is tested through the real snapshot
+  // path in booking-fee.test.ts and through the real checkout page in checkout-entry-point.test.ts.)
 
   it('recruiter is first-wins and immutable', () => {
     expect(api.recordRecruiter(null, 'prac_R')).toBe('prac_R');

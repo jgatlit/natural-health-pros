@@ -46,6 +46,7 @@ function fake(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       async update(args: any) {
         updates.push(args.data);
+        if (row) Object.assign(row, args.data); // the stored share really shrinks, as in Postgres
         return { ...row, ...args.data };
       },
     },
@@ -67,8 +68,8 @@ function fake(
       },
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       async findMany(args: any) {
-        return [...preexisting, ...ledger].filter(
-          (l) => l.kind === args.where.kind && l.bookingIntentId === args.where.bookingIntentId,
+        return [...preexisting, ...ledger].filter((l) =>
+          Object.entries(args.where as Record<string, unknown>).every(([k, v]) => l[k] === v),
         );
       },
     },
@@ -342,5 +343,74 @@ describe('reverseReferralOnRefund — the recruiting affiliate share (spec v1.5)
       at: PAID_AT,
     });
     expect(result.affiliateReversedUsdCents).toBe(0);
+  });
+});
+
+
+/**
+ * REFUND ARITHMETIC (review round 1, MINOR 6). The rule: every refund is measured against the
+ * ORIGINAL share; each reverses floor(original x refund / gross), capped at what is still
+ * un-reversed. So the total never exceeds the share, and falls short of exact pro-rata by under one
+ * cent per refund event, in the payee's favour. A redelivered refund changes nothing.
+ */
+describe('reverseReferralOnRefund — cumulative partial refunds', () => {
+  const refund = (db: ReturnType<typeof fake>, dollars: number, id: string, pay = 'pay_1') =>
+    reverseReferralOnRefund(db, { whopPaymentId: pay, refundAmountUsdDollars: dollars, refundId: id, at: PAID_AT });
+
+  it('two 50% refunds reverse the WHOLE share (they used to reverse 50% then 25%)', async () => {
+    const row = entry();
+    const db = fake(row);
+    const a = await refund(db, 50, 'r1');
+    const b = await refund(db, 50, 'r2');
+
+    expect(a.reversedUsdCents).toBe(1_000);
+    expect(b.reversedUsdCents).toBe(1_000);
+    expect(row.referrerShareUsdCents).toBe(0);
+  });
+
+  it('a REDELIVERED refund does not shrink the stored share a second time', async () => {
+    const row = entry();
+    const db = fake(row);
+    const first = await refund(db, 25, 'r1');
+    const replay = await refund(db, 25, 'r1');
+    const replay2 = await refund(db, 25, 'r1');
+
+    expect(first.reversedUsdCents).toBe(500);
+    expect(replay).toEqual(first);
+    expect(replay2).toEqual(first);
+    expect(row.referrerShareUsdCents).toBe(1_500);
+    expect(db.updates).toHaveLength(1);
+    expect(db.ledger).toHaveLength(1);
+  });
+
+  it('on an ALREADY-PAID share, repeated full refunds can never owe back more than was paid', async () => {
+    const row = entry({ state: 'SETTLED' });
+    const db = fake(row);
+    const a = await refund(db, 100, 'r1');
+    const b = await refund(db, 100, 'r2');
+
+    expect(a.recoveryOwedUsdCents).toBe(2_000);
+    expect(b.recoveryOwedUsdCents).toBe(0);
+    const owed = db.ledger.reduce((n, l) => n + -(l.amountUsdCents as number), 0);
+    expect(owed).toBe(2_000);
+  });
+
+  it('property: any split of refunds never over-reverses and under-reverses by < 1 cent per event', async () => {
+    const splits = [[3_333, 6_667], [1, 9_999], [2_500, 2_500, 2_500, 2_500], [3_334, 3_333, 3_333], [10_000], [9_999, 1]];
+    for (const share of [300, 2_000, 1_999, 7]) {
+      for (const split of splits) {
+        const row = entry({ referrerShareUsdCents: share });
+        const db = fake(row);
+        let total = 0;
+        for (const [i, cents] of Array.from(split.entries())) {
+          total += (await refund(db, cents / 100, `r${i}`)).reversedUsdCents;
+        }
+        const refunded = split.reduce((a, b) => a + b, 0);
+        const exact = (share * refunded) / 10_000;
+        expect(total, `${share}/${split}`).toBeLessThanOrEqual(share);
+        expect(total, `${share}/${split}`).toBeLessThanOrEqual(Math.ceil(exact));
+        expect(exact - total, `${share}/${split}`).toBeLessThan(split.length);
+      }
+    }
   });
 });
