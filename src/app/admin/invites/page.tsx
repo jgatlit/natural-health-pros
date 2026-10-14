@@ -47,6 +47,8 @@ export default async function AdminInvitesPage({
     typeof searchParams?.bulk_failed_list === 'string' ? searchParams.bulk_failed_list : null;
 
   const allInvitations = await prisma.invitation.findMany({
+    // Cohort sign-ups have their own list (/admin/signups); they would otherwise bury admin invites.
+    where: { cohortId: null },
     orderBy: { createdAt: 'desc' },
     take: 50,
     include: {

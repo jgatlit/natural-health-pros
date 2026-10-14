@@ -364,6 +364,18 @@ model Practitioner {
   /// discovery AND out of booking, and hides the row from the admin list by default. Reversible.
   archivedAt DateTime?
 
+  /// Per-practitioner recruiter token: the value carried by `?nhpa=` on /join/<cohort>. Random,
+  /// URL-safe, NEVER the id. Generated in app code for new rows; backfilled by the L0b migration.
+  recruiterToken String?        @unique
+  /// Who brought this practitioner in. IMMUTABLE and FIRST-WINS: written once, inside the create
+  /// at /onboarding, and by no other code path (tests/recruiter.test.ts pins that).
+  recruitedById  String?
+  recruitedBy    Practitioner?  @relation("Recruited", fields: [recruitedById], references: [id], onDelete: SetNull)
+  recruits       Practitioner[] @relation("Recruited")
+  recruitedAt    DateTime?
+  /// JOIN_LINK | ADMIN. Plain text, not an enum, so a later channel needs no enum migration.
+  recruitedVia   String?
+
   whopMembershipId            String? @unique // membership on our own $49/mo Whop product
   /// Per-practitioner checkout for the monthly listing plan, minted once and reused. Carries
   /// metadata.practitioner_id so the webhook attributes payment directly instead of matching on
@@ -739,21 +751,43 @@ model WhopWebhookEvent {
 
 // Wedge 2A — practitioner invitation system
 model Invitation {
-  id               String    @id @default(cuid())
-  token            String    @unique
+  id               String        @id @default(cuid())
+  token            String        @unique
   email            String
   invitedById      String?
-  invitedBy        User?     @relation("InvitedBy", fields: [invitedById], references: [id])
+  invitedBy        User?         @relation("InvitedBy", fields: [invitedById], references: [id])
   expiresAt        DateTime
   acceptedAt       DateTime?
   acceptedByUserId String?
   /// Relation added so /admin/invites can reach the practitioner behind an accepted invite
   /// (for the Reset-trial action). Previously a bare String with no relation.
-  acceptedByUser   User?     @relation("AcceptedBy", fields: [acceptedByUserId], references: [id])
-  createdAt        DateTime  @default(now())
+  acceptedByUser   User?         @relation("AcceptedBy", fields: [acceptedByUserId], references: [id])
+  createdAt        DateTime      @default(now())
+  /// Set when this row was minted by a /join/<cohort> sign-up rather than by an admin. The
+  /// onboarding gate treats it exactly like any other invitation.
+  cohortId         String?
+  cohort           SignupCohort? @relation(fields: [cohortId], references: [id], onDelete: SetNull)
+  /// The `?nhpa=` recruiter token captured (first-wins cookie) when the cohort sign-up was
+  /// requested, so it survives opening the magic link on a different device than the form.
+  recruiterToken   String?
 
   @@index([email])
   @@index([acceptedAt])
+  @@index([cohortId])
+}
+
+/// An open sign-up cohort behind /join/<slug>. A cohort link grants the same 90-day pilot an admin
+/// invite does; there is no cohort-less public sign-up.
+model SignupCohort {
+  id             String       @id @default(cuid())
+  slug           String       @unique
+  label          String
+  enabled        Boolean      @default(true)
+  grantsPilot    Boolean      @default(true)
+  /// Reserved for the rate-schedule lane; unused here.
+  rateScheduleId String?
+  createdAt      DateTime     @default(now())
+  invitations    Invitation[]
 }
 
 /// Practitioner self-serve email change, gated on proving control of the NEW address before

@@ -1,3 +1,4 @@
+import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
@@ -9,6 +10,8 @@ import { OnboardingForm } from '@/components/practitioners/OnboardingForm';
 import { formatBpsAsPercent, planComparison } from '@/lib/pricing-plans';
 import { crossReferralRates } from '@/lib/referral-fees';
 import { loadSettings } from '@/lib/platform-settings';
+import { newRecruiterToken, recruitedFields, resolveRecruiterId, RECRUITER_DISCLOSURE } from '@/lib/recruiter';
+import { RECRUITER_COOKIE, verifyRecruiterCookie } from '@/lib/recruiter-cookie';
 
 type Props = { searchParams: { invitation?: string } };
 
@@ -124,8 +127,29 @@ export default async function OnboardingPage({ searchParams }: Props) {
       trialEndsAt = new Date();
       trialEndsAt.setUTCDate(trialEndsAt.getUTCDate() + TRIAL_DAYS);
     }
+    // Recruiter (spec §3): the token captured at /join (stored on the invitation, so it survives
+    // opening the link on another device), else the first-wins cookie. Resolved against the
+    // database now; unknown / self / archived recruiters are ignored. Written here, in the create,
+    // and nowhere else — so it can never be changed later.
+    const recruiterToken =
+      invitation.recruiterToken ??
+      (await verifyRecruiterCookie(
+        cookies().get(RECRUITER_COOKIE)?.value,
+        process.env.AUTH_SECRET,
+        Date.now(),
+      ));
+    const recruiterId = await resolveRecruiterId(prisma, recruiterToken, session.user.id);
+
     practitioner = await prisma.practitioner.create({
-      data: { userId: session.user.id, slug, displayName, acceptedAt: new Date(), trialEndsAt },
+      data: {
+        userId: session.user.id,
+        slug,
+        displayName,
+        acceptedAt: new Date(),
+        trialEndsAt,
+        recruiterToken: newRecruiterToken(),
+        ...recruitedFields(recruiterId, new Date()),
+      },
       include: withSpecialties,
     });
 
@@ -192,6 +216,7 @@ export default async function OnboardingPage({ searchParams }: Props) {
       aliases={approvedAliases}
       initialSpecialties={initialSpecialties}
       termsAcceptedAt={practitioner.user.termsAcceptedAt}
+      recruiterDisclosure={practitioner.recruitedById ? RECRUITER_DISCLOSURE : null}
       planTerms={{
         plans: planComparison().cards,
         termMonths: leadAttributionTermMonths,

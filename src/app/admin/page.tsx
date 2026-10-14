@@ -26,6 +26,7 @@ export default async function AdminIndex() {
     pendingSpecialties,
     held,
     attributions,
+    cohortSignups,
   ] = await Promise.all([
     prisma.invitation.count({
       where: { acceptedAt: null, expiresAt: { gt: new Date() } },
@@ -40,6 +41,7 @@ export default async function AdminIndex() {
       _count: true,
     }),
     prisma.attributedClient.count(),
+    prisma.invitation.count({ where: { cohortId: { not: null } } }),
   ]);
 
   const heldShares = held._count;
@@ -89,6 +91,15 @@ export default async function AdminIndex() {
           count: heldShares,
           countLabel: 'shares held',
           description: 'Plan terms in force, the attribution term and the referral hold.',
+          configured: true,
+        },
+        {
+          icon: Mail,
+          title: 'Cohort sign-ups',
+          href: '/admin/signups',
+          count: cohortSignups,
+          countLabel: 'requested',
+          description: 'Who signed up through a /join link, their progress, and the on/off switch.',
           configured: true,
         },
         {
