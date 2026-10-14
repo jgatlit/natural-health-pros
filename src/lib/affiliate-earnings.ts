@@ -46,6 +46,12 @@ export type RecruiterEarnings = {
   accruedUsdCents: number;
   /** Actually paid out. */
   settledUsdCents: number;
+  /** Paid-out rows that recorded the transfer fee: gross share, the fee the payee bore, net paid. */
+  paidGrossUsdCents: number;
+  paidFeeUsdCents: number;
+  paidNetUsdCents: number;
+  /** How many settled rows carry that record (older rows predate it). */
+  paidWithFeeRecordCount: number;
 };
 
 /** Upper bound on rows summed in memory; a recruiter beyond this needs a SQL aggregate instead. */
@@ -75,6 +81,9 @@ export async function loadRecruiterEarnings(
         reversedUsdCents: true,
         transferUsdCents: true,
         holdUntil: true,
+        grossShareUsdCents: true,
+        transferFeeUsdCents: true,
+        netPaidUsdCents: true,
       },
       take: LEDGER_ROW_CAP,
     }) as Promise<
@@ -84,6 +93,9 @@ export async function loadRecruiterEarnings(
         reversedUsdCents: number;
         transferUsdCents: number | null;
         holdUntil: Date;
+        grossShareUsdCents?: number | null;
+        transferFeeUsdCents?: number | null;
+        netPaidUsdCents?: number | null;
       }>
     >,
   ]);
@@ -96,6 +108,10 @@ export async function loadRecruiterEarnings(
     pendingUsdCents: totals.pendingUsdCents,
     accruedUsdCents: totals.accruedUsdCents,
     settledUsdCents: totals.settledUsdCents,
+    paidGrossUsdCents: totals.paidGrossUsdCents,
+    paidFeeUsdCents: totals.paidFeeUsdCents,
+    paidNetUsdCents: totals.paidNetUsdCents,
+    paidWithFeeRecordCount: totals.paidWithFeeRecordCount,
   };
 }
 
@@ -105,6 +121,9 @@ export type LedgerAmounts = {
   reversedUsdCents: number;
   transferUsdCents: number | null;
   holdUntil: Date;
+  grossShareUsdCents?: number | null;
+  transferFeeUsdCents?: number | null;
+  netPaidUsdCents?: number | null;
 };
 
 export type LedgerTotals = {
@@ -115,6 +134,10 @@ export type LedgerTotals = {
   heldUsdCents: number;
   /** Paid out and since refunded: owed BACK by the recruiter. Recorded, never clawed. */
   recoveryOwedUsdCents: number;
+  paidGrossUsdCents: number;
+  paidFeeUsdCents: number;
+  paidNetUsdCents: number;
+  paidWithFeeRecordCount: number;
 };
 
 /**
@@ -128,6 +151,10 @@ export function summarizeEntries(entries: LedgerAmounts[], now: Date): LedgerTot
     settledUsdCents: 0,
     heldUsdCents: 0,
     recoveryOwedUsdCents: 0,
+    paidGrossUsdCents: 0,
+    paidFeeUsdCents: 0,
+    paidNetUsdCents: 0,
+    paidWithFeeRecordCount: 0,
   };
   for (const e of entries) {
     const net = Math.max(0, e.shareUsdCents - e.reversedUsdCents);
@@ -135,6 +162,12 @@ export function summarizeEntries(entries: LedgerAmounts[], now: Date): LedgerTot
       const paid = e.transferUsdCents ?? net;
       t.settledUsdCents += paid;
       t.recoveryOwedUsdCents += Math.max(0, paid - net);
+      if (e.grossShareUsdCents != null && e.transferFeeUsdCents != null && e.netPaidUsdCents != null) {
+        t.paidGrossUsdCents += e.grossShareUsdCents;
+        t.paidFeeUsdCents += e.transferFeeUsdCents;
+        t.paidNetUsdCents += e.netPaidUsdCents;
+        t.paidWithFeeRecordCount += 1;
+      }
     } else if (e.state === 'ACCRUED') {
       if (e.holdUntil.getTime() > now.getTime()) t.pendingUsdCents += net;
       else t.accruedUsdCents += net;

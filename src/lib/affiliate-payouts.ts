@@ -25,10 +25,22 @@
  *     automatic sweep as HELD, because retrying it blind could pay twice.
  *   - The claim also names `reversedUsdCents`, so a refund that lands between reading the row and
  *     claiming it makes the claim miss; the next run re-reads the reduced amount.
+ *
+ * PAYEE ABSORBS WHOP'S TRANSFER FEE (spec v1.5 s4): the amount SENT, the fee and the net all come
+ * from `planTransfer()` (transfer-fee.ts). The claim records grossShareUsdCents and
+ * transferFeeUsdCents; settlement records netPaidUsdCents. A share too small to cover the fee is
+ * never sent; it stays ACCRUED with `lastError` = BELOW_TRANSFER_FEE.
  */
 
 import { isPayable } from './referral-settlement';
 import { payoutsGuard, toTransferDollars, type TransferFn } from './referral-payouts';
+import {
+  loadTransferFeeConfig,
+  minimumSendableShareCents,
+  planTransfer,
+  BELOW_FEE_REASON,
+  type TransferFeeConfig,
+} from './transfer-fee';
 import { WhopNotConfigured } from './whop';
 import { RETIREMENT_SENTINEL, bookableWhere } from './practitioner-indexer';
 
@@ -55,6 +67,8 @@ export type AffiliateSettlementSummary = {
   failed: number;
   /** Rows taken out of the automatic sweep by a failure that cannot be proven harmless. */
   held: number;
+  /** Rows whose share cannot cover Whop's transfer fee: not sent, left ACCRUED with a recorded reason. */
+  belowFee: number;
   /** Set when nothing ran, with the reason. Null when settlement ran. */
   blocked: string | null;
 };
@@ -105,6 +119,7 @@ export async function settleAffiliateShares(
     skipped: 0,
     failed: 0,
     held: 0,
+    belowFee: 0,
     blocked: null,
   };
 
@@ -120,6 +135,30 @@ export async function settleAffiliateShares(
     return summary;
   }
 
+  let feeConfig: TransferFeeConfig;
+  try {
+    feeConfig = loadTransferFeeConfig();
+  } catch (err) {
+    summary.blocked = `transfer fee configuration invalid: ${err instanceof Error ? err.message : String(err)}`;
+    return summary;
+  }
+  const minShare = minimumSendableShareCents(feeConfig);
+
+  // Rows that can never cover the fee are not selected (they would crowd the oldest-first batch
+  // forever); their reason is recorded here, once, by a guarded update that never touches a row
+  // that already carries one.
+  const tiny = await db.affiliateLedgerEntry.updateMany({
+    where: {
+      state: 'ACCRUED',
+      settledAt: null,
+      holdUntil: { lte: opts.at },
+      shareUsdCents: { lt: minShare },
+      lastError: null,
+    },
+    data: { lastError: `${BELOW_FEE_REASON}: share is below the ${minShare}c minimum that covers the transfer fee` },
+  });
+  summary.belowFee += tiny.count;
+
   const rows = (await db.affiliateLedgerEntry.findMany({
     // ACCRUED only: HELD and SENDING are deliberately outside the automatic sweep (see above).
     // Past the hold, and only for a recruiter who can actually receive money today. A recruiter
@@ -128,6 +167,7 @@ export async function settleAffiliateShares(
       state: 'ACCRUED',
       settledAt: null,
       holdUntil: { lte: opts.at },
+      shareUsdCents: { gte: minShare },
       recruiterPractitioner: { whopCompanyId: { not: null }, whopPayoutsEnabled: true, ...bookableWhere() },
     },
     select: {
@@ -168,9 +208,21 @@ export async function settleAffiliateShares(
       continue;
     }
 
+    const plan = planTransfer(amount, feeConfig);
+    if (!plan.sendable) {
+      // Reached only when refunds shrank an otherwise sendable share. Recorded, not sent, no claim.
+      await db.affiliateLedgerEntry.updateMany({
+        where: { id: row.id, state: 'ACCRUED', reversedUsdCents: row.reversedUsdCents },
+        data: { lastError: plan.reason.slice(0, 500) },
+      });
+      summary.belowFee += 1;
+      summary.skipped += 1;
+      continue;
+    }
+
     let dollars: number;
     try {
-      dollars = toTransferDollars(amount);
+      dollars = toTransferDollars(plan.sendCents);
     } catch (err) {
       // A malformed amount reached the payout boundary: an upstream bug, not a transient fault.
       // Parked for a human rather than retried every hour.
@@ -190,8 +242,12 @@ export async function settleAffiliateShares(
       where: { id: row.id, state: 'ACCRUED', reversedUsdCents: row.reversedUsdCents },
       data: {
         state: 'SENDING',
-        transferUsdCents: amount,
+        transferUsdCents: plan.sendCents,
+        grossShareUsdCents: plan.grossCents,
+        transferFeeUsdCents: plan.feeCents,
+        netPaidUsdCents: null,
         transferAttempts: row.transferAttempts + 1,
+        lastError: null,
       },
     });
     if (claimed.count === 0) {
@@ -218,7 +274,13 @@ export async function settleAffiliateShares(
       // Back to ACCRUED only when we KNOW no transfer exists. Otherwise HELD: out of the sweep.
       await db.affiliateLedgerEntry.updateMany({
         where: { id: row.id, state: 'SENDING' },
-        data: { state: retryable ? 'ACCRUED' : 'HELD', lastError: message.slice(0, 500) },
+        data: {
+          state: retryable ? 'ACCRUED' : 'HELD',
+          lastError: message.slice(0, 500),
+          // A row going back to ACCRUED has had no transfer, so it carries no fee; a HELD row may
+          // have been sent, so what was claimed stays on it for the human who reconciles it.
+          ...(retryable ? { transferFeeUsdCents: null } : {}),
+        },
       });
       if (!retryable) summary.held += 1;
       console.error(
@@ -233,7 +295,13 @@ export async function settleAffiliateShares(
     try {
       const done = await db.affiliateLedgerEntry.updateMany({
         where: { id: row.id, state: 'SENDING' },
-        data: { state: 'SETTLED', settledAt: opts.at, whopTransferId: transferId, lastError: null },
+        data: {
+          state: 'SETTLED',
+          settledAt: opts.at,
+          whopTransferId: transferId,
+          netPaidUsdCents: plan.netCents,
+          lastError: null,
+        },
       });
       if (done.count === 0) {
         console.error(

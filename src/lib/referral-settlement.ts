@@ -281,6 +281,7 @@ export async function commitPaymentAttribution(
       clientEmailHash: emailHash,
       grossUsdCents: snapshot?.priceUsdCents ?? 0,
       referrerShareUsdCents,
+      grossShareUsdCents: referrerShareUsdCents,
       referrerRateBps: snapshot?.referrerFeeBps ?? 0,
       collectedFeeUsdCents: snapshot?.applicationFeeUsdCents ?? 0,
       state: referralState,

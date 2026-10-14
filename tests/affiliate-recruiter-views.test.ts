@@ -89,7 +89,7 @@ function fakeEarningsDb() {
   };
 }
 
-const row = (over: Partial<L>): L => ({
+const row = (over: Partial<L> & Record<string, unknown>): L => ({
   recruiterPractitionerId: R,
   recruitedPractitionerId: Y,
   state: 'ACCRUED',
@@ -155,6 +155,28 @@ describe('"Practitioners you brought in" — the recruiter’s card', () => {
     expect(html).toMatch(/data-testid="affiliate-pending">\$3\.00</);
     expect(html).toMatch(/data-testid="affiliate-accrued">\$5\.01</);
     expect(html).toMatch(/data-testid="affiliate-settled">\$3\.00</);
+  });
+
+  it('L2a: always says payouts are net of Whop’s transfer fee, and shows gross / fee / net only when recorded', async () => {
+    LEDGER = [row({ state: 'SETTLED', shareUsdCents: 300, transferUsdCents: 300 })];
+    let html = (await section(R, true))!;
+    expect(html).toContain('Payouts are net of Whop&#x27;s transfer fee.');
+    expect(html).not.toContain('affiliate-paid-breakdown');
+
+    LEDGER = [
+      row({
+        state: 'SETTLED',
+        shareUsdCents: 1234,
+        transferUsdCents: 1198,
+        grossShareUsdCents: 1234,
+        transferFeeUsdCents: 36,
+        netPaidUsdCents: 1198,
+      }),
+    ];
+    html = (await section(R, true))!;
+    expect(html).toMatch(/data-testid="affiliate-paid-gross">\$12\.34</);
+    expect(html).toMatch(/data-testid="affiliate-paid-fee">\$0\.36</);
+    expect(html).toMatch(/data-testid="affiliate-paid-net">\$11\.98</);
   });
 
   it('says payouts are not active while WHOP_TRANSFERS_ENABLED is not true, and stops saying it when it is', async () => {

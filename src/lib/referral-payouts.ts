@@ -31,6 +31,13 @@
  */
 
 import { isWhopPlatformsReady } from './whop';
+import {
+  BELOW_FEE_REASON,
+  loadTransferFeeConfig,
+  minimumSendableShareCents,
+  planTransfer,
+  type TransferFeeConfig,
+} from './transfer-fee';
 
 /** Whop validates this BEFORE direction, ownership or balance — measured 2026-09-19. */
 export const MAX_TRANSFER_USD_CENTS = 2_500_000;
@@ -139,18 +146,81 @@ export type SettlementSummary = {
 
 const TRANSFER_BATCH = 50;
 
+/**
+ * Record "not sent, and why" as a BLOCKED fee-ledger row WITHOUT ever downgrading a row that means
+ * something stronger. BLOCKED is claimable (payouts were merely off, or the share was too small
+ * then), whereas FAILED and SENDING mean "a transfer may have left: a human must look" and SETTLED
+ * means paid. An unconditional overwrite would turn the first group into the second and let the
+ * next sweep pay twice, so: create if missing, then change status ONLY from PENDING or BLOCKED.
+ */
+async function parkBlocked(
+  db: PayoutsDb,
+  dedupeKey: string,
+  v: { practitionerId: string; amountUsdCents: number; note: string },
+): Promise<void> {
+  await db.feeLedgerEntry.upsert({
+    where: { dedupeKey },
+    create: {
+      dedupeKey,
+      kind: 'REFERRER_TRANSFER',
+      status: 'BLOCKED',
+      practitionerId: v.practitionerId,
+      amountUsdCents: v.amountUsdCents,
+      note: v.note,
+    },
+    update: {},
+  });
+  await db.feeLedgerEntry.updateMany({
+    where: { dedupeKey, status: { in: ['PENDING', 'BLOCKED'] } },
+    data: { status: 'BLOCKED', note: v.note },
+  });
+}
+
 export async function settlePayableShares(
   db: PayoutsDb,
   opts: { transfer: TransferFn; at: Date },
 ): Promise<SettlementSummary> {
   const summary: SettlementSummary = { matched: 0, settled: 0, skipped: 0, failed: 0, blocked: null };
 
+  // PAYEE ABSORBS WHOP'S TRANSFER FEE (spec v1.5 s4). Read only when payouts are allowed, so a
+  // disabled run touches nothing and a bad fee env cannot break the BLOCKED bookkeeping.
+  const guardNow = payoutsGuard();
+  let feeConfig: TransferFeeConfig | null = null;
+  let minShare = 1;
+  if (guardNow.allowed) {
+    try {
+      feeConfig = loadTransferFeeConfig();
+      minShare = Math.max(1, minimumSendableShareCents(feeConfig));
+    } catch (err) {
+      summary.blocked = `transfer fee configuration invalid: ${err instanceof Error ? err.message : String(err)}`;
+      return summary;
+    }
+  }
+
+  if (feeConfig && minShare > 1) {
+    // Shares that can never cover the fee: recorded with their reason, never sent, and kept out of
+    // the main batch so they cannot crowd it.
+    const tiny = (await db.referralLedgerEntry.findMany({
+      where: { state: 'PAYABLE', settledAt: null, referrerShareUsdCents: { gt: 0, lt: minShare } },
+      select: { id: true, referrerShareUsdCents: true, referrerPractitionerId: true },
+      take: TRANSFER_BATCH,
+    })) as Array<{ id: string; referrerShareUsdCents: number; referrerPractitionerId: string }>;
+    for (const t of tiny) {
+      const note = `${BELOW_FEE_REASON}: share ${t.referrerShareUsdCents}c is below the ${minShare}c minimum that covers the transfer fee`;
+      await parkBlocked(db, `REFERRER_TRANSFER:${t.id}`, {
+        practitionerId: t.referrerPractitionerId,
+        amountUsdCents: t.referrerShareUsdCents,
+        note,
+      });
+    }
+  }
+
   const rows = (await db.referralLedgerEntry.findMany({
     // `gt: 0` is load-bearing, not defensive. A refund REDUCES an unpaid share in place, and a
     // fully refunded one lands at exactly zero — which `toTransferDollars` rejects, so without
     // this filter one refunded booking would throw on every sweep forever and take the rest of
     // the batch's error budget with it.
-    where: { state: 'PAYABLE', settledAt: null, referrerShareUsdCents: { gt: 0 } },
+    where: { state: 'PAYABLE', settledAt: null, referrerShareUsdCents: { gte: minShare } },
     select: {
       id: true,
       referrerShareUsdCents: true,
@@ -166,7 +236,7 @@ export async function settlePayableShares(
   }>;
   summary.matched = rows.length;
 
-  const guard = payoutsGuard();
+  const guard = guardNow;
 
   for (const row of rows) {
     const dedupeKey = `REFERRER_TRANSFER:${row.id}`;
@@ -177,17 +247,10 @@ export async function settlePayableShares(
       // invisible; this row is what makes "we owe N referrers M dollars and here is why it has
       // not moved" answerable from the database rather than from somebody's memory.
       summary.blocked = guard.reason;
-      await db.feeLedgerEntry.upsert({
-        where: { dedupeKey },
-        create: {
-          dedupeKey,
-          kind: 'REFERRER_TRANSFER',
-          status: 'BLOCKED',
-          practitionerId: row.referrerPractitionerId,
-          amountUsdCents: row.referrerShareUsdCents,
-          note: guard.reason,
-        },
-        update: { status: 'BLOCKED', note: guard.reason },
+      await parkBlocked(db, dedupeKey, {
+        practitionerId: row.referrerPractitionerId,
+        amountUsdCents: row.referrerShareUsdCents,
+        note: guard.reason,
       });
       continue;
     }
@@ -196,6 +259,12 @@ export async function settlePayableShares(
       // Should not happen — an unpayable referrer's share is HELD, not PAYABLE — but a row can be
       // promoted and then have its account disconnected. Skipped rather than transferred into the
       // void, and left PAYABLE so the next run retries.
+      summary.skipped += 1;
+      continue;
+    }
+
+    const plan = planTransfer(row.referrerShareUsdCents, feeConfig!);
+    if (!plan.sendable) {
       summary.skipped += 1;
       continue;
     }
@@ -214,8 +283,11 @@ export async function settlePayableShares(
       },
       update: {},
     });
+    // PENDING or BLOCKED: while payouts are off the sweep parks every row as BLOCKED, and the claim
+    // used to match PENDING only, so flipping the flag on would have left all of them unclaimed
+    // forever. FAILED and SENDING are deliberately NOT claimable: those need a human.
     const claimed = await db.feeLedgerEntry.updateMany({
-      where: { dedupeKey, status: 'PENDING' },
+      where: { dedupeKey, status: { in: ['PENDING', 'BLOCKED'] } },
       data: { status: 'SENDING' },
     });
     if (claimed.count === 0) {
@@ -227,12 +299,19 @@ export async function settlePayableShares(
       const { transferId } = await opts.transfer({
         originId: process.env.WHOP_PARENT_COMPANY_ID!,
         destinationId: destination,
-        amountUsdDollars: toTransferDollars(row.referrerShareUsdCents),
+        amountUsdDollars: toTransferDollars(plan.sendCents),
       });
 
       await db.referralLedgerEntry.update({
         where: { id: row.id },
-        data: { state: 'SETTLED', settledAt: opts.at, whopTransferId: transferId },
+        data: {
+          state: 'SETTLED',
+          settledAt: opts.at,
+          whopTransferId: transferId,
+          grossShareUsdCents: plan.grossCents,
+          transferFeeUsdCents: plan.feeCents,
+          netPaidUsdCents: plan.netCents,
+        },
       });
       await db.feeLedgerEntry.updateMany({
         where: { dedupeKey },
@@ -242,7 +321,7 @@ export async function settlePayableShares(
           // The REQUESTED amount is already on the row. Whether parent → sibling carries the 3%
           // surcharge measured on child → sibling is unknown until a real transfer exists, so the
           // net is reconciled against Whop rather than predicted here.
-          note: 'Requested amount; net after any Whop transfer surcharge to be reconciled against the transfer record.',
+          note: `Gross ${plan.grossCents}c, sent ${plan.sendCents}c, payee-borne transfer fee ${plan.feeCents}c, net ${plan.netCents}c (estimate; reconcile against the transfer record).`,
         },
       });
       summary.settled += 1;
