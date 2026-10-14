@@ -41,12 +41,21 @@ const nextConfig = {
    * the real next step if this is ever tightened — not a vendor allowlist.
    */
   async headers() {
+    // media-src: uploaded section video is served from our public Blob store, which `default-src
+    // 'self'` would otherwise refuse (a <video> falls back to default-src). Pinned to the exact
+    // store host derived from BLOB_READ_WRITE_TOKEN (`vercel_blob_rw_<storeId>_...`); when that
+    // cannot be derived it falls back to the Blob wildcard host, never to bare `https:`.
+    const storeId = /^vercel_blob_rw_([A-Za-z0-9]+)_/.exec(process.env.BLOB_READ_WRITE_TOKEN ?? '')?.[1];
+    const blobMediaHost = storeId
+      ? `https://${storeId.toLowerCase()}.public.blob.vercel-storage.com`
+      : 'https://*.public.blob.vercel-storage.com';
     const csp = [
       "default-src 'self'",
       "script-src 'self' 'unsafe-inline' 'unsafe-eval' https:",
       "style-src 'self' 'unsafe-inline' https:",
       "font-src 'self' data: https:",
       "img-src 'self' data: blob: https:",
+      `media-src 'self' ${blobMediaHost}`,
       "connect-src 'self' https:",
       "frame-src 'self' https:",
       "object-src 'none'",

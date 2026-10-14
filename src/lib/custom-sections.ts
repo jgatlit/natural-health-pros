@@ -37,7 +37,13 @@ export function maxImageBytes(): number {
 export const TESTIMONIAL_ATTESTATION_ENABLED = process.env.PROFILE_SECTIONS_TESTIMONIAL_ATTESTATION === 'true';
 
 export function mentionsTestimonial(...parts: Array<string | null | undefined>): boolean {
-  return parts.some((p) => /testimonial/i.test(p ?? ''));
+  // Deliberately a stub (flag ships OFF): catches the obvious spellings only, not a determined
+  // author. Strips tags first so markup cannot split the word.
+  return parts.some((p) =>
+    /testimonials?|(client|patient|customer)\s+reviews?|success\s+stor(y|ies)/i.test(
+      (p ?? '').replace(/<[^>]*>/g, ''),
+    ),
+  );
 }
 
 export const VIDEO_CONTENT_TYPES = ['video/mp4', 'video/quicktime', 'video/webm'] as const;
@@ -174,6 +180,19 @@ export function embedSrc(provider: string | null | undefined, id: string | null 
 
 const BLOB_HOST_SUFFIX = '.public.blob.vercel-storage.com';
 
+/**
+ * The exact public Blob host of OUR store, derived from BLOB_READ_WRITE_TOKEN
+ * (`vercel_blob_rw_<storeId>_<secret>` -> `<storeid>.public.blob.vercel-storage.com`).
+ *
+ * Returns null when the token is absent or not in that shape. Callers FAIL CLOSED on null: no
+ * uploaded-media URL is accepted, stored-for-render or deleted, rather than falling back to a
+ * suffix match that would admit any Vercel Blob store.
+ */
+export function expectedBlobHost(token: string | undefined = process.env.BLOB_READ_WRITE_TOKEN): string | null {
+  const m = /^vercel_blob_rw_([A-Za-z0-9]+)_/.exec(token ?? '');
+  return m ? `${m[1].toLowerCase()}${BLOB_HOST_SUFFIX}` : null;
+}
+
 /** Path prefix every section upload for one practitioner lives under. */
 export function uploadPrefix(practitionerId: string): string {
   return `sections/${practitionerId}/`;
@@ -224,9 +243,8 @@ export function isOwnedBlobUrl(
     return false;
   }
   if (u.protocol !== 'https:' || u.username || u.password || u.port || u.search || u.hash) return false;
-  const host = u.hostname.toLowerCase();
-  if (!host.endsWith(BLOB_HOST_SUFFIX) || host.length <= BLOB_HOST_SUFFIX.length) return false;
-  if (host.slice(0, -BLOB_HOST_SUFFIX.length).includes('.')) return false;
+  const expected = expectedBlobHost();
+  if (!expected || u.hostname.toLowerCase() !== expected) return false;
   let path: string;
   try {
     path = decodeURIComponent(u.pathname).replace(/^\//, '');
@@ -268,6 +286,7 @@ export type SectionError =
   | 'embed-invalid'
   | 'media-invalid'
   | 'poster-invalid'
+  | 'media-unavailable'
   | 'attestation-required'
   | 'empty';
 
@@ -288,7 +307,7 @@ export function buildSectionWrite(
 
   if (
     TESTIMONIAL_ATTESTATION_ENABLED &&
-    mentionsTestimonial(title, bodyHtml) &&
+    mentionsTestimonial(title, bodyHtml, caption) &&
     !input.attested
   ) {
     return { ok: false, error: 'attestation-required' };
@@ -308,6 +327,8 @@ export function buildSectionWrite(
     if (!parsed) return { ok: false, error: 'embed-invalid' };
     media = { ...media, mediaKind: 'EMBED', embedProvider: parsed.provider, embedId: parsed.id };
   } else if (mode === 'video' || mode === 'image') {
+    // Fail closed, with a distinct error, when our store host cannot be derived.
+    if (!expectedBlobHost()) return { ok: false, error: 'media-unavailable' };
     const url = String(input.mediaUrl ?? '').trim();
     if (!isOwnedBlobUrl(url, practitionerId, mode)) return { ok: false, error: 'media-invalid' };
     media = { ...media, mediaKind: mode === 'video' ? 'VIDEO_UPLOAD' : 'IMAGE_UPLOAD', mediaUrl: url };

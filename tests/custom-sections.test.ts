@@ -1,7 +1,9 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import {
   buildSectionWrite,
   embedSrc,
+  expectedBlobHost,
+  mentionsTestimonial,
   isOwnedBlobUrl,
   maxSections,
   ownedBlobUrls,
@@ -14,6 +16,16 @@ import {
 } from '@/lib/custom-sections';
 
 const PID = 'prac_abc123';
+const TOKEN = 'vercel_blob_rw_abc123_secretvalue';
+let savedToken: string | undefined;
+beforeEach(() => {
+  savedToken = process.env.BLOB_READ_WRITE_TOKEN;
+  process.env.BLOB_READ_WRITE_TOKEN = TOKEN;
+});
+afterEach(() => {
+  if (savedToken === undefined) delete process.env.BLOB_READ_WRITE_TOKEN;
+  else process.env.BLOB_READ_WRITE_TOKEN = savedToken;
+});
 const HOST = 'https://abc123.public.blob.vercel-storage.com';
 const vid = `${HOST}/sections/${PID}/video/intro-x1.mp4`;
 const img = `${HOST}/sections/${PID}/image/pic-x1.png`;
@@ -292,5 +304,42 @@ describe('validateReorder', () => {
     expect(validateReorder('a,b,c', own)).toBeNull();
     expect(validateReorder([1, 2, 3], own)).toBeNull();
     expect(validateReorder(null, own)).toBeNull();
+  });
+});
+
+describe('store pinning (exact Blob store id from the token)', () => {
+  const input = { title: 'T', bodyHtml: '', caption: '', mediaMode: 'video', embedUrl: '', mediaUrl: '', posterUrl: '', published: true, attested: false };
+  it('derives the host from the token and fails closed otherwise', () => {
+    expect(expectedBlobHost(TOKEN)).toBe('abc123.public.blob.vercel-storage.com');
+    expect(expectedBlobHost('vercel_blob_rw_AbC123_x')).toBe('abc123.public.blob.vercel-storage.com');
+    for (const bad of ['', 'garbage', 'vercel_blob_ro_abc_x', 'vercel_blob_rw__x', 'vercel_blob_rw_abc']) {
+      expect(expectedBlobHost(bad)).toBeNull();
+    }
+  });
+  it('rejects a DIFFERENT store with a correct path (upload url, poster and delete list)', () => {
+    const other = 'https://zzz999.public.blob.vercel-storage.com';
+    expect(isOwnedBlobUrl(`${other}/sections/${PID}/video/a.mp4`, PID, 'video')).toBe(false);
+    expect(isOwnedBlobUrl(`${other}/sections/${PID}/poster/a.png`, PID, 'poster')).toBe(false);
+    expect(buildSectionWrite({ ...input, mediaUrl: `${other}/sections/${PID}/video/a.mp4` }, PID)).toEqual({ ok: false, error: 'media-invalid' });
+    expect(ownedBlobUrls({ mediaKind: 'VIDEO_UPLOAD', mediaUrl: `${other}/sections/${PID}/video/a.mp4`, posterUrl: null }, PID)).toEqual([]);
+  });
+  it('with no derivable token, uploaded media is refused with a clear error and nothing is deletable', () => {
+    delete process.env.BLOB_READ_WRITE_TOKEN;
+    expect(isOwnedBlobUrl(vid, PID, 'video')).toBe(false);
+    expect(ownedBlobUrls({ mediaKind: 'VIDEO_UPLOAD', mediaUrl: vid, posterUrl: poster }, PID)).toEqual([]);
+    expect(buildSectionWrite({ ...input, mediaUrl: vid }, PID)).toEqual({ ok: false, error: 'media-unavailable' });
+    expect(buildSectionWrite({ ...input, mediaMode: '', bodyHtml: '<p>x</p>' }, PID).ok).toBe(true);
+  });
+});
+
+describe('mentionsTestimonial (flagged-off stub)', () => {
+  it('catches the obvious spellings, ignores markup splitting, and does not over-match', () => {
+    for (const t of ['Testimonials', 'My <b>Testi</b>monial', 'client reviews', 'Patient  review', 'Success stories']) {
+      expect(mentionsTestimonial(t)).toBe(true);
+    }
+    for (const t of ['About my approach', 'Reviewing my intake process', '', null, undefined]) {
+      expect(mentionsTestimonial(t)).toBe(false);
+    }
+    expect(mentionsTestimonial('x', null, 'a testimonial caption')).toBe(true);
   });
 });

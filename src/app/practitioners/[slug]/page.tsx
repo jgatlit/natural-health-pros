@@ -48,7 +48,10 @@ async function loadPractitioner(slug: string) {
       bookingLinks: { orderBy: { sortOrder: 'asc' } },
       caseStudies: { orderBy: { createdAt: 'desc' } },
       // Unpublished custom sections never leave the database on the public route.
-      profileSections: { where: { published: true }, orderBy: { sortOrder: 'asc' } },
+      profileSections: {
+        where: { published: true },
+        orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
+      },
       // No `active` filter: that column is dead and was a trap — it reads like a hidden/visible
       // toggle and is not one, and because it filtered HERE it would have removed an Offering
       // from every public surface at once, chooser included, with no UI to explain why.

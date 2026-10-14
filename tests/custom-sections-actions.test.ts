@@ -87,6 +87,7 @@ beforeEach(() => {
   mocks.sectionUpdateMany.mockResolvedValue({ count: 1 });
   mocks.del.mockResolvedValue(undefined);
   process.env.BLOB_READ_WRITE_TOKEN = 'vercel_blob_rw_abc123_secret';
+  mocks.queryRaw.mockResolvedValue([]);
 });
 
 describe('ownership on every action', () => {
@@ -130,6 +131,14 @@ describe('ownership on every action', () => {
     );
     expect(mocks.sectionDeleteMany).not.toHaveBeenCalled();
     expect(mocks.del).not.toHaveBeenCalled();
+  });
+
+  it('update and delete writes are themselves scoped by practitionerId', async () => {
+    mocks.sectionFindFirst.mockResolvedValue({ id: 'sec1', mediaKind: null, mediaUrl: null, posterUrl: null });
+    await redirectOf(updateSection('s', fd({ sectionId: 'sec1', title: 'T', bodyHtml: '<p>x</p>' })));
+    expect(mocks.sectionUpdateMany).toHaveBeenCalledWith(expect.objectContaining({ where: { id: 'sec1', practitionerId: PID } }));
+    await redirectOf(deleteSection('s', fd({ sectionId: 'sec1' })));
+    expect(mocks.sectionDeleteMany).toHaveBeenCalledWith({ where: { id: 'sec1', practitionerId: PID } });
   });
 
   it('an admin may edit another practitioner\'s sections', async () => {
@@ -354,6 +363,7 @@ describe('public render', () => {
   it('renders YouTube via youtube-nocookie, Vimeo and Loom iframes built from the id', () => {
     const yt = html([sec({ mediaKind: 'EMBED', embedProvider: 'YOUTUBE', embedId: 'dQw4w9WgXcQ' })]);
     expect(yt).toContain('src="https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ"');
+    expect(yt).toContain('sandbox="allow-scripts allow-same-origin allow-presentation allow-popups"');
     expect(html([sec({ mediaKind: 'EMBED', embedProvider: 'VIMEO', embedId: '123456789' })])).toContain('https://player.vimeo.com/video/123456789');
     expect(html([sec({ mediaKind: 'EMBED', embedProvider: 'LOOM', embedId: 'a'.repeat(32) })])).toContain('https://www.loom.com/embed/' + 'a'.repeat(32));
   });
@@ -383,11 +393,35 @@ describe('public render', () => {
   });
 });
 
+describe('cap guard ordering', () => {
+  it('locks the practitioner row BEFORE counting, and counts before inserting', async () => {
+    const calls: string[] = [];
+    mocks.queryRaw.mockImplementation(async () => void calls.push('lock'));
+    mocks.sectionFindMany.mockImplementation(async () => (calls.push('count'), []));
+    mocks.sectionCreate.mockImplementation(async () => void calls.push('insert'));
+    await redirectOf(createSection('s', fd({ title: 'T', bodyHtml: '<p>x</p>' })));
+    expect(calls).toEqual(['lock', 'count', 'insert']);
+  });
+  it('the lock statement targets the practitioner row with FOR NO KEY UPDATE', async () => {
+    await redirectOf(createSection('s', fd({ title: 'T', bodyHtml: '<p>x</p>' })));
+    const strings = mocks.queryRaw.mock.calls[0][0] as string[];
+    expect(strings.join('?')).toContain('FROM "Practitioner" WHERE id = ? FOR NO KEY UPDATE');
+    expect(mocks.queryRaw.mock.calls[0][1]).toBe(PID);
+  });
+  it('a full practitioner is refused without inserting', async () => {
+    mocks.sectionFindMany.mockResolvedValue(Array.from({ length: 6 }, (_, i) => ({ sortOrder: i })));
+    await redirectOf(createSection('s', fd({ title: 'T', bodyHtml: '<p>x</p>' })));
+    expect(mocks.queryRaw).toHaveBeenCalled();
+    expect(mocks.sectionCreate).not.toHaveBeenCalled();
+  });
+});
+
 describe('public page wiring', () => {
   it('queries only published sections in order and renders them between Outcomes and Reviews', async () => {
     const { readFileSync } = await import('node:fs');
     const src = readFileSync('src/app/practitioners/[slug]/page.tsx', 'utf8');
-    expect(src).toContain("profileSections: { where: { published: true }, orderBy: { sortOrder: 'asc' } }");
+    expect(src).toContain('where: { published: true }');
+    expect(src).toContain("orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }]");
     const outcomes = src.indexOf('aria-label="Outcomes"');
     const custom = src.indexOf('<CustomSections');
     const reviews = src.indexOf('aria-label="Reviews"');

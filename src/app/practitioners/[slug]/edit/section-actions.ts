@@ -6,7 +6,8 @@ import * as Sentry from '@sentry/nextjs';
 import { del } from '@vercel/blob';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
-import { buildSectionWrite, maxSections, ownedBlobUrls, validateReorder } from '@/lib/custom-sections';
+import { createSectionWithinCap } from '@/lib/section-create';
+import { buildSectionWrite, expectedBlobHost, maxSections, ownedBlobUrls, validateReorder } from '@/lib/custom-sections';
 
 /**
  * Custom profile sections (L1b). Every action authorises the SLUG, then scopes every query by the
@@ -58,6 +59,10 @@ function inputFrom(formData: FormData) {
  * blocks the DB change, and never throws into the action.
  */
 async function deleteOwnedBlobs(urls: string[], practitionerId: string, exceptSectionId: string | null) {
+  if (urls.length > 0 && !expectedBlobHost()) {
+    Sentry.captureMessage('profile-sections: BLOB_READ_WRITE_TOKEN missing or unparseable; blobs not deleted');
+    return;
+  }
   for (const url of Array.from(new Set(urls))) {
     try {
       const stillUsed = await prisma.profileSection.count({
@@ -80,24 +85,9 @@ export async function createSection(slug: string, formData: FormData): Promise<v
   const built = buildSectionWrite(inputFrom(formData), target.id);
   if (!built.ok) backTo(slug, `section-${built.error}`);
 
-  const created = await prisma.$transaction(async (tx) => {
-    // Serialise concurrent creates for one practitioner so the cap cannot be raced past.
-    await tx.$queryRaw`SELECT id FROM "Practitioner" WHERE id = ${target.id} FOR UPDATE`;
-    const existing = await tx.profileSection.findMany({
-      where: { practitionerId: target.id },
-      select: { sortOrder: true },
-      orderBy: { sortOrder: 'desc' },
-    });
-    if (existing.length >= maxSections()) return false;
-    await tx.profileSection.create({
-      data: {
-        practitionerId: target.id,
-        ...built.data,
-        sortOrder: (existing[0]?.sortOrder ?? -1) + 1,
-      },
-    });
-    return true;
-  });
+  const created = await prisma.$transaction((tx) =>
+    createSectionWithinCap(tx, target.id, built.data, maxSections()),
+  );
   if (!created) backTo(slug, 'section-cap');
   backTo(slug);
 }

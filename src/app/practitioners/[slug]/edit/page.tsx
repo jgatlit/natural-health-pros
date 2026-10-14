@@ -95,6 +95,7 @@ const SECTION_ERRORS: Record<string, string> = {
   'section-title-required': 'Give the section a name.',
   'section-embed-invalid': 'That video link is not a YouTube, Vimeo or Loom video link.',
   'section-media-invalid': 'That uploaded file could not be used. Upload it again.',
+  'section-media-unavailable': 'Uploads are temporarily unavailable. Try again later.',
   'section-poster-invalid': 'That cover image could not be used. Upload it again.',
   'section-attestation-required': 'Please confirm your testimonials are genuine before saving.',
   'section-empty': 'Add some text or a piece of media to the section.',
@@ -166,7 +167,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
       whopProducts: { where: { archived: false }, orderBy: OFFERING_ORDER },
       bookingLinks: { orderBy: { sortOrder: 'asc' } },
       caseStudies: { orderBy: { createdAt: 'desc' } },
-      profileSections: { orderBy: { sortOrder: 'asc' } },
+      profileSections: { orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }] },
       // The PROFILE OWNER's role — the subject of the billing exemption, and not the same
       // person as the viewer. Read from the DB, never from the session: isListed() gates on
       // this exact value server-side, and session.user.role is the VIEWER's own role, which
