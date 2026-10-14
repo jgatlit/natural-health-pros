@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { commitPaymentAttribution } from '@/lib/referral-settlement';
 import { hashClientEmail } from '@/lib/attributed-clients';
+import { fakeAffiliateDb } from './helpers/fake-affiliate-db';
 
 /**
  * WHAT `payment.succeeded` COMMITS (spec v1.4 §6.2, operator rulings 6 and 7).
@@ -42,7 +43,11 @@ function db(seed: {
   const touchUpdates: Record<string, unknown>[] = [];
   const listUpserts: Record<string, unknown>[] = [];
 
+  const affiliate = fakeAffiliateDb();
+
   return {
+    affiliateRows: affiliate.rows,
+    affiliateLedgerEntry: affiliate.affiliateLedgerEntry,
     referralLedger,
     feeLedger,
     attributed,

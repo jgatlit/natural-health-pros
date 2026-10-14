@@ -156,6 +156,41 @@ describe('recruiter comes from the redeemer browser, not the requester', () => {
     expect(m.create.mock.calls[0][0].data.recruitedById).toBeUndefined();
   });
 
+  // E11 (lane L2b): FIRST WINS, THROUGH THE REAL CREATION PATH. The Prisma mock below has no
+  // `practitioner.update` at all, so any attempt to overwrite a recruiter would throw here.
+  const existing = (recruitedById: string | null) => ({
+    id: 'p1', slug: 'victim', displayName: 'V', bio: null, headline: null, city: null,
+    yearsInPractice: null, telehealth: false, inPerson: false, specialties: [],
+    recruitedById, rateScheduleId: V1.id, user: { termsAcceptedAt: null },
+  });
+
+  it('a second recruiter cannot overwrite the first: an already-recruited practitioner is not re-written', async () => {
+    m.existingPractitioner = existing('first-recruiter');
+    m.cookie = await signRecruiterCookie(REAL, Date.now(), SECRET); // a DIFFERENT recruiter's link
+    const el = (await render()) as unknown as { props: { recruiterDisclosure: string | null } };
+    expect(m.create).not.toHaveBeenCalled();
+    expect(m.findFirst).not.toHaveBeenCalled(); // the second token is not even looked up
+    expect(el.props.recruiterDisclosure).toMatch(/brought you in/); // still the first recruiter's practitioner
+  });
+
+  it('a practitioner who signed up with NO recruiter cannot be recruited afterwards by a later link', async () => {
+    m.existingPractitioner = existing(null);
+    m.cookie = await signRecruiterCookie(REAL, Date.now(), SECRET);
+    const el = (await render()) as unknown as { props: { recruiterDisclosure: string | null } };
+    expect(m.create).not.toHaveBeenCalled();
+    expect(el.props.recruiterDisclosure).toBeNull();
+  });
+
+  it('e13: a recruited sign-up is handed the 3% disclosure for the form; an unrecruited one is not', async () => {
+    m.cookie = await signRecruiterCookie(REAL, Date.now(), SECRET);
+    const recruited = (await render()) as unknown as { props: { recruiterDisclosure: string | null } };
+    expect(recruited.props.recruiterDisclosure).toMatch(/3%/);
+    vi.resetModules();
+    m.cookie = undefined;
+    const plain = (await render()) as unknown as { props: { recruiterDisclosure: string | null } };
+    expect(plain.props.recruiterDisclosure).toBeNull();
+  });
+
   it('every new practitioner still gets its own recruiter token', async () => {
     await render();
     expect(m.create.mock.calls[0][0].data.recruiterToken).toMatch(/^[0-9a-f]{32}$/);

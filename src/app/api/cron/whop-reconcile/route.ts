@@ -13,6 +13,7 @@ import {
   promoteHeldToPayable,
   settlePayableShares,
 } from '@/lib/referral-payouts';
+import { TRANSFERS_DISABLED_REASON, settleAffiliateShares } from '@/lib/affiliate-payouts';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -177,6 +178,19 @@ export async function GET(request: NextRequest) {
     return 0;
   });
 
+  // Recruiting-affiliate settlement (spec v1.5 section 5). Same flag, same transfer path, same
+  // cron: with WHOP_TRANSFERS_ENABLED off it does nothing and reports `skipped: transfers disabled`.
+  const affiliates = await settleAffiliateShares(prisma, {
+    transfer: createTransfer,
+    at: now,
+  }).catch((e) => {
+    errors.push(`settle-affiliates: ${e instanceof Error ? e.message : String(e)}`);
+    return null;
+  });
+  if (affiliates && affiliates.blocked && affiliates.blocked !== TRANSFERS_DISABLED_REASON) {
+    console.warn('whop-reconcile: affiliate payouts BLOCKED:', affiliates.blocked);
+  }
+
   // ── Fee reconciliation (spec §7) ───────────────────────────────────────────────────────────
   //
   // Match what we RECORDED collecting against what Whop says it actually took. This is the whole
@@ -256,6 +270,7 @@ export async function GET(request: NextRequest) {
       drift,
       unpollable,
       referrals: { promoted, expired, ...(settlement ?? {}) },
+      affiliates: affiliates ?? null,
       feeMismatches: mismatches,
       errors,
     },

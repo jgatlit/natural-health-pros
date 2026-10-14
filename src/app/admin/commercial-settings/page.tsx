@@ -11,6 +11,7 @@ import { scheduleNumbers } from '@/lib/rate-schedule';
 
 import { AssignUnassignedForm, MigrateCohortForm, RateScheduleForm } from './RateScheduleForm';
 import { SettingForm } from './SettingForm';
+import { AffiliateLedgerSection } from './AffiliateLedgerSection';
 
 export const dynamic = 'force-dynamic';
 
@@ -163,6 +164,8 @@ export default async function CommercialSettingsPage() {
           about what day 91 means. That decision is still open.
         </p>
       </section>
+
+      <AffiliateLedgerSection />
 
       <section className="mt-6 rounded-lg border border-slate-200 p-5">
         <h2 className="text-sm font-semibold text-slate-900">Change history</h2>
