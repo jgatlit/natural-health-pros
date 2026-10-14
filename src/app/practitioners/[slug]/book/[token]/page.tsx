@@ -10,6 +10,8 @@ import { recordScheduleSignal } from './actions';
 import { createBookingCheckoutConfig } from '@/lib/whop';
 import { effectivePlan } from '@/lib/pricing-plans';
 import { resolveBookingFee, persistBookingFeeSnapshot } from '@/lib/booking-fee';
+import { FeeInvariantError } from '@/lib/referral-fees';
+import { NoRateScheduleError, RateScheduleInvariantError } from '@/lib/rate-schedule';
 import { CheckoutStep } from '@/components/booking/CheckoutStep';
 import { headers } from 'next/headers';
 
@@ -58,6 +60,7 @@ export default async function BookingFlowPage({ params }: Props) {
           whopPayoutsEnabled: true,
           whopCompanyId: true,
           plan: true,
+          rateScheduleId: true,
         },
       },
       email: true,
@@ -95,13 +98,28 @@ export default async function BookingFlowPage({ params }: Props) {
   // so the Whop fields may still be populated). Both other entry points already scope on this.
   const offering = intent.offering && !intent.offering.archived ? intent.offering : null;
 
-  const live = offering
+  const paymentsOtherwiseLive = offering
     ? paymentsLive({
         acceptsPayments: offering.acceptsPayments,
         practitionerPayoutsEnabled: intent.practitioner.whopPayoutsEnabled,
         whopPlanId: offering.whopPlanId,
       })
     : false;
+
+  // 🚨 FAIL CLOSED (spec v1.5 §2). A practitioner with no rate schedule has no fee we are allowed
+  // to charge, and "no schedule" must never mean "charge the old defaults": the buyer is refused
+  // BEFORE they schedule or type a card, the failure is logged loudly, and neither the embedded
+  // checkout nor the hosted-link fallback is offered (the hosted link would charge whatever the
+  // offering's plan was created with, which is not a fee this page decided). The mint below
+  // enforces the same rule a second time from the schedule row itself.
+  let feeRefused = paymentsOtherwiseLive && !intent.practitioner.rateScheduleId;
+  if (feeRefused) {
+    console.error('[booking] REFUSING payment — practitioner has no rate schedule', {
+      intentId: intent.id,
+      practitionerId: intent.practitionerId,
+    });
+  }
+  const live = paymentsOtherwiseLive && !feeRefused;
 
   const shape = flowShape({
     hasSchedulerUrl: !!intent.bookingLink?.url,
@@ -169,20 +187,43 @@ export default async function BookingFlowPage({ params }: Props) {
     // `persist: false` — price now, record only if the configuration is actually minted below. A
     // snapshot for a configuration that never existed would claim a fee nobody was charged, and
     // the reconciliation sweep would report it as a Whop mismatch forever.
-    const fee = await resolveBookingFee(prisma, {
-      bookingIntentId: intent.id,
-      practitionerId: intent.practitionerId,
-      email: intent.email,
-      plan: planKey,
-      priceUsdCents: offering!.priceUsdCents,
-      bookingCreatedAt: intent.createdAt,
-      transactedAt: new Date(),
-      referralTouchId: intent.referralTouchId,
-      persist: false,
-    });
-    const feeCents = fee.applicationFeeUsdCents;
+    let fee: Awaited<ReturnType<typeof resolveBookingFee>> | null = null;
+    try {
+      fee = await resolveBookingFee(prisma, {
+        bookingIntentId: intent.id,
+        practitionerId: intent.practitionerId,
+        email: intent.email,
+        plan: planKey,
+        priceUsdCents: offering!.priceUsdCents,
+        bookingCreatedAt: intent.createdAt,
+        transactedAt: new Date(),
+        referralTouchId: intent.referralTouchId,
+        persist: false,
+      });
+    } catch (err) {
+      // Only the "we cannot price this" family is a refusal. Anything else (a dropped connection)
+      // is an outage, not a pricing decision, and stays a 500 so it is noticed and retried.
+      if (
+        err instanceof NoRateScheduleError ||
+        err instanceof RateScheduleInvariantError ||
+        err instanceof FeeInvariantError
+      ) {
+        console.error('[booking] REFUSING payment — fee could not be priced', {
+          intentId: intent.id,
+          practitionerId: intent.practitionerId,
+          error: err.message,
+        });
+        feeRefused = true;
+      } else {
+        throw err;
+      }
+    }
 
-    const minted = await createBookingCheckoutConfig({
+    // A refused fee mints NOTHING: no configuration, no snapshot, no hosted-link fallback.
+    const feeCents = fee?.applicationFeeUsdCents ?? 0;
+    const minted = !fee
+      ? null
+      : await createBookingCheckoutConfig({
       planId: offering!.whopPlanId!,
       practitionerId: intent.practitionerId,
       offeringId: offering!.id,
@@ -204,7 +245,7 @@ export default async function BookingFlowPage({ params }: Props) {
         return null;
       });
 
-    if (minted) {
+    if (minted && fee) {
       // Guarded write, not a bare update. Two requests can reach the mint before either stores
       // (a resume link opened twice, a double-click, a prefetch racing the navigation); a plain
       // update would let the second overwrite the first and orphan a configuration on Whop.
@@ -248,6 +289,11 @@ export default async function BookingFlowPage({ params }: Props) {
       }
     }
   }
+
+  // After the mint block, because a refusal can arise there. A refused fee must also withdraw the
+  // hosted-link fallback, or "payment unavailable" would quietly become "pay at whatever fee the
+  // offering's plan was created with".
+  const hostedCheckoutUrl = feeRefused ? null : checkoutUrl;
 
   const h = headers();
   const host = h.get('host') ?? 'naturalhealthpros.com';
@@ -320,7 +366,7 @@ export default async function BookingFlowPage({ params }: Props) {
             // unattributable session and never be recorded. After advancing, the step refreshes
             // and the server renders the embedded checkout instead. The hosted link survives only
             // where no embed can be minted (§8).
-            checkoutUrl={willEmbedAfterSchedule ? null : checkoutUrl}
+            checkoutUrl={willEmbedAfterSchedule ? null : hostedCheckoutUrl}
             checkoutComing={willEmbedAfterSchedule}
           />
         ) : canEmbed && checkoutConfigId ? (
@@ -341,9 +387,9 @@ export default async function BookingFlowPage({ params }: Props) {
             // The PER-INTENT purchase url, which carries booking_intent_id — unlike the
             // offering-level one, which carries only practitioner_id and offering_id and would
             // reconcile to no booking. Falls back to the offering's only if this intent has none.
-            fallbackUrl={intentPurchaseUrl ?? checkoutUrl}
+            fallbackUrl={feeRefused ? null : (intentPurchaseUrl ?? checkoutUrl)}
           />
-        ) : checkoutUrl ? (
+        ) : hostedCheckoutUrl ? (
           // §8 fallback — the session mint failed, so hand over the hosted checkout rather than
           // stranding a buyer who is ready to pay.
           <div className="space-y-2 rounded-md border bg-muted/20 p-3">
@@ -351,12 +397,17 @@ export default async function BookingFlowPage({ params }: Props) {
               {alreadyScheduled ? 'Last step — payment.' : 'No scheduling needed — just payment.'}
             </p>
             <a
-              href={checkoutUrl}
+              href={hostedCheckoutUrl}
               className="inline-flex h-11 w-full items-center justify-center rounded-md bg-primary text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
             >
               Continue to payment
             </a>
           </div>
+        ) : feeRefused ? (
+          <p className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
+            Online payment isn&apos;t available for this booking right now. {intent.practitioner.displayName}{' '}
+            has your details and will be in touch.
+          </p>
         ) : alreadyScheduled ? (
           <p className="rounded-md border bg-muted/20 p-3 text-xs text-muted-foreground">
             You&apos;re all set — {intent.practitioner.displayName} has your details and your time.

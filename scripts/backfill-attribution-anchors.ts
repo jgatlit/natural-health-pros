@@ -34,12 +34,12 @@
  * WHAT IT WILL NOT DO
  * It never touches an already-anchored row — the clock is immutable once set (R1, forward-only),
  * and re-anchoring one would silently move a claim already sold. `termMonths` is preserved when
- * the row carries one; only a row that has none takes today's admin setting.
+ * the row carries one; only a row that has none takes the current rate schedule's lead term.
  */
 import { PrismaClient } from '@prisma/client';
 
 import { snapshotTerm } from '../src/lib/attribution-term';
-import { loadSettings } from '../src/lib/platform-settings';
+import { requireCurrentSchedule } from '../src/lib/rate-schedules';
 
 /** Just enough of a row to decide its repair — so the decision is testable without a database. */
 export type UnanchoredRow = {
@@ -91,7 +91,9 @@ const apply = process.argv.includes('--apply');
 async function main() {
   const prisma = new PrismaClient();
   try {
-    const { leadAttributionTermMonths } = await loadSettings(prisma);
+    // A row with no term of its own takes the CURRENT schedule's lead term (spec v1.5 §2) — the
+    // old `lead_attribution_term_months` setting is retired.
+    const { leadTermMonths: leadAttributionTermMonths } = await requireCurrentSchedule(prisma);
 
     const rows = (await prisma.attributedClient.findMany({
       where: { termAnchorAt: null },

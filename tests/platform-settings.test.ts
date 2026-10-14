@@ -35,7 +35,7 @@ function fakeDb(seed: Array<{ key: string; value: string }> = []) {
   };
 }
 
-const ENV = ['LEAD_ATTRIBUTION_TERM_MONTHS', 'REFERRAL_HOLD_DAYS'];
+const ENV = ['REFERRAL_HOLD_DAYS'];
 
 describe('operator-editable commercial settings', () => {
   let saved: Record<string, string | undefined>;
@@ -50,21 +50,27 @@ describe('operator-editable commercial settings', () => {
     }
   });
 
-  it('defaults to the ruled numbers — 8 months and 90 days', async () => {
-    // These two defaults ARE the operator rulings of 2026-09-18. An empty database must behave
-    // per the ruling rather than charge zero or hold forever.
-    expect(settingFromEnv('leadAttributionTermMonths')).toBe(8);
+  it('defaults to the ruled 90-day hold', async () => {
+    // This default IS the operator ruling of 2026-09-18. An empty database must behave per the
+    // ruling rather than hold for zero days or forever.
     expect(settingFromEnv('referralHoldDays')).toBe(90);
-    await expect(loadSettings(fakeDb())).resolves.toEqual({
-      leadAttributionTermMonths: 8,
-      referralHoldDays: 90,
-    });
+    await expect(loadSettings(fakeDb())).resolves.toEqual({ referralHoldDays: 90 });
   });
 
   it('prefers the stored value over the environment', async () => {
-    process.env.LEAD_ATTRIBUTION_TERM_MONTHS = '10';
-    const db = fakeDb([{ key: SETTING_KEYS.leadAttributionTermMonths, value: '12' }]);
-    await expect(loadSettings(db)).resolves.toMatchObject({ leadAttributionTermMonths: 12 });
+    process.env.REFERRAL_HOLD_DAYS = '30';
+    const db = fakeDb([{ key: SETTING_KEYS.referralHoldDays, value: '45' }]);
+    await expect(loadSettings(db)).resolves.toMatchObject({ referralHoldDays: 45 });
+  });
+
+  it('the lead attribution term is RETIRED as a setting (it lives in the rate schedule now)', async () => {
+    // Spec v1.5 §2: `lead_attribution_term_months` seeded schedule v1 and was then retired. A stale
+    // row or env var must not resurrect it on the fee path.
+    process.env.LEAD_ATTRIBUTION_TERM_MONTHS = '3';
+    const db = fakeDb([{ key: 'lead_attribution_term_months', value: '3' }]);
+    expect(Object.keys(SETTING_KEYS)).toEqual(['referralHoldDays']);
+    await expect(loadSettings(db)).resolves.toEqual({ referralHoldDays: 90 });
+    delete process.env.LEAD_ATTRIBUTION_TERM_MONTHS;
   });
 
   it('falls back rather than throwing when a stored value is corrupt', async () => {
@@ -76,12 +82,12 @@ describe('operator-editable commercial settings', () => {
 
   it('refuses an out-of-range operator edit loudly', async () => {
     const db = fakeDb();
-    await expect(
-      saveSetting(db, { name: 'leadAttributionTermMonths', value: 0 }),
-    ).rejects.toThrow(/Lead Attribution Term/);
-    await expect(
-      saveSetting(db, { name: 'referralHoldDays', value: 4000 }),
-    ).rejects.toThrow(/Referral Hold Period/);
+    await expect(saveSetting(db, { name: 'referralHoldDays', value: 0 })).rejects.toThrow(
+      /Referral Hold Period/,
+    );
+    await expect(saveSetting(db, { name: 'referralHoldDays', value: 4000 })).rejects.toThrow(
+      /Referral Hold Period/,
+    );
   });
 
   it('records who changed it', async () => {
@@ -102,19 +108,19 @@ describe('saveSetting — the §1.1 change log', () => {
   const fake = fakeDb;
 
   it('records the admin, the key, and BOTH values', async () => {
-    const db = fake([{ key: 'lead_attribution_term_months', value: '8' }]);
+    const db = fake([{ key: 'referral_hold_days', value: '90' }]);
 
     await saveSetting(db, {
-      name: 'leadAttributionTermMonths',
-      value: 6,
+      name: 'referralHoldDays',
+      value: 60,
       updatedByUserId: 'usr_admin',
     });
 
     expect(db.changes).toEqual([
       {
-        key: 'lead_attribution_term_months',
-        oldValue: '8',
-        newValue: '6',
+        key: 'referral_hold_days',
+        oldValue: '90',
+        newValue: '60',
         changedByUserId: 'usr_admin',
       },
     ]);

@@ -2,11 +2,14 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { CheckCircle2 } from 'lucide-react';
 import { PendingButton } from './PendingButton';
+import type { ReferralTermsView } from '@/lib/pricing-plans';
 
 export type PlanCardView = {
   key: 'PLAN_A' | 'PLAN_B';
   label: string;
   monthlyLabel: string;
+  /** "$374.40/yr", only for a plan with a subscription. Derived from the schedule. */
+  annualLabel?: string | null;
   sourcedSessionLabel: string;
   afterTermLabel: string;
   suits: string;
@@ -19,10 +22,8 @@ type Props = {
   breakEven: { volumeLabel: string; planACost: string; planBCost: string; better: string }[];
   /** "$195" — spec §8.1's break-even sentence, computed from the config, never written here. */
   breakEvenMonthlyLabel: string;
-  /** The Lead Attribution Term, in months. From the admin setting, not a literal. */
-  termMonths: number;
-  /** "20%" — the cross-referral share, for §8.1's required disclosure. */
-  referralRateLabel: string;
+  /** The terms and referral split, generated from the practitioner's rate schedule (§8.1). */
+  referral: ReferralTermsView;
   chooseAction: (formData: FormData) => void | Promise<void>;
 };
 
@@ -46,10 +47,10 @@ export function PlanChoice({
   plans,
   breakEven,
   breakEvenMonthlyLabel,
-  termMonths,
-  referralRateLabel,
+  referral,
   chooseAction,
 }: Props) {
+  const { termMonths } = referral;
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-2">
@@ -88,6 +89,12 @@ export function PlanChoice({
                   <dt className="text-muted-foreground">Monthly</dt>
                   <dd className="font-medium">{plan.monthlyLabel}</dd>
                 </div>
+                {plan.annualLabel && (
+                  <div className="flex justify-between gap-2">
+                    <dt className="text-muted-foreground">Yearly</dt>
+                    <dd className="font-medium">{plan.annualLabel}</dd>
+                  </div>
+                )}
                 {/* "Every session … for N months", not "first session / after that". The old
                     pair read `laterSessionPlatformFeeBps`, which is 0 on Plan B — telling a
                     practitioner we take nothing after the first one, which the shipped fee
@@ -175,10 +182,12 @@ export function PlanChoice({
           does NOT depend on which plan you pick — a practitioner comparing the two cards above
           would otherwise reasonably conclude referred clients are cheaper on one of them. */}
       <p className="text-[11px] text-muted-foreground">
-        When another practitioner refers a client to you, {referralRateLabel} of those sessions
-        goes to them and {referralRateLabel} to Natural Health Pros, for {termMonths} months from
-        that client&rsquo;s first payment, on either plan. The same {referralRateLabel} is what you
-        earn when you refer a client out.
+        When another practitioner refers a client to you, {referral.referralTotalLabel} of those
+        sessions is taken for the first {referral.referrerTermMonths} months from that
+        client&rsquo;s first payment, on either plan: {referral.referrerRateLabel} goes to them and{' '}
+        {referral.nhpReferralRateLabel} to Natural Health Pros. After that your plan&rsquo;s rate
+        applies until month {termMonths}. The same {referral.referrerRateLabel} is what you earn
+        when you refer a client out.
       </p>
 
       <p className="text-[11px] text-muted-foreground">

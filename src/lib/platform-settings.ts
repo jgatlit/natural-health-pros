@@ -1,26 +1,24 @@
 /**
- * ADMIN-EDITABLE COMMERCIAL SETTINGS (spec v1.4 §1.1).
+ * ADMIN-EDITABLE COMMERCIAL SETTINGS (spec v1.4 §1.1, as amended by v1.5 §2).
  *
- * Two numbers in this file decide money, and both were ruled by the operator rather than derived:
+ * One number is left here, and it is operational rather than a rate:
  *
- *  - LEAD ATTRIBUTION TERM — 8 months. ONE term governs BOTH plans (operator ruling 5,
- *    2026-09-18: "Both plan a and plan b reduce to 0% after the same term"). There is deliberately
- *    NO per-plan term field: a second field is how the two plans drift apart silently.
  *  - REFERRAL HOLD PERIOD — 90 days (operator ruling 7, 2026-09-18: "Standard hold will be
  *    90 days"). Per HELD LEDGER ROW, not per referrer.
  *
- * Both are SETTINGS, not literals, for the same reason plan prices live in env: they are
- * commercial parameters the operator changes without a deploy. Resolution order is
- * database row → environment variable → the ruled default, so an unseeded database behaves
- * correctly rather than charging zero.
+ * ⚠️ THE LEAD ATTRIBUTION TERM IS NO LONGER A SETTING. Spec v1.5 §2 moved both attribution terms
+ * (and every rate) into the immutable `RateSchedule` a practitioner is priced under; the
+ * `lead_attribution_term_months` row seeded schedule v1 and was then retired. Nothing on the fee
+ * path reads it any more, and the old `LEAD_ATTRIBUTION_TERM_MONTHS` env var is gone with it.
+ * Old PlatformSetting rows with that key are inert and may be left in place.
  *
- * ⚠️ A CHANGE HERE IS FORWARD-ONLY (R1). Every attribution row SNAPSHOTS the term at creation,
- * so editing this setting must never retroactively lengthen or shorten a claim already sold.
- * See `snapshotTerm()` in attribution-term.ts — that snapshot is the enforcement, not a comment.
+ * Resolution order is database row → environment variable → the ruled default, so an unseeded
+ * database behaves correctly rather than holding for zero days.
+ *
+ * ⚠️ A CHANGE HERE IS FORWARD-ONLY. Every held ledger row snapshots the hold at creation.
  */
 
 export const SETTING_KEYS = {
-  leadAttributionTermMonths: 'lead_attribution_term_months',
   referralHoldDays: 'referral_hold_days',
 } as const;
 
@@ -28,7 +26,7 @@ export type SettingKey = (typeof SETTING_KEYS)[keyof typeof SETTING_KEYS];
 
 type SettingDef = {
   key: SettingKey;
-  /** Admin-facing label — the words in spec v1.4 §1.1, so the UI and the spec agree. */
+  /** Admin-facing label — the words in the spec, so the UI and the spec agree. */
   label: string;
   help: string;
   envVar: string;
@@ -39,20 +37,6 @@ type SettingDef = {
 };
 
 export const SETTING_DEFS: Record<keyof typeof SETTING_KEYS, SettingDef> = {
-  leadAttributionTermMonths: {
-    key: SETTING_KEYS.leadAttributionTermMonths,
-    label: 'Lead Attribution Term',
-    help:
-      'How long a platform-sourced client stays attributed to us, anchored on the DAY OF ' +
-      'TRANSACTION — their first payment to that practitioner. Both plans charge their share ' +
-      'inside this term and 0% after it. Changing this affects NEW attributions only — existing ' +
-      'ones keep the term they were sold.',
-    envVar: 'LEAD_ATTRIBUTION_TERM_MONTHS',
-    fallback: 8,
-    min: 1,
-    max: 60,
-    unit: 'months',
-  },
   referralHoldDays: {
     key: SETTING_KEYS.referralHoldDays,
     label: 'Referral Hold Period',
@@ -107,7 +91,7 @@ export function settingFromEnv(name: keyof typeof SETTING_KEYS): number {
 /** Resolve every setting, database first. A malformed stored value falls back rather than throwing. */
 export async function loadSettings(
   db: SettingsDb,
-): Promise<{ leadAttributionTermMonths: number; referralHoldDays: number }> {
+): Promise<{ referralHoldDays: number }> {
   const rows = await db.platformSetting.findMany({
     where: { key: { in: Object.values(SETTING_KEYS) } },
     select: { key: true, value: true },
@@ -118,7 +102,6 @@ export async function loadSettings(
     return parsePositiveInt(byKey.get(def.key), def) ?? settingFromEnv(name);
   };
   return {
-    leadAttributionTermMonths: resolve('leadAttributionTermMonths'),
     referralHoldDays: resolve('referralHoldDays'),
   };
 }

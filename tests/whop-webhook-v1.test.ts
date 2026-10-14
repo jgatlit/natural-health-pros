@@ -2,6 +2,7 @@ import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vite
 import type { NextRequest } from 'next/server';
 import type { Practitioner } from '@prisma/client';
 import { signedRequest, signWebhook, TEST_SECRET } from './helpers/whop-webhook';
+import { V1 } from './helpers/rate-schedule';
 
 const CHILD_SECRET = 'ws_test_child_secret_for_offline_signature_verification_9876543210';
 
@@ -35,6 +36,11 @@ const mocks = vi.hoisted(() => ({
   // handler's bare catch swallowed it, and the whole ledger path was unexercised while every test
   // in this file passed. A mock weaker than production asserts nothing.
   settingFindMany: vi.fn<(args?: unknown) => Promise<Array<{ key: string; value: string }>>>(),
+  // Spec v1.5: the term now comes from a RATE SCHEDULE (the booking's fee snapshot names it, else
+  // the practitioner's, else the current one) — so the mock needs the models `resolvePaymentTerms`
+  // reads, for the reason stated above.
+  settingFindUnique: vi.fn<(args: unknown) => Promise<{ value: string } | null>>(),
+  scheduleFindUnique: vi.fn<(args: unknown) => Promise<unknown>>(),
   attributedUpsert: vi.fn<(args: unknown) => Promise<unknown>>(),
   attributedUpdateMany: vi.fn<(args: unknown) => Promise<{ count: number }>>(),
   attributedFindUnique: vi.fn<(args: unknown) => Promise<unknown>>(),
@@ -44,6 +50,9 @@ const mocks = vi.hoisted(() => ({
   feeSnapshotFindUnique: vi.fn<(args: unknown) => Promise<unknown>>(),
   referralLedgerUpsert: vi.fn<(args: unknown) => Promise<unknown>>(),
   feeLedgerUpsert: vi.fn<(args: unknown) => Promise<unknown>>(),
+  // The refund path now also looks up the booking behind a payment (affiliate half, spec v1.5).
+  feeLedgerFindFirst: vi.fn<(args: unknown) => Promise<unknown>>(),
+  feeLedgerFindMany: vi.fn<(args: unknown) => Promise<unknown[]>>(),
   touchUpdateMany: vi.fn<(args: unknown) => Promise<{ count: number }>>(),
   touchFindUnique: vi.fn<(args: unknown) => Promise<unknown>>(),
   clientListUpsert: vi.fn<(args: unknown) => Promise<unknown>>(),
@@ -71,6 +80,10 @@ vi.mock('@/lib/prisma', () => ({
     },
     platformSetting: {
       findMany: mocks.settingFindMany,
+      findUnique: mocks.settingFindUnique,
+    },
+    rateSchedule: {
+      findUnique: mocks.scheduleFindUnique,
     },
     attributedClient: {
       upsert: mocks.attributedUpsert,
@@ -87,6 +100,8 @@ vi.mock('@/lib/prisma', () => ({
     },
     feeLedgerEntry: {
       upsert: mocks.feeLedgerUpsert,
+      findFirst: mocks.feeLedgerFindFirst,
+      findMany: mocks.feeLedgerFindMany,
     },
     referralTouch: {
       updateMany: mocks.touchUpdateMany,
@@ -135,13 +150,20 @@ beforeEach(() => {
   mocks.upsert.mockResolvedValue({ id: 'evt_row_1' });
   mocks.eventUpdate.mockResolvedValue(undefined);
   mocks.indexPractitioner.mockResolvedValue(undefined);
-  mocks.settingFindMany.mockResolvedValue([{ key: 'lead_attribution_term_months', value: '8' }]);
+  mocks.settingFindMany.mockResolvedValue([]);
+  mocks.settingFindUnique.mockResolvedValue({ value: V1.id });
+  mocks.scheduleFindUnique.mockImplementation(async (args) => {
+    const where = (args as { where: { id?: string } }).where;
+    return where.id === V1.id ? V1 : null;
+  });
   mocks.attributedUpsert.mockResolvedValue(undefined);
   mocks.attributedUpdateMany.mockResolvedValue({ count: 1 });
   mocks.attributedFindUnique.mockResolvedValue(null);
   mocks.feeSnapshotFindUnique.mockResolvedValue(null);
   mocks.referralLedgerUpsert.mockResolvedValue(undefined);
   mocks.feeLedgerUpsert.mockResolvedValue(undefined);
+  mocks.feeLedgerFindFirst.mockResolvedValue(null);
+  mocks.feeLedgerFindMany.mockResolvedValue([]);
   mocks.touchUpdateMany.mockResolvedValue({ count: 1 });
   mocks.touchFindUnique.mockResolvedValue(null);
   mocks.clientListUpsert.mockResolvedValue(undefined);
@@ -753,13 +775,59 @@ describe('payment.succeeded — the term anchors on the DAY OF TRANSACTION', () 
     expect((create.termEndsAt as Date).toISOString()).toBe('2026-09-05T09:00:00.000Z');
   });
 
-  it('reads the term from the admin setting, not from a literal', async () => {
-    mocks.settingFindMany.mockResolvedValue([{ key: 'lead_attribution_term_months', value: '6' }]);
+  it('reads the term from the booking’s RATE SCHEDULE, not from a literal or a global setting', async () => {
+    // The fee snapshot names the schedule that PRICED the booking; its lead term is what the
+    // attribution row snapshots (spec v1.5 §2).
+    const short = { ...V1, id: 'rs_short', leadTermMonths: 6, referrerTermMonths: 3 };
+    mocks.feeSnapshotFindUnique.mockResolvedValue({
+      attributionOwner: 'NHP',
+      isCrossReferral: false,
+      priceUsdCents: 10_000,
+      nhpFeeUsdCents: 3_000,
+      referrerFeeBps: 0,
+      referrerShareUsdCents: 0,
+      referrerPractitionerId: null,
+      applicationFeeUsdCents: 3_000,
+      rateScheduleId: 'rs_short',
+    });
+    mocks.scheduleFindUnique.mockImplementation(async (args) => {
+      const id = (args as { where: { id?: string } }).where.id;
+      return id === 'rs_short' ? short : id === V1.id ? V1 : null;
+    });
     vi.setSystemTime(new Date('2026-03-10T00:00:00Z'));
     await paid({ scheduledAt: new Date('2026-08-01T00:00:00Z') });
     const create = createArgs();
     expect(create.termMonths).toBe(6);
+    expect(create.rateScheduleId).toBe('rs_short');
     expect((create.termEndsAt as Date).toISOString()).toBe('2026-09-10T00:00:00.000Z');
+  });
+
+  it('snapshots the schedule id and, when a referrer is named, the referrer term too', async () => {
+    mocks.feeSnapshotFindUnique.mockResolvedValue({
+      attributionOwner: 'NHP',
+      isCrossReferral: true,
+      priceUsdCents: 10_000,
+      nhpFeeUsdCents: 1_000,
+      referrerFeeBps: 2_000,
+      referrerShareUsdCents: 2_000,
+      referrerPractitionerId: 'prac_X',
+      applicationFeeUsdCents: 3_000,
+      rateScheduleId: V1.id,
+    });
+    vi.setSystemTime(new Date('2026-03-10T00:00:00Z'));
+    await paid({ scheduledAt: null });
+    const create = createArgs();
+    expect(create.rateScheduleId).toBe(V1.id);
+    expect(create.referrerTermMonths).toBe(4);
+    expect((create.referrerTermEndsAt as Date).toISOString()).toBe('2026-07-10T00:00:00.000Z');
+    expect((create.termEndsAt as Date).toISOString()).toBe('2026-11-10T00:00:00.000Z');
+  });
+
+  it('with no fee snapshot (hosted fallback) the practitioner’s own schedule, then the current one, starts the clock', async () => {
+    mocks.feeSnapshotFindUnique.mockResolvedValue(null);
+    await paid({ scheduledAt: null });
+    expect(createArgs().rateScheduleId).toBe(V1.id);
+    expect(createArgs().termMonths).toBe(8);
   });
 
   it('anchors a REDELIVERY on the stored payment instant, never on the retry', async () => {

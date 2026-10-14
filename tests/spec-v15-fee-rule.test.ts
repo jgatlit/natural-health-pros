@@ -2,14 +2,23 @@ import { describe, expect, it } from 'vitest';
 
 import type { AttributionOwner } from '@/lib/attribution-decision';
 import type { PlanKey } from '@/lib/pricing-plans';
-import type { SessionFee } from '@/lib/referral-fees';
+import {
+  resolveSessionFee,
+  reverseForRefund,
+  whopApplicationFeeCents,
+  type SessionFee,
+} from '@/lib/referral-fees';
+import { annualPlanAPriceCents } from '@/lib/rate-schedule';
+import { createRateSchedule } from '@/lib/rate-schedule-hash';
+import { recordRecruiter } from '@/lib/recruiter';
 
 /**
  * SPEC v1.5 §1 / §7 — the fee table, written BEFORE the implementation exists (lane L1 spec tests).
  *
- * Every case is `it.skip`, so the suite stays green. The builder un-skips them by replacing the
- * `api` stub below with the real imports and adapting the call shape. THE NUMBERS ARE THE
- * INVARIANT; the signatures are only a proposal.
+ * Written before the implementation (lane L1 spec tests), then un-skipped against the real modules.
+ * THE NUMBERS ARE THE INVARIANT; the signatures were only a proposal, and the implemented ones
+ * differ in two small ways: `resolveSessionFee` also accepts an optional `storedTermMonths`, and
+ * `createRateSchedule` returns the numbers plus their `contentHash`.
  *
  * ---------------------------------------------------------------------------------------------
  * PROPOSED CONTRACT (the builder may adapt names and shapes, not the cents)
@@ -83,18 +92,13 @@ type FeeApi = {
   whopApplicationFeeCents(fee: FeeV15): number;
 };
 
-const notImplemented = (): never => {
-  throw new Error('spec v1.5 fee API not implemented');
-};
-
-// Replace with the real module when L1 lands.
 const api: FeeApi = {
-  resolveSessionFee: notImplemented,
-  createRateSchedule: notImplemented,
-  annualPlanAPriceCents: notImplemented,
-  recordRecruiter: notImplemented,
-  reverseForRefund: notImplemented,
-  whopApplicationFeeCents: notImplemented,
+  resolveSessionFee: (input) => resolveSessionFee(input) as FeeV15,
+  createRateSchedule: (fields) => createRateSchedule(fields) as unknown as RateScheduleFields,
+  annualPlanAPriceCents,
+  recordRecruiter,
+  reverseForRefund: (fee, refunded, gross) => reverseForRefund(fee, refunded, gross),
+  whopApplicationFeeCents: (fee) => whopApplicationFeeCents(fee),
 };
 
 const V1: RateScheduleFields = {
@@ -173,7 +177,7 @@ const pick = (row: Row, plan: PlanKey): Cents5 => (plan === 'PLAN_B' && row.plan
 
 describe('spec v1.5 §1 fee table, $100 session, Y recruited by R', () => {
   for (const plan of ['PLAN_A', 'PLAN_B'] as PlanKey[]) {
-    it.skip.each(rows.map((r) => [r.name, r] as const))(`${plan}: %s`, (_n, row) => {
+    it.each(rows.map((r) => [r.name, r] as const))(`${plan}: %s`, (_n, row) => {
       const [keeps, nhp, ref, aff, net] = pick(row, plan);
       const fee = call(row, plan, true);
       expect(G - fee.practitionerChargeUsdCents).toBe(keeps);
@@ -186,7 +190,7 @@ describe('spec v1.5 §1 fee table, $100 session, Y recruited by R', () => {
     });
   }
 
-  it.skip('rows where plan is irrelevant are identical on Plan A and Plan B', () => {
+  it('rows where plan is irrelevant are identical on Plan A and Plan B', () => {
     for (const name of ['Own client', 'Referred <=4mo', 'Any >8mo']) {
       const row = rows.find((r) => r.name === name)!;
       expect(call(row, 'PLAN_A', true)).toEqual(call(row, 'PLAN_B', true));
@@ -196,7 +200,7 @@ describe('spec v1.5 §1 fee table, $100 session, Y recruited by R', () => {
 
 describe('spec v1.5 §1 fee table, Y NOT recruited', () => {
   for (const plan of ['PLAN_A', 'PLAN_B'] as PlanKey[]) {
-    it.skip.each(rows.map((r) => [r.name, r] as const))(`${plan}: %s`, (_n, row) => {
+    it.each(rows.map((r) => [r.name, r] as const))(`${plan}: %s`, (_n, row) => {
       const [, nhp, ref] = pick(row, plan);
       // The "passed to R" 300 on own-client and post-term rows is not charged at all.
       const expectedNhp = row.recruited[1] === 300 ? 0 : nhp;
@@ -209,7 +213,7 @@ describe('spec v1.5 §1 fee table, Y NOT recruited', () => {
     });
   }
 
-  it.skip('Y keeps 10000 on own clients and after the term', () => {
+  it('Y keeps 10000 on own clients and after the term', () => {
     expect(call(rows[0], 'PLAN_A', false).practitionerNetUsdCents).toBe(10_000);
     expect(call(rows[4], 'PLAN_B', false).practitionerNetUsdCents).toBe(10_000);
   });
@@ -218,13 +222,13 @@ describe('spec v1.5 §1 fee table, Y NOT recruited', () => {
 describe('spec v1.5 §1 boundaries are EXCLUSIVE', () => {
   const referred = rows[2];
 
-  it.skip('1ms before referrerEnds (4mo) is still referred: 20% referrer + 10% NHP', () => {
+  it('1ms before referrerEnds (4mo) is still referred: 20% referrer + 10% NHP', () => {
     const fee = call({ ...referred, at: monthsAfter(4, -1) }, 'PLAN_B', false);
     expect(fee.referrerShareUsdCents).toBe(2000);
     expect(fee.nhpFeeUsdCents).toBe(1000);
   });
 
-  it.skip('exactly at referrerEnds (4mo) the plan rate applies and the referrer is dropped', () => {
+  it('exactly at referrerEnds (4mo) the plan rate applies and the referrer is dropped', () => {
     const a = call({ ...referred, at: monthsAfter(4) }, 'PLAN_A', false);
     expect(a.referrerShareUsdCents).toBe(0);
     expect(a.nhpFeeUsdCents).toBe(1000);
@@ -233,12 +237,12 @@ describe('spec v1.5 §1 boundaries are EXCLUSIVE', () => {
     expect(b.nhpFeeUsdCents).toBe(3000);
   });
 
-  it.skip('1ms before leadEnds (8mo) is still charged at the plan rate', () => {
+  it('1ms before leadEnds (8mo) is still charged at the plan rate', () => {
     const fee = call({ ...referred, at: monthsAfter(8, -1) }, 'PLAN_B', false);
     expect(fee.nhpFeeUsdCents).toBe(3000);
   });
 
-  it.skip('exactly at leadEnds (8mo) the practitioner fee is 0 on both plans', () => {
+  it('exactly at leadEnds (8mo) the practitioner fee is 0 on both plans', () => {
     for (const plan of ['PLAN_A', 'PLAN_B'] as PlanKey[]) {
       const fee = call({ ...referred, at: monthsAfter(8) }, plan, false);
       expect(fee.nhpFeeUsdCents).toBe(0);
@@ -248,7 +252,7 @@ describe('spec v1.5 §1 boundaries are EXCLUSIVE', () => {
 });
 
 describe('spec v1.5 §1 affiliate overlay and Whop application fee', () => {
-  it.skip('a recruited practitioner own-client $100 session charges $3 and nets NHP $0', () => {
+  it('a recruited practitioner own-client $100 session charges $3 and nets NHP $0', () => {
     const fee = call(rows[0], 'PLAN_A', true);
     expect(fee.nhpFeeUsdCents).toBe(0);
     expect(fee.affiliateShareUsdCents).toBe(300);
@@ -257,18 +261,18 @@ describe('spec v1.5 §1 affiliate overlay and Whop application fee', () => {
     expect(api.whopApplicationFeeCents(fee)).toBe(300);
   });
 
-  it.skip('a recruited Plan A sourced session still charges $10 total', () => {
+  it('a recruited Plan A sourced session still charges $10 total', () => {
     const fee = call(rows[1], 'PLAN_A', true);
     expect(fee.practitionerChargeUsdCents).toBe(1000);
     expect(api.whopApplicationFeeCents(fee)).toBe(1000);
   });
 
-  it.skip('application_fee_amount = nhpFee + referrerShare + (nhpFee == 0 ? affiliate : 0)', () => {
+  it('application_fee_amount = nhpFee + referrerShare + (nhpFee == 0 ? affiliate : 0)', () => {
     expect(api.whopApplicationFeeCents(call(rows[2], 'PLAN_A', true))).toBe(1000 + 2000);
     expect(api.whopApplicationFeeCents(call(rows[4], 'PLAN_A', true))).toBe(300);
   });
 
-  it.skip('a recruiter equal to the serving practitioner yields no affiliate', () => {
+  it('a recruiter equal to the serving practitioner yields no affiliate', () => {
     const fee = api.resolveSessionFee({
       plan: 'PLAN_A',
       owner: 'NHP',
@@ -284,7 +288,7 @@ describe('spec v1.5 §1 affiliate overlay and Whop application fee', () => {
     expect(fee.nhpNetUsdCents).toBe(1000);
   });
 
-  it.skip('shares floor independently and nhpNet is never negative (odd price $33.33)', () => {
+  it('shares floor independently and nhpNet is never negative (odd price $33.33)', () => {
     const fee = api.resolveSessionFee({
       plan: 'PLAN_B',
       owner: 'NHP',
@@ -302,7 +306,7 @@ describe('spec v1.5 §1 affiliate overlay and Whop application fee', () => {
     expect(fee.nhpNetUsdCents).toBeGreaterThanOrEqual(0);
   });
 
-  it.skip('application fee never exceeds floor(G * maxTotalFeeBps) on any table row', () => {
+  it('application fee never exceeds floor(G * maxTotalFeeBps) on any table row', () => {
     for (const row of rows) {
       for (const plan of ['PLAN_A', 'PLAN_B'] as PlanKey[]) {
         for (const recruited of [true, false]) {
@@ -315,7 +319,7 @@ describe('spec v1.5 §1 affiliate overlay and Whop application fee', () => {
 });
 
 describe('spec v1.5 §1 schedule creation rejects cap-invariant violations', () => {
-  it.skip('accepts the v1 schedule', () => {
+  it('accepts the v1 schedule', () => {
     expect(() => api.createRateSchedule(V1)).not.toThrow();
   });
 
@@ -330,17 +334,17 @@ describe('spec v1.5 §1 schedule creation rejects cap-invariant violations', () 
     ['referralTotalBps - referrerBps below affiliateBps', { referralTotalBps: 2200, referrerBps: 2000 }],
     ['affiliateBps > maxTotalFeeBps', { affiliateBps: 3001 }],
   ];
-  it.skip.each(bad)('rejects: %s', (_n, patch) => {
+  it.each(bad)('rejects: %s', (_n, patch) => {
     expect(() => api.createRateSchedule({ ...V1, ...patch })).toThrow();
   });
 });
 
 describe('spec v1.5 §1 pricing, snapshots, recruiter, refunds, fail-closed', () => {
-  it.skip('annual Plan A price = 3900 * 12 * (1 - 0.2) = 37440', () => {
+  it('annual Plan A price = 3900 * 12 * (1 - 0.2) = 37440', () => {
     expect(api.annualPlanAPriceCents(V1)).toBe(37_440);
   });
 
-  it.skip('a later schedule change leaves an in-term client fee unchanged (snapshot carries the schedule)', () => {
+  it('a later schedule change leaves an in-term client fee unchanged (snapshot carries the schedule)', () => {
     const before = call(rows[1], 'PLAN_B', true, V1);
     expect(before.rateScheduleId).toBe('rs_v1');
     // A snapshot re-resolved against the schedule it was minted under is unchanged; only a NEW
@@ -350,12 +354,12 @@ describe('spec v1.5 §1 pricing, snapshots, recruiter, refunds, fail-closed', ()
     expect(call(rows[1], 'PLAN_B', true, v2).nhpFeeUsdCents).toBe(2500);
   });
 
-  it.skip('recruiter is first-wins and immutable', () => {
+  it('recruiter is first-wins and immutable', () => {
     expect(api.recordRecruiter(null, 'prac_R')).toBe('prac_R');
     expect(api.recordRecruiter('prac_R', 'prac_Z')).toBe('prac_R');
   });
 
-  it.skip('a full refund reverses the affiliate share and the referrer share', () => {
+  it('a full refund reverses the affiliate share and the referrer share', () => {
     const fee = call(rows[2], 'PLAN_A', true);
     const rev = api.reverseForRefund(fee, G, G);
     expect(rev.affiliateReversedUsdCents).toBe(300);
@@ -363,14 +367,14 @@ describe('spec v1.5 §1 pricing, snapshots, recruiter, refunds, fail-closed', ()
     expect(rev.nhpReversedUsdCents).toBe(fee.nhpFeeUsdCents);
   });
 
-  it.skip('a partial refund reverses affiliate and referrer pro rata, floored', () => {
+  it('a partial refund reverses affiliate and referrer pro rata, floored', () => {
     const fee = call(rows[2], 'PLAN_A', true);
     const rev = api.reverseForRefund(fee, 5000, G);
     expect(rev.affiliateReversedUsdCents).toBe(150);
     expect(rev.referrerReversedUsdCents).toBe(1000);
   });
 
-  it.skip('fail-closed: a practitioner with no schedule is refused, with no default charge', () => {
+  it('fail-closed: a practitioner with no schedule is refused, with no default charge', () => {
     expect(() => call(rows[1], 'PLAN_A', false, null)).toThrow();
   });
 });

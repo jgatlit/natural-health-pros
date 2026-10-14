@@ -1,7 +1,9 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 
-import { recordAttributedClient, attributionTermState } from '@/lib/attributed-clients';
-import { sessionFeeCents } from '@/lib/pricing-plans';
+import { recordAttributedClient, attributionTermState, hashClientEmail } from '@/lib/attributed-clients';
+import { resolveSessionFee } from '@/lib/referral-fees';
+import type { PlanKey } from '@/lib/pricing-plans';
+import { V1 } from './helpers/rate-schedule';
 
 /**
  * REGRESSION — THE DOUBLE-CHARGE.
@@ -11,7 +13,7 @@ import { sessionFeeCents } from '@/lib/pricing-plans';
  *
  *   1. `recordAttributedClient` pushed `expiresAt` forward on every repeat booking, so the claim
  *      was a rolling window rather than a fixed term; and
- *   2. `sessionFeeBps` read an EXPIRED row as "no live claim", which is the same branch as a
+ *   2. the old `sessionFeeBps` read an EXPIRED row as "no live claim", which is the same branch as a
  *      never-seen client — a FIRST SESSION — and charged the full first-session share again.
  *
  * So a client we introduced, were paid for, and then did not see for a while came back as a brand
@@ -77,6 +79,30 @@ describe('regression: a client relationship is never charged a second first-sess
 
   const SESSION_PRICE = 10_000; // $100
 
+  /** What NHP charges for a session paid at `when`, through the real rule and the stored row. */
+  async function nhpFee(
+    db: ReturnType<typeof fakeDb>,
+    p: { practitionerId: string; email: string },
+    plan: PlanKey,
+    when: Date,
+  ): Promise<number> {
+    const row = (await db.attributedClient.findUnique({
+      where: { practitionerId_emailHash: { practitionerId: p.practitionerId, emailHash: hashClientEmail(p.email) } },
+    })) as { termAnchorAt?: Date; termMonths?: number } | null;
+    return resolveSessionFee({
+      plan,
+      owner: 'NHP',
+      referrerPractitionerId: null,
+      priceUsdCents: SESSION_PRICE,
+      schedule: V1,
+      practitionerId: p.practitionerId,
+      recruiterPractitionerId: null,
+      anchorAt: row?.termAnchorAt ?? when,
+      at: when,
+      storedTermMonths: { lead: row?.termMonths ?? null },
+    }).nhpFeeUsdCents;
+  }
+
   it('bills the introduction once, then nothing at all after the term — even years later', async () => {
     const db = fakeDb();
     const p = { practitionerId: 'p1', email: 'client@x.com' };
@@ -87,15 +113,15 @@ describe('regression: a client relationship is never charged a second first-sess
     // calendar, and it is the client's transactions, not their scheduler.
     const firstState = await attributionTermState(db, { ...p, asOf: introPayment });
     expect(firstState).toBe('NONE');
-    const firstFee = sessionFeeCents({ plan: 'PLAN_B', term: firstState, priceUsdCents: SESSION_PRICE });
-    expect(firstFee).toBe(4_000);
+    const firstFee = await nhpFee(db, p, 'PLAN_B', introPayment);
+    expect(firstFee).toBe(3_000);
     await recordAttributedClient(db, { ...p, termMonths: 8, transactedAt: introPayment, at: introPayment });
 
     // Session 2, inside the term — still chargeable (the recurrence ruling).
     const month3 = new Date('2026-04-15T00:00:00Z');
     const midState = await attributionTermState(db, { ...p, asOf: month3 });
     expect(midState).toBe('IN_TERM');
-    expect(sessionFeeCents({ plan: 'PLAN_B', term: midState, priceUsdCents: SESSION_PRICE })).toBe(4_000);
+    expect(await nhpFee(db, p, 'PLAN_B', month3)).toBe(3_000);
     await recordAttributedClient(db, { ...p, termMonths: 8, transactedAt: month3, at: month3 });
 
     // …and that repeat booking must NOT have extended the term. This is half one of the bug.
@@ -106,13 +132,13 @@ describe('regression: a client relationship is never charged a second first-sess
     const muchLater = new Date('2028-06-01T00:00:00Z');
     const lateState = await attributionTermState(db, { ...p, asOf: muchLater });
     expect(lateState).toBe('OUT_OF_TERM');
-    expect(sessionFeeCents({ plan: 'PLAN_B', term: lateState, priceUsdCents: SESSION_PRICE })).toBe(0);
+    expect(await nhpFee(db, p, 'PLAN_B', muchLater)).toBe(0);
 
     // And it stays 0 on Plan A too (ruling 5), and cannot be flipped back by the old env flags.
     process.env.PLAN_B_FIRST_SESSION_FEE_ONCE = 'false';
     process.env.PLAN_A_FIRST_SESSION_FEE_ONCE = 'false';
-    expect(sessionFeeCents({ plan: 'PLAN_B', term: lateState, priceUsdCents: SESSION_PRICE })).toBe(0);
-    expect(sessionFeeCents({ plan: 'PLAN_A', term: lateState, priceUsdCents: SESSION_PRICE })).toBe(0);
+    expect(await nhpFee(db, p, 'PLAN_B', muchLater)).toBe(0);
+    expect(await nhpFee(db, p, 'PLAN_A', muchLater)).toBe(0);
   });
 
   it('charges the whole 8-month term and not one session beyond it', async () => {
@@ -123,11 +149,10 @@ describe('regression: a client relationship is never charged a second first-sess
 
     const billed: number[] = [];
     for (const when of ['2026-01-15', '2026-04-15', '2026-07-15', '2026-09-15', '2026-10-15']) {
-      const term = await attributionTermState(db, { ...p, asOf: new Date(`${when}T00:00:00Z`) });
-      billed.push(sessionFeeCents({ plan: 'PLAN_B', term, priceUsdCents: SESSION_PRICE }));
+      billed.push(await nhpFee(db, p, 'PLAN_B', new Date(`${when}T00:00:00Z`)));
     }
     // months 0, 3, 6 charge; month 8 exactly and month 9 do not (spec §9 test 3).
-    expect(billed).toEqual([4_000, 4_000, 4_000, 0, 0]);
+    expect(billed).toEqual([3_000, 3_000, 3_000, 0, 0]);
   });
 
   it('§9 test 5 — months 0, 4 and 8, measured on PAYMENT dates (corrected 2026-09-19)', async () => {
@@ -141,9 +166,8 @@ describe('regression: a client relationship is never charged a second first-sess
 
     const billed: number[] = [];
     for (const when of ['2026-01-15', '2026-05-15', '2026-09-15']) {
-      const term = await attributionTermState(db, { ...p, asOf: new Date(`${when}T00:00:00Z`) });
-      billed.push(sessionFeeCents({ plan: 'PLAN_B', term, priceUsdCents: SESSION_PRICE }));
+      billed.push(await nhpFee(db, p, 'PLAN_B', new Date(`${when}T00:00:00Z`)));
     }
-    expect(billed).toEqual([4_000, 4_000, 0]);
+    expect(billed).toEqual([3_000, 3_000, 0]);
   });
 });

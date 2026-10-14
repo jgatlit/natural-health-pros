@@ -1,9 +1,11 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { effectivePlan, sessionFeeBps, sessionFeeCents } from '@/lib/pricing-plans';
+import { effectivePlan, isPlanKey } from '@/lib/pricing-plans';
+import { resolveSessionFee } from '@/lib/referral-fees';
+import { V1 } from './helpers/rate-schedule';
 
-const ENV = ['PLAN_DEFAULT', 'PLAN_B_FIRST_SESSION_FEE_ONCE', 'PLAN_A_FIRST_SESSION_FEE_ONCE'];
+const ENV = ['PLAN_DEFAULT'];
 
-describe('plan default + in-term fee rule', () => {
+describe('plan default', () => {
   let saved: Record<string, string | undefined>;
   beforeEach(() => {
     saved = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
@@ -28,52 +30,66 @@ describe('plan default + in-term fee rule', () => {
     expect(effectivePlan(null)).toBe('PLAN_A');
   });
 
-  /**
-   * ⚠️ THIS ASSERTION REPLACES ITS OWN OPPOSITE. The previous version of this test asserted that
-   * Plan B charged once per client and 0% on every later session ("book them privately after
-   * that", 2026-09-14). Spec v1.4 R3 / §9 test 3 and the operator ruling of 2026-09-18 reverse
-   * that: the share applies to EVERY platform-sourced session inside the term.
-   */
+  it('guards plan keys coming off a form', () => {
+    expect(isPlanKey('PLAN_A')).toBe(true);
+    expect(isPlanKey('plan_a')).toBe(false);
+    expect(isPlanKey(undefined)).toBe(false);
+  });
+});
+
+/**
+ * The in-term rule, through the real `resolveSessionFee` (the old `sessionFeeBps` helpers were
+ * removed with the env rates). Two operator inversions are pinned here so they cannot silently
+ * return:
+ *
+ *  - 2026-09-18: Plan B charges EVERY NHP-sourced session inside the term, not once per client.
+ *    Spec v1.5 §1 restates it; the dead `firstSessionFeeOnce` flag is gone from the code.
+ *  - 2026-09-18: Plan A drops to 0% at the SAME boundary as Plan B (it was "20% forever").
+ */
+describe('in-term fee rule (v1.5)', () => {
+  const ANCHOR = new Date('2026-01-15T12:00:00.000Z');
+  const at = (m: number) => {
+    const d = new Date(ANCHOR);
+    d.setUTCMonth(d.getUTCMonth() + m);
+    return d;
+  };
+  const fee = (plan: 'PLAN_A' | 'PLAN_B', month: number, priceUsdCents = 10_000) =>
+    resolveSessionFee({
+      plan,
+      owner: 'NHP',
+      referrerPractitionerId: null,
+      priceUsdCents,
+      schedule: V1,
+      practitionerId: 'Y',
+      recruiterPractitionerId: null,
+      anchorAt: ANCHOR,
+      at: at(month),
+    }).nhpFeeUsdCents;
+
   it('charges Plan B on every sourced session inside the term', () => {
-    expect(sessionFeeBps({ plan: 'PLAN_B', term: 'NONE' })).toBe(4_000);
-    expect(sessionFeeBps({ plan: 'PLAN_B', term: 'IN_TERM' })).toBe(4_000);
-    expect(sessionFeeBps({ plan: 'PLAN_B', term: 'PENDING_ANCHOR' })).toBe(4_000);
+    expect([0, 3, 6].map((m) => fee('PLAN_B', m))).toEqual([3_000, 3_000, 3_000]);
   });
 
-  /**
-   * ⚠️ ALSO AN INVERSION. Plan A was implemented and asserted as 20% FOREVER. Operator ruling 5
-   * (2026-09-18): "Both plan a and plan b reduce to 0% after the same term." One term, one admin
-   * setting, both plans.
-   */
-  it('drops Plan A to 0% at the SAME boundary as Plan B', () => {
-    expect(sessionFeeBps({ plan: 'PLAN_A', term: 'NONE' })).toBe(2_000);
-    expect(sessionFeeBps({ plan: 'PLAN_A', term: 'IN_TERM' })).toBe(2_000);
-    expect(sessionFeeBps({ plan: 'PLAN_A', term: 'OUT_OF_TERM' })).toBe(0);
-    expect(sessionFeeBps({ plan: 'PLAN_B', term: 'OUT_OF_TERM' })).toBe(0);
+  it('drops BOTH plans to 0% at the same boundary', () => {
+    expect(fee('PLAN_A', 7)).toBe(1_000);
+    expect(fee('PLAN_A', 8)).toBe(0);
+    expect(fee('PLAN_B', 7)).toBe(3_000);
+    expect(fee('PLAN_B', 8)).toBe(0);
   });
 
-  it('cannot be made to charge after the term by any env flag', () => {
-    // The old `FEE_ONCE` flags are no longer consulted for money. Flipping both must not
-    // resurrect a post-term charge on either plan.
-    process.env.PLAN_B_FIRST_SESSION_FEE_ONCE = 'false';
-    process.env.PLAN_A_FIRST_SESSION_FEE_ONCE = 'false';
-    expect(sessionFeeBps({ plan: 'PLAN_B', term: 'OUT_OF_TERM' })).toBe(0);
-    expect(sessionFeeBps({ plan: 'PLAN_A', term: 'OUT_OF_TERM' })).toBe(0);
+  it('rounds down in the practitioner’s favour', () => {
+    expect(fee('PLAN_B', 0, 4_501)).toBe(1_350);
   });
 
-  it('never charges on a free session', () => {
-    expect(sessionFeeCents({ plan: 'PLAN_B', term: 'NONE', priceUsdCents: 0 })).toBe(0);
-  });
-
-  it('rounds down in the practitioner favour', () => {
-    expect(sessionFeeCents({ plan: 'PLAN_B', term: 'NONE', priceUsdCents: 4_501 })).toBe(1_800);
-  });
-
-  it('bills §9 test 3 exactly: $40 at months 0, 3 and 6, then $0', () => {
-    const price = 10_000; // $100 session
-    const inTerm = ['NONE', 'IN_TERM', 'IN_TERM'] as const;
-    const charged = inTerm.map((term) => sessionFeeCents({ plan: 'PLAN_B', term, priceUsdCents: price }));
-    expect(charged).toEqual([4_000, 4_000, 4_000]);
-    expect(sessionFeeCents({ plan: 'PLAN_B', term: 'OUT_OF_TERM', priceUsdCents: price })).toBe(0);
+  it('no PLAN_*_FIRST_SESSION_FEE_ONCE flag changes a fee any more', () => {
+    const before = [0, 3, 8].map((m) => fee('PLAN_B', m));
+    process.env.PLAN_B_FIRST_SESSION_FEE_ONCE = 'true';
+    process.env.PLAN_A_FIRST_SESSION_FEE_ONCE = 'true';
+    try {
+      expect([0, 3, 8].map((m) => fee('PLAN_B', m))).toEqual(before);
+    } finally {
+      delete process.env.PLAN_B_FIRST_SESSION_FEE_ONCE;
+      delete process.env.PLAN_A_FIRST_SESSION_FEE_ONCE;
+    }
   });
 });

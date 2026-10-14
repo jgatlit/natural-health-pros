@@ -24,12 +24,21 @@ import { reverseReferralOnRefund } from '@/lib/referral-refunds';
 
 const PAID_AT = new Date(Date.UTC(2026, 5, 1));
 
-function fake(row: Record<string, unknown> | null) {
+function fake(
+  row: Record<string, unknown> | null,
+  extra: { feeLedger?: Record<string, unknown>[]; snapshot?: Record<string, unknown> | null } = {},
+) {
   const ledger: Record<string, unknown>[] = [];
   const updates: Record<string, unknown>[] = [];
+  const preexisting = extra.feeLedger ?? [];
   return {
     ledger,
     updates,
+    bookingFeeSnapshot: {
+      async findUnique() {
+        return extra.snapshot ?? null;
+      },
+    },
     referralLedgerEntry: {
       async findFirst() {
         return row;
@@ -43,8 +52,24 @@ function fake(row: Record<string, unknown> | null) {
     feeLedgerEntry: {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       async upsert(args: any) {
+        const existing = ledger.find((l) => l.dedupeKey === args.where.dedupeKey);
+        if (existing) return existing;
         ledger.push(args.create);
         return args.create;
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async findFirst(args: any) {
+        return (
+          [...preexisting, ...ledger].find(
+            (l) => l.kind === args.where.kind && l.whopPaymentId === args.where.whopPaymentId,
+          ) ?? null
+        );
+      },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async findMany(args: any) {
+        return [...preexisting, ...ledger].filter(
+          (l) => l.kind === args.where.kind && l.bookingIntentId === args.where.bookingIntentId,
+        );
       },
     },
   };
@@ -183,7 +208,12 @@ describe('reverseReferralOnRefund — nothing to do', () => {
       at: PAID_AT,
     });
 
-    expect(result).toEqual({ reversedUsdCents: 0, recoveryOwedUsdCents: 0, matched: false });
+    expect(result).toEqual({
+      reversedUsdCents: 0,
+      recoveryOwedUsdCents: 0,
+      matched: false,
+      affiliateReversedUsdCents: 0,
+    });
     expect(db.ledger).toEqual([]);
   });
 
@@ -199,5 +229,118 @@ describe('reverseReferralOnRefund — nothing to do', () => {
 
     expect(result.reversedUsdCents).toBe(0);
     expect(db.ledger).toEqual([]);
+  });
+});
+
+
+/**
+ * SPEC v1.5 §1 — a refund reverses the AFFILIATE share too, not only the referrer's. The affiliate
+ * ledger does not exist yet (lane L2b), so the reversal is an append-only negative FeeLedgerEntry
+ * keyed on the refund: that entry is the seam L2b will apply.
+ */
+describe('reverseReferralOnRefund — the recruiting affiliate share (spec v1.5)', () => {
+  const snapshot = {
+    bookingIntentId: 'bi_1',
+    priceUsdCents: 10_000,
+    affiliateShareUsdCents: 300,
+    recruiterPractitionerId: 'R',
+  };
+  const appFee = {
+    kind: 'APPLICATION_FEE',
+    whopPaymentId: 'pay_1',
+    bookingIntentId: 'bi_1',
+    dedupeKey: 'APPLICATION_FEE:bi_1',
+  };
+
+  it('a FULL refund reverses the whole affiliate share AND the referrer share', async () => {
+    const db = fake(entry(), { feeLedger: [appFee], snapshot });
+    const result = await reverseReferralOnRefund(db, {
+      whopPaymentId: 'pay_1',
+      refundAmountUsdDollars: 100,
+      refundId: 'ref_1',
+      at: PAID_AT,
+    });
+
+    expect(result.reversedUsdCents).toBe(2_000);
+    expect(result.affiliateReversedUsdCents).toBe(300);
+    const aff = db.ledger.find((l) => l.kind === 'AFFILIATE_REFUND_REVERSAL');
+    expect(aff).toMatchObject({
+      amountUsdCents: -300,
+      counterpartyPractitionerId: 'R',
+      bookingIntentId: 'bi_1',
+      whopPaymentId: 'pay_1',
+    });
+  });
+
+  it('a partial refund reverses the affiliate share pro rata, floored', async () => {
+    const db = fake(null, { feeLedger: [appFee], snapshot });
+    const result = await reverseReferralOnRefund(db, {
+      whopPaymentId: 'pay_1',
+      refundAmountUsdDollars: 33.33,
+      refundId: 'ref_1',
+      at: PAID_AT,
+    });
+    expect(result.affiliateReversedUsdCents).toBe(99);
+    expect(result.matched).toBe(false);
+  });
+
+  it('is idempotent on a Whop redelivery of the same refund — one entry, the same answer', async () => {
+    const db = fake(null, { feeLedger: [appFee], snapshot });
+    const input = { whopPaymentId: 'pay_1', refundAmountUsdDollars: 50, refundId: 'ref_1', at: PAID_AT };
+    const first = await reverseReferralOnRefund(db, input);
+    const second = await reverseReferralOnRefund(db, input);
+
+    expect(first.affiliateReversedUsdCents).toBe(150);
+    expect(second.affiliateReversedUsdCents).toBe(150);
+    expect(db.ledger.filter((l) => l.kind === 'AFFILIATE_REFUND_REVERSAL')).toHaveLength(1);
+  });
+
+  it('several partial refunds can never reverse more than the share that was owed', async () => {
+    const db = fake(null, { feeLedger: [appFee], snapshot });
+    const a = await reverseReferralOnRefund(db, {
+      whopPaymentId: 'pay_1',
+      refundAmountUsdDollars: 80,
+      refundId: 'r1',
+      at: PAID_AT,
+    });
+    const b = await reverseReferralOnRefund(db, {
+      whopPaymentId: 'pay_1',
+      refundAmountUsdDollars: 80,
+      refundId: 'r2',
+      at: PAID_AT,
+    });
+
+    expect(a.affiliateReversedUsdCents).toBe(240);
+    expect(b.affiliateReversedUsdCents).toBe(60);
+    const total = db.ledger
+      .filter((l) => l.kind === 'AFFILIATE_REFUND_REVERSAL')
+      .reduce((n, l) => n + (l.amountUsdCents as number), 0);
+    expect(total).toBe(-300);
+  });
+
+  it('reverses nothing when the booking owed no affiliate', async () => {
+    const db = fake(null, {
+      feeLedger: [appFee],
+      snapshot: { ...snapshot, affiliateShareUsdCents: 0, recruiterPractitionerId: null },
+    });
+    const result = await reverseReferralOnRefund(db, {
+      whopPaymentId: 'pay_1',
+      refundAmountUsdDollars: 100,
+      refundId: 'r1',
+      at: PAID_AT,
+    });
+    expect(result.affiliateReversedUsdCents).toBe(0);
+    expect(db.ledger).toHaveLength(0);
+  });
+
+  it('reverses nothing for a payment we cannot trace to a booking (no APPLICATION_FEE row)', async () => {
+    const db = fake(null, { snapshot });
+    const result = await reverseReferralOnRefund(db, {
+      whopPaymentId: 'pay_x',
+      refundAmountUsdDollars: 100,
+      refundId: 'r1',
+      at: PAID_AT,
+    });
+    expect(result.affiliateReversedUsdCents).toBe(0);
   });
 });

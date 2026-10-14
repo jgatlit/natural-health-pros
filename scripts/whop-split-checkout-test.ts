@@ -2,15 +2,19 @@
  * 50/50 split-checkout probe (2026-09-14 action item).
  *
  * Mints ONE real checkout configuration on a connected practitioner account with the platform fee
- * set from `src/lib/pricing-plans.ts` — it does not pay. A human has to complete the checkout with
+ * set from the current rate schedule — it does not pay. A human has to complete the checkout with
  * a card; only that proves the money actually splits and lands in both directions, which is the
  * part no API read can answer (`verified` is a marketplace badge, not a payout gate).
  *
  * Usage:
  *   npx tsx --env-file=.env scripts/whop-split-checkout-test.ts --company biz_… [--price 100] [--plan PLAN_B]
  */
+import { PrismaClient } from '@prisma/client';
+
 import { createOfferingCheckout } from '../src/lib/whop';
-import { getPlan, formatBpsAsPercent, isPlanKey, platformFeeCents } from '../src/lib/pricing-plans';
+import { formatBpsAsPercent, isPlanKey, planLabel } from '../src/lib/pricing-plans';
+import { planSourcedBps } from '../src/lib/rate-schedule';
+import { requireCurrentSchedule } from '../src/lib/rate-schedules';
 
 function arg(name: string, fallback?: string): string {
   const i = process.argv.indexOf(`--${name}`);
@@ -30,12 +34,17 @@ async function main() {
   const practitionerId = arg('practitioner', 'split-test');
   const slug = arg('slug', 'split-test');
 
-  const plan = getPlan(planKey);
-  const fee = platformFeeCents({ plan: planKey, priceUsdCents, isFirstSession: true });
+  // The rate comes from the CURRENT rate schedule in the database (spec v1.5 §2) — there is no
+  // literal or env default to fall back on.
+  const prisma = new PrismaClient();
+  const schedule = await requireCurrentSchedule(prisma).finally(() => prisma.$disconnect());
+  const bps = planSourcedBps(schedule, planKey);
+  const fee = Math.floor((priceUsdCents * bps) / 10_000);
 
   console.log(`company            ${companyId}`);
-  console.log(`plan               ${plan.label} (${planKey})`);
-  console.log(`first-session split ${formatBpsAsPercent(plan.firstSessionPlatformFeeBps)} platform`);
+  console.log(`plan               ${planLabel(planKey)} (${planKey})`);
+  console.log(`schedule           ${schedule.label ?? schedule.id}`);
+  console.log(`sourced split      ${formatBpsAsPercent(bps)} platform`);
   console.log(`price              $${(priceUsdCents / 100).toFixed(2)}`);
   console.log(`platform fee       $${(fee / 100).toFixed(2)}`);
   console.log(`practitioner nets  $${((priceUsdCents - fee) / 100).toFixed(2)}`);
@@ -50,7 +59,7 @@ async function main() {
     offeringId: `split-test-${Date.now()}`,
     practitionerId,
     slug,
-    title: `Split test — ${formatBpsAsPercent(plan.firstSessionPlatformFeeBps)} platform fee`,
+    title: `Split test — ${formatBpsAsPercent(bps)} platform fee`,
     priceUsdCents,
     interval: 'ONE_TIME',
     applicationFeeCents: fee,

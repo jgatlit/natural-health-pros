@@ -75,6 +75,8 @@ export default async function AdminInvitesPage({
               delistedAt: true,
               archivedAt: true,
               openToOutsideWork: true,
+              // Spec v1.5 §2: which rate card this practitioner is priced under.
+              rateSchedule: { select: { label: true } },
             },
           },
         },
@@ -108,6 +110,8 @@ export default async function AdminInvitesPage({
               delistedAt: true,
               archivedAt: true,
               openToOutsideWork: true,
+              // Spec v1.5 §2: which rate card this practitioner is priced under.
+              rateSchedule: { select: { label: true } },
             },
           },
         },
@@ -416,6 +420,14 @@ export default async function AdminInvitesPage({
                       >
                         {practitioner.openToOutsideWork ? 'Open' : 'Not open'}
                       </Badge>
+                    )}
+                    {status === 'accepted' && practitioner && (
+                      <span
+                        className="whitespace-nowrap text-[10px] text-muted-foreground"
+                        title="Rate schedule — change it from Commercial settings"
+                      >
+                        Rates: {practitioner.rateSchedule?.label ?? 'NONE — checkout refuses'}
+                      </span>
                     )}
                     {status === 'pending' && (
                       <Badge variant="default" className="gap-1 text-[10px]">

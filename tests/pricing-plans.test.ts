@@ -1,195 +1,111 @@
-import { describe, expect, it, beforeEach, afterEach } from 'vitest';
+import { describe, expect, it } from 'vitest';
+
 import {
+  annualPlanALabel,
   formatBpsAsPercent,
-  getPlan,
-  isPlanKey,
-  platformFeeCents,
-  practitionerNetCents,
-  practitionerPlans,
+  monthlyFeeLabel,
   planComparison,
-  sessionFeeBps,
-  sourcedSessionFeeBps,
+  planLabel,
+  referralTermsView,
 } from '@/lib/pricing-plans';
+import { annualPlanAPriceCents, planSourcedBps } from '@/lib/rate-schedule';
+import { resolveSessionFee } from '@/lib/referral-fees';
+import { V1, V1_NUMBERS, V2 } from './helpers/rate-schedule';
 
-const PLAN_ENV = [
-  'PLAN_A_LABEL',
-  'PLAN_A_MONTHLY_FEE_CENTS',
-  'PLAN_A_FIRST_SESSION_FEE_BPS',
-  'PLAN_A_LATER_SESSION_FEE_BPS',
-  'PLAN_B_LABEL',
-  'PLAN_B_MONTHLY_FEE_CENTS',
-  'PLAN_B_FIRST_SESSION_FEE_BPS',
-  'PLAN_B_LATER_SESSION_FEE_BPS',
-];
-
-describe('pricing-plans', () => {
-  let saved: Record<string, string | undefined>;
-
-  beforeEach(() => {
-    saved = Object.fromEntries(PLAN_ENV.map((k) => [k, process.env[k]]));
-    for (const k of PLAN_ENV) delete process.env[k];
-  });
-
-  afterEach(() => {
-    for (const [k, v] of Object.entries(saved)) {
-      if (v === undefined) delete process.env[k];
-      else process.env[k] = v;
-    }
-  });
-
-  it('defaults match the working structure from the 2026-09-14 call', () => {
-    const plans = practitionerPlans();
-    expect(plans.PLAN_A.monthlyFeeUsdCents).toBe(3900);
-    expect(plans.PLAN_A.firstSessionPlatformFeeBps).toBe(2000);
-    expect(plans.PLAN_B.monthlyFeeUsdCents).toBe(0);
-    expect(plans.PLAN_B.firstSessionPlatformFeeBps).toBe(4000);
-    expect(plans.PLAN_B.laterSessionPlatformFeeBps).toBe(0);
-  });
-
-  it('both plans require a Whop account', () => {
-    expect(getPlan('PLAN_A').requiresWhopAccount).toBe(true);
-    expect(getPlan('PLAN_B').requiresWhopAccount).toBe(true);
-  });
-
-  it('every number is overridable from env — nothing is hardcoded at the call site', () => {
-    process.env.PLAN_A_MONTHLY_FEE_CENTS = '4900';
-    process.env.PLAN_B_FIRST_SESSION_FEE_BPS = '4000';
-    expect(getPlan('PLAN_A').monthlyFeeUsdCents).toBe(4900);
-    expect(getPlan('PLAN_B').firstSessionPlatformFeeBps).toBe(4000);
-  });
-
-  it('rejects nonsense config loudly rather than silently charging the wrong split', () => {
-    process.env.PLAN_A_FIRST_SESSION_FEE_BPS = '20000';
-    expect(() => getPlan('PLAN_A')).toThrow(/<= 10000/);
-    process.env.PLAN_A_FIRST_SESSION_FEE_BPS = 'half';
-    expect(() => getPlan('PLAN_A')).toThrow(/non-negative integer/);
-  });
-
-  it('splits a sourced first session 60/40 under Plan B — practitioner takes the larger share', () => {
-    const args = { plan: 'PLAN_B' as const, priceUsdCents: 15_000, isFirstSession: true };
-    expect(platformFeeCents(args)).toBe(6_000);
-    expect(practitionerNetCents(args)).toBe(9_000);
-  });
-
-  it('takes nothing from a Plan B later session', () => {
-    const args = { plan: 'PLAN_B' as const, priceUsdCents: 15_000, isFirstSession: false };
-    expect(platformFeeCents(args)).toBe(0);
-    expect(practitionerNetCents(args)).toBe(15_000);
-  });
-
-  it('takes 20% on every Plan A session', () => {
-    expect(platformFeeCents({ plan: 'PLAN_A', priceUsdCents: 10_000, isFirstSession: true })).toBe(
-      2_000,
-    );
-    expect(platformFeeCents({ plan: 'PLAN_A', priceUsdCents: 10_000, isFirstSession: false })).toBe(
-      2_000,
-    );
-  });
-
-  it('rounds the fee down so the half-cent goes to the practitioner', () => {
-    const args = { plan: 'PLAN_B' as const, priceUsdCents: 4_501, isFirstSession: true };
-    expect(platformFeeCents(args)).toBe(1_800);
-    expect(practitionerNetCents(args)).toBe(2_701);
-  });
-
-  it('never charges a fee on a free or unpriced session', () => {
-    expect(platformFeeCents({ plan: 'PLAN_B', priceUsdCents: 0, isFirstSession: true })).toBe(0);
-  });
-
-  it('formats splits for display', () => {
-    expect(formatBpsAsPercent(4_000)).toBe('40%');
-    expect(formatBpsAsPercent(2_000)).toBe('20%');
-    expect(formatBpsAsPercent(1_250)).toBe('12.50%');
-  });
-
-  it('guards plan keys coming off a form', () => {
-    expect(isPlanKey('PLAN_A')).toBe(true);
-    expect(isPlanKey('plan_a')).toBe(false);
-    expect(isPlanKey(undefined)).toBe(false);
-  });
-});
+/**
+ * Plan copy is GENERATED FROM A SCHEDULE. Nothing here can name a rate that is not in the schedule
+ * it was handed, which is what `no-rate-literals.test.ts` enforces from the other side (no digits
+ * left in the copy source).
+ */
 
 describe('plan copy cannot disagree with what the checkout actually charges', () => {
-  /**
-   * ⚠️ THE BUG THIS EXISTS FOR. The plan cards showed "First session we source" / "After that",
-   * reading `laterSessionPlatformFeeBps` for the second row — which is 0 on Plan B. So the card
-   * told a practitioner we take nothing on Plan B after the first session, while the shipped fee
-   * rule charged 40% on every sourced session inside the term. Copy that disagrees with the charge
-   * is worse than no copy: it is the thing a practitioner points at when they dispute an invoice.
-   */
-  it('quotes the rate the fee rule uses, for every sourced session', () => {
-    const { cards } = planComparison();
-    for (const card of cards) {
-      const expected = formatBpsAsPercent(sourcedSessionFeeBps(card.key));
-      expect(card.sourcedSessionLabel, `${card.key} sourced rate`).toContain(expected);
+  const ANCHOR = new Date('2026-01-15T12:00:00.000Z');
+  const charged = (schedule: typeof V1, plan: 'PLAN_A' | 'PLAN_B') =>
+    resolveSessionFee({
+      plan,
+      owner: 'NHP',
+      referrerPractitionerId: null,
+      priceUsdCents: 10_000,
+      schedule,
+      practitionerId: 'Y',
+      recruiterPractitionerId: null,
+      anchorAt: ANCHOR,
+      at: ANCHOR,
+    }).nhpFeeBps;
+
+  it('quotes exactly the rate the fee rule charges, for every sourced session, on any schedule', () => {
+    for (const schedule of [V1, V2]) {
+      for (const card of planComparison(schedule).cards) {
+        expect(card.sourcedSessionLabel, `${schedule.id} ${card.key}`).toContain(
+          formatBpsAsPercent(charged(schedule, card.key)),
+        );
+        expect(charged(schedule, card.key)).toBe(planSourcedBps(schedule, card.key));
+      }
     }
   });
 
-  it('says 0% after the term on BOTH plans — operator ruling 5', () => {
-    for (const card of planComparison().cards) {
-      expect(card.afterTermLabel, `${card.key} post-term`).toBe('We take nothing');
-    }
-  });
-
-  it('never claims a post-term rate that the fee rule would actually charge', () => {
-    // Mutation guard on the ruling: if OUT_OF_TERM ever stops being free on one plan, this card
-    // becomes a false statement and this is what catches it.
-    for (const card of planComparison().cards) {
-      expect(
-        sessionFeeBps({ plan: card.key, term: 'OUT_OF_TERM' }),
-        `${card.key} charges after the term but the card says we take nothing`,
-      ).toBe(0);
+  it('says 0% after the term on BOTH plans', () => {
+    for (const card of planComparison(V1).cards) {
+      expect(card.afterTermLabel).toBe('We take nothing');
     }
   });
 
   it('computes the break-even as subscription ÷ rate gap, not as a typed-in number', () => {
-    const { breakEvenMonthlyLabel } = planComparison();
-    // $39 / (40% - 20%) = $195. The default config is the ruled one, so this is the §8.1 figure.
-    expect(breakEvenMonthlyLabel).toBe('$195');
+    // $39 / (30% − 10%) = $195.
+    expect(planComparison(V1).breakEvenMonthlyLabel).toBe('$195');
   });
 
-  it('moves the break-even when the monthly fee moves', () => {
-    process.env.PLAN_A_MONTHLY_FEE_CENTS = '2900';
-    try {
-      expect(planComparison().breakEvenMonthlyLabel).toBe('$145');
-    } finally {
-      delete process.env.PLAN_A_MONTHLY_FEE_CENTS;
-    }
+  it('moves the break-even when the schedule moves', () => {
+    // $29 / (20% − 5%) = $193.33…, rounded to the cent.
+    expect(planComparison(V2).breakEvenMonthlyLabel).toBe('$193.33');
+    expect(planComparison({ ...V1_NUMBERS, planAMonthlyCents: 2900 }).breakEvenMonthlyLabel).toBe('$145');
   });
 
   it('says "never" rather than rendering infinity when the two rates are equal', () => {
-    process.env.PLAN_B_FIRST_SESSION_FEE_BPS = '2000';
-    try {
-      expect(planComparison().breakEvenMonthlyLabel).toBe('never');
-    } finally {
-      delete process.env.PLAN_B_FIRST_SESSION_FEE_BPS;
-    }
+    expect(planComparison({ ...V1_NUMBERS, planBSourcedBps: V1_NUMBERS.planASourcedBps }).breakEvenMonthlyLabel).toBe(
+      'never',
+    );
   });
 });
 
-describe('the deprecated once-per-client flag is inert, and must stay inert', () => {
-  /**
-   * `firstSessionFeeOnce` expressed a rule the operator REVERSED on 2026-09-18. It is still on the
-   * type for one release, which means a boolean with a money-shaped name sits next to two rate
-   * fields — exactly the thing somebody re-wires in good faith. This is the tripwire.
-   */
-  for (const plan of ['PLAN_A', 'PLAN_B'] as const) {
-    for (const value of ['true', 'false']) {
-      it(`${plan} charges the same with the flag ${value}`, () => {
-        const term = ['NONE', 'IN_TERM', 'PENDING_ANCHOR', 'OUT_OF_TERM'] as const;
-        const before = term.map((t) => sessionFeeBps({ plan, term: t }));
+describe('labels are derived from the schedule', () => {
+  it('monthly labels', () => {
+    expect(monthlyFeeLabel(V1, 'PLAN_A')).toBe('$39/mo');
+    expect(monthlyFeeLabel(V1, 'PLAN_B')).toBe('No monthly fee');
+    expect(monthlyFeeLabel({ ...V1_NUMBERS, planAMonthlyCents: 4950 }, 'PLAN_A')).toBe('$49.50/mo');
+  });
 
-        process.env[`${plan}_FIRST_SESSION_FEE_ONCE`] = value;
-        try {
-          expect(
-            term.map((t) => sessionFeeBps({ plan, term: t })),
-            `${plan}_FIRST_SESSION_FEE_ONCE=${value} changed a fee — the reversed once-per-client ` +
-              `rule has been re-wired into the money path`,
-          ).toEqual(before);
-        } finally {
-          delete process.env[`${plan}_FIRST_SESSION_FEE_ONCE`];
-        }
-      });
-    }
-  }
+  it('the yearly Plan A price is DERIVED: 3900 × 12 × (1 − 20%) = 37440 cents', () => {
+    expect(annualPlanAPriceCents(V1)).toBe(37_440);
+    expect(annualPlanALabel(V1)).toBe('$374.40/yr');
+    expect(annualPlanAPriceCents({ ...V1_NUMBERS, annualDiscountBps: 0 })).toBe(46_800);
+    expect(annualPlanALabel({ ...V1_NUMBERS, planAMonthlyCents: 5000 })).toBe('$480/yr');
+  });
+
+  it('only Plan A has a yearly label', () => {
+    const cards = planComparison(V1).cards;
+    expect(cards[0].annualLabel).toBe('$374.40/yr');
+    expect(cards[1].annualLabel).toBeNull();
+  });
+
+  it('the referral sentence numbers come from the schedule', () => {
+    expect(referralTermsView(V1)).toEqual({
+      termMonths: 8,
+      referrerTermMonths: 4,
+      referralTotalLabel: '30%',
+      referrerRateLabel: '20%',
+      nhpReferralRateLabel: '10%',
+    });
+    expect(referralTermsView(V2).termMonths).toBe(8);
+  });
+
+  it('plan labels default to Plan A / Plan B', () => {
+    expect(planLabel('PLAN_A')).toBe('Plan A');
+    expect(planLabel('PLAN_B')).toBe('Plan B');
+  });
+
+  it('formats splits for display', () => {
+    expect(formatBpsAsPercent(3_000)).toBe('30%');
+    expect(formatBpsAsPercent(1_250)).toBe('12.50%');
+  });
 });

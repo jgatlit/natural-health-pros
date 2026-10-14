@@ -6,6 +6,13 @@ import { redirect } from 'next/navigation';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
 import { saveSetting, SETTING_DEFS } from '@/lib/platform-settings';
+import {
+  parseScheduleForm,
+  RateScheduleInvariantError,
+  annualPlanAPriceCents,
+  type RateScheduleNumbers,
+} from '@/lib/rate-schedule';
+import { CohortMigrationError, migrateCohort, saveCurrentSchedule } from '@/lib/rate-schedules';
 
 async function authorizeAdmin() {
   const session = await auth();
@@ -18,12 +25,11 @@ async function authorizeAdmin() {
 export type SettingFormState = { ok: boolean; message: string } | null;
 
 /**
- * Save one commercial setting.
+ * Save one commercial setting (today only the referral hold period — rates and terms live in the
+ * rate schedule below).
  *
- * ⚠️ FORWARD-ONLY, AND THAT IS NOT ENFORCED HERE. Every attribution row snapshots the term at
- * creation and every held ledger row snapshots the hold, so a change made on this screen governs
- * NEW rows only. Nothing in this action needs to backfill, and anything that did would retroprice
- * claims already sold.
+ * ⚠️ FORWARD-ONLY, AND THAT IS NOT ENFORCED HERE. Every held ledger row snapshots the hold at
+ * creation, so a change made on this screen governs NEW rows only.
  */
 export async function saveCommercialSetting(
   _prev: SettingFormState,
@@ -32,7 +38,7 @@ export async function saveCommercialSetting(
   const session = await authorizeAdmin();
 
   const name = String(formData.get('name') ?? '');
-  if (name !== 'leadAttributionTermMonths' && name !== 'referralHoldDays') {
+  if (name !== 'referralHoldDays') {
     return { ok: false, message: 'Unknown setting.' };
   }
   const def = SETTING_DEFS[name];
@@ -52,6 +58,91 @@ export async function saveCommercialSetting(
   revalidatePath('/admin/commercial-settings');
   return {
     ok: true,
-    message: `${def.label} is now ${value} ${def.unit}. This applies to new attributions only — existing ones keep the term they were sold.`,
+    message: `${def.label} is now ${value} ${def.unit}. This applies to new holds only — existing ones keep the hold they were created under.`,
   };
+}
+
+/**
+ * SAVE THE CURRENT RATE SCHEDULE (spec v1.5 §2).
+ *
+ * Server-authoritative: the browser's live validation is a courtesy, and `saveCurrentSchedule`
+ * re-runs every invariant (including the 30% platform ceiling) before anything is written. A save
+ * finds the existing schedule by content hash or creates a new one, then makes it the schedule NEW
+ * sign-ups get. It moves NOBODY who already has one, and re-prices no in-flight term.
+ */
+export async function saveRateSchedule(
+  _prev: SettingFormState,
+  formData: FormData,
+): Promise<SettingFormState> {
+  const session = await authorizeAdmin();
+
+  const fields = parseScheduleForm((name) => {
+    const v = formData.get(name);
+    return typeof v === 'string' ? v : null;
+  });
+  const labelRaw = String(formData.get('label') ?? '').trim();
+  const label = labelRaw.slice(0, 80) || `Custom — ${new Date().toISOString().slice(0, 10)}`;
+
+  let result;
+  try {
+    result = await prisma.$transaction((tx) =>
+      saveCurrentSchedule(tx, fields, { label, byUserId: session.user.id ?? null }),
+    );
+  } catch (err) {
+    if (err instanceof RateScheduleInvariantError) {
+      return { ok: false, message: `Not saved. ${err.violations.join('. ')}.` };
+    }
+    return { ok: false, message: err instanceof Error ? err.message : 'Could not save.' };
+  }
+
+  revalidatePath('/admin/commercial-settings');
+  const annual = annualPlanAPriceCents(result.schedule as RateScheduleNumbers);
+  return {
+    ok: true,
+    message:
+      (result.created
+        ? `Created schedule “${result.schedule.label}”.`
+        : `These numbers already exist as “${result.schedule.label}” — reused it.`) +
+      ` It is now the schedule for NEW sign-ups (yearly Plan A: $${(annual / 100).toFixed(2)}).` +
+      ' Nobody who already has a schedule was moved.',
+  };
+}
+
+/**
+ * MIGRATE COHORT X → Y. The only way an existing practitioner changes schedule. Requires a reason;
+ * writes one assignment row per practitioner moved and one audit row.
+ */
+export async function migrateRateScheduleCohort(
+  _prev: SettingFormState,
+  formData: FormData,
+): Promise<SettingFormState> {
+  const session = await authorizeAdmin();
+
+  const fromScheduleId = String(formData.get('fromScheduleId') ?? '');
+  const toScheduleId = String(formData.get('toScheduleId') ?? '');
+  const reason = String(formData.get('reason') ?? '');
+
+  try {
+    const { moved } = await prisma.$transaction((tx) =>
+      migrateCohort(tx, {
+        fromScheduleId,
+        toScheduleId,
+        reason,
+        byUserId: session.user.id ?? null,
+      }),
+    );
+    revalidatePath('/admin/commercial-settings');
+    return {
+      ok: true,
+      message:
+        moved === 0
+          ? 'Nobody is on the source schedule, so nothing moved.'
+          : `Moved ${moved} practitioner${moved === 1 ? '' : 's'}. Clients already attributed keep the rates they were sold under; new clients are priced on the new schedule.`,
+    };
+  } catch (err) {
+    if (err instanceof CohortMigrationError || err instanceof RateScheduleInvariantError) {
+      return { ok: false, message: err.message };
+    }
+    return { ok: false, message: err instanceof Error ? err.message : 'Could not migrate.' };
+  }
 }

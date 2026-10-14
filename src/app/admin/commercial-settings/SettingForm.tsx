@@ -32,7 +32,7 @@ function SaveButton() {
 /**
  * One number, one save button, and the sentence explaining what it does to money.
  *
- * Deliberately NOT a combined "save all settings" form: these two values govern different
+ * Deliberately NOT a combined "save all settings" form: each value governs a different
  * mechanisms and an operator editing the hold period should not be able to nudge the attribution
  * term by accident on the same submit.
  */
@@ -45,7 +45,7 @@ export function SettingForm({
   min,
   max,
 }: {
-  name: 'leadAttributionTermMonths' | 'referralHoldDays';
+  name: 'referralHoldDays';
   label: string;
   help: string;
   unit: string;
