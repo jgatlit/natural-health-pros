@@ -290,6 +290,36 @@ describe('admin: read-only recruiter links and affiliate totals per recruiter', 
     expect(html).not.toMatch(/<form|<button|<input/);
   });
 
+  it('lists stuck payout rows (HELD, SENDING for over an hour) with the reconcile warning', async () => {
+    const old = new Date(NOW.getTime() - 3 * 3_600_000);
+    state.db = {
+      practitioner: {
+        findMany: async (args: any) =>
+          args.where.id
+            ? PEOPLE.filter((p) => args.where.id.in.includes(p.id)).map((p) => ({ id: p.id, displayName: p.displayName, slug: p.slug }))
+            : [],
+      },
+      affiliateLedgerEntry: {
+        findMany: async () => [
+          { ...row({ state: 'SENDING', transferUsdCents: 300 }), id: 'afl_old', updatedAt: old, lastError: null },
+          { ...row({ state: 'SENDING', transferUsdCents: 300 }), id: 'afl_fresh', updatedAt: NOW, lastError: null },
+          { ...row({ state: 'HELD' }), id: 'afl_held', updatedAt: old, lastError: 'fetch failed' },
+          { ...row({ state: 'ACCRUED' }), id: 'afl_fine', updatedAt: old, lastError: null },
+        ],
+      },
+    };
+    const { AffiliateLedgerSection } = await import('@/app/admin/commercial-settings/AffiliateLedgerSection');
+    const html = renderToStaticMarkup(await AffiliateLedgerSection({ now: NOW }));
+    expect(html).toContain('2 payout rows need a person');
+    expect(html).toContain('afl_old');
+    expect(html).toContain('afl_held');
+    expect(html).toContain('fetch failed');
+    expect(html).not.toContain('afl_fresh');
+    expect(html).not.toContain('afl_fine');
+    expect(html).toContain('affiliate_ledger_entry_id');
+    expect(html).not.toMatch(/<form|<button|<input/);
+  });
+
   it('is rendered only inside the ADMIN-gated page, and carries no write path of its own', () => {
     const page = readFileSync(join(__dirname, '..', 'src/app/admin/commercial-settings/page.tsx'), 'utf8');
     expect(page.indexOf("role !== 'ADMIN'")).toBeGreaterThan(-1);

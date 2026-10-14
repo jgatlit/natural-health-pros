@@ -30,6 +30,7 @@
 import { isPayable } from './referral-settlement';
 import { payoutsGuard, toTransferDollars, type TransferFn } from './referral-payouts';
 import { WhopNotConfigured } from './whop';
+import { RETIREMENT_SENTINEL, bookableWhere } from './practitioner-indexer';
 
 export const TRANSFERS_DISABLED_REASON = 'skipped: transfers disabled';
 
@@ -64,8 +65,24 @@ type Candidate = {
   reversedUsdCents: number;
   transferAttempts: number;
   recruiterPractitionerId: string;
-  recruiterPractitioner: { whopCompanyId: string | null; whopPayoutsEnabled: boolean } | null;
+  recruiterPractitioner: {
+    whopCompanyId: string | null;
+    whopPayoutsEnabled: boolean;
+    archivedAt: Date | null;
+    trialEndsAt: Date | null;
+  } | null;
 };
+
+/**
+ * "While both are active" (spec section 5), checked again at the moment of payment: the same
+ * `bookableWhere()` predicate the fee path used to accept the recruiter at mint (not archived, not
+ * retired). The debt was earned and is NOT dropped when a recruiter goes inactive: the row simply
+ * stays ACCRUED, unselected, and pays if they are reinstated.
+ */
+function isActiveRecruiter(p: { archivedAt: Date | null; trialEndsAt: Date | null } | null): boolean {
+  if (!p || p.archivedAt != null) return false;
+  return p.trialEndsAt == null || p.trialEndsAt.getTime() > RETIREMENT_SENTINEL.getTime();
+}
 
 /**
  * Did Whop REFUSE this request (so no transfer exists), as opposed to something that may have
@@ -111,7 +128,7 @@ export async function settleAffiliateShares(
       state: 'ACCRUED',
       settledAt: null,
       holdUntil: { lte: opts.at },
-      recruiterPractitioner: { whopCompanyId: { not: null }, whopPayoutsEnabled: true },
+      recruiterPractitioner: { whopCompanyId: { not: null }, whopPayoutsEnabled: true, ...bookableWhere() },
     },
     select: {
       id: true,
@@ -119,7 +136,9 @@ export async function settleAffiliateShares(
       reversedUsdCents: true,
       transferAttempts: true,
       recruiterPractitionerId: true,
-      recruiterPractitioner: { select: { whopCompanyId: true, whopPayoutsEnabled: true } },
+      recruiterPractitioner: {
+        select: { whopCompanyId: true, whopPayoutsEnabled: true, archivedAt: true, trialEndsAt: true },
+      },
     },
     orderBy: { holdUntil: 'asc' },
     take: BATCH,
@@ -129,7 +148,7 @@ export async function settleAffiliateShares(
   for (const row of rows) {
     const destination = row.recruiterPractitioner?.whopCompanyId ?? null;
     // Re-checked in code: the query filter is an optimisation, this is the rule.
-    if (!destination || !isPayable(row.recruiterPractitioner)) {
+    if (!destination || !isPayable(row.recruiterPractitioner) || !isActiveRecruiter(row.recruiterPractitioner)) {
       summary.skipped += 1;
       continue;
     }
@@ -138,6 +157,13 @@ export async function settleAffiliateShares(
     // the refund path moves it to REVERSED), never sent as a zero transfer.
     const amount = row.shareUsdCents - row.reversedUsdCents;
     if (amount <= 0) {
+      // HEAL, don't just skip: a fully reversed row that the refund path did not get to flip would
+      // otherwise sit at the front of the oldest-first batch forever and starve the rows behind it.
+      // Guarded on the state and the reversed total we read, so it cannot touch a row that moved.
+      await db.affiliateLedgerEntry.updateMany({
+        where: { id: row.id, state: 'ACCRUED', reversedUsdCents: row.reversedUsdCents },
+        data: { state: 'REVERSED' },
+      });
       summary.skipped += 1;
       continue;
     }
@@ -179,6 +205,10 @@ export async function settleAffiliateShares(
         originId: process.env.WHOP_PARENT_COMPANY_ID!,
         destinationId: destination,
         amountUsdDollars: dollars,
+        // So a transfer that left but was never recorded can be FOUND (see the reconcile
+        // procedure in the PR / runbook), and so Whop can refuse a duplicate if it honours the key.
+        metadata: { kind: 'affiliate', affiliate_ledger_entry_id: row.id },
+        idempotenceKey: `affiliate-ledger:${row.id}`,
       }));
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
@@ -224,4 +254,71 @@ export async function settleAffiliateShares(
   }
 
   return summary;
+}
+
+/** A transfer that has been "in flight" this long without a receipt is stuck, not slow. */
+export const STUCK_SENDING_AFTER_MS = 60 * 60 * 1000;
+
+export type StuckAffiliateRow = {
+  id: string;
+  state: 'SENDING' | 'HELD';
+  recruiterPractitionerId: string;
+  /** What was claimed for transfer (SENDING) or is held (HELD), in cents. */
+  amountUsdCents: number;
+  lastError: string | null;
+  updatedAt: Date;
+};
+
+/**
+ * Rows the automatic sweep will never touch again, and that therefore need a human:
+ *
+ *   SENDING older than an hour: a transfer was claimed (and may have LEFT) but no receipt was
+ *     recorded. Never re-sent, because `POST /transfers` may have succeeded.
+ *   HELD: a failure that could not be proven harmless (network error, timeout, 5xx), or a bad amount.
+ *
+ * Read-only and independent of `WHOP_TRANSFERS_ENABLED`: stuck money must be visible even if the
+ * flag has since been switched off. The cron turns a non-empty result into an error (so `ok` is
+ * false) and a console.error naming the row ids.
+ */
+export async function findStuckAffiliateShares(
+  db: AffiliatePayoutsDb,
+  opts: { at: Date },
+): Promise<StuckAffiliateRow[]> {
+  const rows = (await db.affiliateLedgerEntry.findMany({
+    where: {
+      OR: [
+        { state: 'HELD' },
+        { state: 'SENDING', updatedAt: { lte: new Date(opts.at.getTime() - STUCK_SENDING_AFTER_MS) } },
+      ],
+    },
+    select: {
+      id: true,
+      state: true,
+      recruiterPractitionerId: true,
+      shareUsdCents: true,
+      reversedUsdCents: true,
+      transferUsdCents: true,
+      lastError: true,
+      updatedAt: true,
+    },
+    orderBy: { updatedAt: 'asc' },
+    take: 200,
+  })) as Array<{
+    id: string;
+    state: 'SENDING' | 'HELD';
+    recruiterPractitionerId: string;
+    shareUsdCents: number;
+    reversedUsdCents: number;
+    transferUsdCents: number | null;
+    lastError: string | null;
+    updatedAt: Date;
+  }>;
+  return rows.map((r) => ({
+    id: r.id,
+    state: r.state,
+    recruiterPractitionerId: r.recruiterPractitionerId,
+    amountUsdCents: r.transferUsdCents ?? Math.max(0, r.shareUsdCents - r.reversedUsdCents),
+    lastError: r.lastError,
+    updatedAt: r.updatedAt,
+  }));
 }

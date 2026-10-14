@@ -17,16 +17,23 @@
 
 import { holdExpiry } from './attribution-term';
 
-export type AffiliateAccrualDb = {
+export type AffiliateAccrualDb = AffiliateReversalDb & {
   affiliateLedgerEntry: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     upsert(args: any): Promise<any>;
+  };
+  /** Read for the refund markers that may have arrived BEFORE this row existed. */
+  feeLedgerEntry: {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    findMany(args: any): Promise<any[]>;
   };
 };
 
 export type AffiliateSnapshot = {
   priceUsdCents: number;
   applicationFeeUsdCents: number;
+  /** NHP's own fee on this payment. When absent (older callers) the funding check falls back to the application fee. */
+  nhpFeeUsdCents?: number | null;
   affiliateBps: number | null;
   affiliateShareUsdCents: number | null;
   recruiterPractitionerId: string | null;
@@ -75,12 +82,17 @@ export async function accrueAffiliateShare(
   if (share > snap.priceUsdCents) {
     throw new Error(`affiliate share ${share} exceeds the gross payment ${snap.priceUsdCents}`);
   }
-  // The share is funded from the SAME transaction: out of NHP's fee when NHP charged one, otherwise
-  // added to the application fee. Either way the single application fee collected on the parent
-  // must cover it, or the parent would be paying a recruiter out of pocket.
-  if (share > snap.applicationFeeUsdCents) {
+  // The share is funded from the SAME transaction, and the spec says from WHERE: out of NHP's fee
+  // when NHP charged one (so the share cannot exceed it, whatever a referrer's separate share adds
+  // to the total collected), otherwise added to the application fee (so it is bounded by that).
+  // Anything larger means the parent would be paying a recruiter out of pocket.
+  const nhpFee = snap.nhpFeeUsdCents ?? 0;
+  const fundingCeiling = nhpFee > 0 ? nhpFee : snap.applicationFeeUsdCents;
+  if (share > fundingCeiling) {
     throw new Error(
-      `affiliate share ${share} exceeds the application fee actually collected (${snap.applicationFeeUsdCents})`,
+      nhpFee > 0
+        ? `affiliate share ${share} exceeds NHP's fee on this payment (${nhpFee}), which is what funds it`
+        : `affiliate share ${share} exceeds the application fee actually collected (${snap.applicationFeeUsdCents})`,
     );
   }
 
@@ -105,7 +117,44 @@ export async function accrueAffiliateShare(
     },
     update: {},
   });
+
+  // A REFUND CAN BEAT THE ROW HERE. Accrual runs last in the payment commit and can throw (a
+  // refused share) after the APPLICATION_FEE row is already committed; a refund webhook then finds
+  // the booking and writes its audit marker, and the retried payment.succeeded creates a row that
+  // has never heard of it. Applied on EVERY delivery, to a new row or an existing one: the sync is
+  // monotone and idempotent, so the cost of a redelivery is one read.
+  await syncAffiliateReversalFromMarkers(db, {
+    bookingIntentId: input.bookingIntentId,
+    recruiterPractitionerId: recruiterId,
+  });
   return { accrued: true, shareUsdCents: share, recruiterPractitionerId: recruiterId };
+}
+
+/**
+ * Bring the ledger row up to the SUM of every `AFFILIATE_REFUND_REVERSAL` marker for the booking.
+ *
+ * The markers are append-only and are the truth; the row's `reversedUsdCents` is a cache of their
+ * sum. Reading the whole set (rather than trusting a total computed before this delivery's own
+ * write) is what lets two concurrent refunds both land: whichever runs second sees both markers.
+ * A no-op when nothing has been reversed.
+ */
+export async function syncAffiliateReversalFromMarkers(
+  db: AffiliateReversalDb & Pick<AffiliateAccrualDb, 'feeLedgerEntry'>,
+  input: { bookingIntentId: string; recruiterPractitionerId: string },
+): Promise<{ found: boolean; recoveryOwedUsdCents: number; totalReversedUsdCents: number }> {
+  const markers = (await db.feeLedgerEntry.findMany({
+    where: { kind: 'AFFILIATE_REFUND_REVERSAL', bookingIntentId: input.bookingIntentId },
+    select: { amountUsdCents: true },
+  })) as Array<{ amountUsdCents: number }>;
+  // Entries are NEGATIVE.
+  const total = markers.reduce((sum, m) => sum - m.amountUsdCents, 0);
+  if (total <= 0) return { found: true, recoveryOwedUsdCents: 0, totalReversedUsdCents: 0 };
+  const applied = await applyAffiliateReversal(db, {
+    bookingIntentId: input.bookingIntentId,
+    recruiterPractitionerId: input.recruiterPractitionerId,
+    totalReversedUsdCents: total,
+  });
+  return { ...applied, totalReversedUsdCents: total };
 }
 
 export type AffiliateReversalDb = {
@@ -121,9 +170,9 @@ export type AffiliateReversalDb = {
  * Apply the refund-reversal total for one booking to its ledger row.
  *
  * `totalReversedUsdCents` is the SUM of every append-only `AFFILIATE_REFUND_REVERSAL` entry for the
- * booking, and it is written ABSOLUTELY, never as an increment. That is what makes a redelivered
- * refund (or a crash between the fee-ledger write and this one, repaired by the retry) harmless:
- * applying the same total twice is the same as applying it once.
+ * booking, written ABSOLUTELY and MONOTONICALLY (never an increment, never downwards). That is what
+ * makes a redelivered refund (or a crash between the fee-ledger write and this one, repaired by
+ * the retry) harmless, and what keeps two interleaved refunds from losing one.
  *
  * Returns what, if anything, is now owed BACK by the recruiter because the share had already left:
  * `transferUsdCents - (share - reversed)` when the row is SENDING or SETTLED. It is only recorded,
@@ -147,10 +196,16 @@ export async function applyAffiliateReversal(
 
   // Never above the share, never negative.
   const total = Math.max(0, Math.min(input.totalReversedUsdCents, row.shareUsdCents));
-  await db.affiliateLedgerEntry.updateMany({
-    where: { id: row.id },
-    data: { reversedUsdCents: total },
-  });
+  // MONOTONE: only ever raises the stored total (`WHERE reversedUsdCents < total`, one atomic
+  // statement). Markers are append-only, so the true total never falls; a stale writer holding an
+  // older, smaller sum therefore cannot overwrite a newer one, which is what a plain
+  // last-write-wins `SET reversedUsdCents = total` allowed when two refunds interleaved.
+  if (total > 0) {
+    await db.affiliateLedgerEntry.updateMany({
+      where: { id: row.id, reversedUsdCents: { lt: total } },
+      data: { reversedUsdCents: total },
+    });
+  }
   // An unpaid row that is now fully reversed owes nothing and leaves the payable set. Guarded on
   // the unpaid states so it can never overwrite SENDING / SETTLED.
   if (total >= row.shareUsdCents) {

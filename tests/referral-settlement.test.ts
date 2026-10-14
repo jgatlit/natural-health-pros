@@ -106,6 +106,12 @@ function db(seed: {
         if (!feeLedger.has(k)) feeLedger.set(k, { ...args.create });
         return feeLedger.get(k);
       },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async findMany(args: any) {
+        return Array.from(feeLedger.values()).filter((l) =>
+          Object.entries(args.where as Record<string, unknown>).every(([f, v]) => l[f] === v),
+        );
+      },
     },
     referralTouch: {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any

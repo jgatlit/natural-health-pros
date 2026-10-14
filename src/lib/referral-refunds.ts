@@ -40,7 +40,7 @@
  */
 
 import { proRataShare } from './referral-fees';
-import { applyAffiliateReversal, type AffiliateReversalDb } from './affiliate-ledger';
+import { syncAffiliateReversalFromMarkers, type AffiliateReversalDb } from './affiliate-ledger';
 
 export type RefundDb = AffiliateReversalDb & {
   /** Resolves a payment to its booking, for the affiliate half (the snapshot is keyed on booking). */
@@ -174,12 +174,14 @@ async function reverseAffiliateShare(
     });
   }
 
-  // Applied on EVERY delivery, redeliveries included: the total is absolute, so a retry repairs a
-  // crash between the marker write above and this one instead of skipping the ledger forever.
-  const applied = await applyAffiliateReversal(db, {
+  // Applied on EVERY delivery, redeliveries included, from the marker SUM re-read AFTER this
+  // delivery's own marker is in. Two refunds arriving together each read the markers before the
+  // other's upsert if they compute from the earlier read; re-reading here means the later of the
+  // two sees both, and the write itself is monotone (see `applyAffiliateReversal`), so the earlier
+  // one cannot then overwrite it downwards. It also repairs a crash between the marker and the row.
+  const applied = await syncAffiliateReversalFromMarkers(db, {
     bookingIntentId: snapshot.bookingIntentId,
     recruiterPractitionerId: snapshot.recruiterPractitionerId,
-    totalReversedUsdCents: alreadyReversed + reversal,
   });
   return {
     affiliateReversedUsdCents: reversal,

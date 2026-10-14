@@ -18,7 +18,10 @@ export type Entry = Record<string, any>;
 
 export function fakeAffiliateDb(opts: {
   /** Recruiters' wallets by practitioner id, for the nested `recruiterPractitioner` filter/select. */
-  practitioners?: Record<string, { whopCompanyId: string | null; whopPayoutsEnabled: boolean }>;
+  practitioners?: Record<
+    string,
+    { whopCompanyId: string | null; whopPayoutsEnabled: boolean; archivedAt?: Date | null; trialEndsAt?: Date | null }
+  >;
   entries?: Entry[];
 } = {}) {
   const rows: Entry[] = (opts.entries ?? []).map((e, i) => ({
@@ -37,17 +40,20 @@ export function fakeAffiliateDb(opts: {
 
   const matches = (r: Entry, where: Record<string, any> = {}): boolean =>
     Object.entries(where).every(([k, v]) => {
+      if (k === 'OR') return (v as Record<string, any>[]).some((sub) => matches(r, sub));
       if (k === 'recruiterPractitioner') {
         const w = wallets[r.recruiterPractitionerId];
         if (!w) return false;
         return (
           (v.whopCompanyId?.not === null ? w.whopCompanyId !== null : true) &&
-          (v.whopPayoutsEnabled === undefined || w.whopPayoutsEnabled === v.whopPayoutsEnabled)
+          (v.whopPayoutsEnabled === undefined || w.whopPayoutsEnabled === v.whopPayoutsEnabled) &&
+          (v.archivedAt === undefined || (w.archivedAt ?? null) === v.archivedAt)
         );
       }
       if (v && typeof v === 'object' && !(v instanceof Date)) {
         if ('in' in v) return v.in.includes(r[k]);
-        if ('lte' in v) return r[k] !== null && r[k].getTime() <= v.lte.getTime();
+        if ('lte' in v) return r[k] != null && r[k].getTime() <= v.lte.getTime();
+        if ('lt' in v) return r[k] < v.lt;
         if ('gt' in v) return r[k] > v.gt;
       }
       return r[k] === v;
@@ -89,6 +95,9 @@ export function fakeAffiliateDb(opts: {
     },
     async findMany(args: any = {}) {
       let out = rows.filter((r) => matches(r, args.where));
+      if (args.orderBy?.updatedAt === 'asc') {
+        out = [...out].sort((a, b) => a.updatedAt.getTime() - b.updatedAt.getTime());
+      }
       if (args.orderBy?.holdUntil === 'asc') {
         out = [...out].sort((a, b) => a.holdUntil.getTime() - b.holdUntil.getTime());
       }

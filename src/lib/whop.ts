@@ -524,6 +524,10 @@ export async function createTransfer(params: {
   destinationId: string;
   /** DOLLARS. See the warning above. */
   amountUsdDollars: number;
+  /** Attached so the transfer can be found again by `GET /transfers` (affiliate payouts pass it). */
+  metadata?: Record<string, string>;
+  /** Whop's documented duplicate-transfer key for ledger transfers (SDK `TransferCreateParams`). */
+  idempotenceKey?: string;
 }): Promise<{ transferId: string }> {
   const res = await whopPost<{ id: string }>(
     '/transfers',
@@ -532,6 +536,9 @@ export async function createTransfer(params: {
       destination_id: params.destinationId,
       amount: params.amountUsdDollars,
       currency: 'usd',
+      // Only when supplied, so the referral path's request body is byte-for-byte what it was.
+      ...(params.metadata ? { metadata: params.metadata } : {}),
+      ...(params.idempotenceKey ? { idempotence_key: params.idempotenceKey } : {}),
     },
     'transfer a referrer share',
   );

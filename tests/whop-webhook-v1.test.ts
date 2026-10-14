@@ -1183,6 +1183,8 @@ describe('refund.created — §9 test 17', () => {
       affiliateShareUsdCents: 300,
       recruiterPractitionerId: 'prac_R',
     });
+    // 1st read: the markers that PRECEDE this refund; 2nd: the full set once its own marker is in.
+    mocks.feeLedgerFindMany.mockResolvedValueOnce([]).mockResolvedValueOnce([{ amountUsdCents: -300 }]);
     mocks.affiliateFindUnique
       .mockResolvedValueOnce({ id: 'afl_1', shareUsdCents: 300 })
       .mockResolvedValueOnce({ state: 'SETTLED', shareUsdCents: 300, reversedUsdCents: 300, transferUsdCents: 300 });
@@ -1191,7 +1193,10 @@ describe('refund.created — §9 test 17', () => {
 
     expect(res.status).toBe(200);
     expect(mocks.affiliateUpdateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'afl_1' }, data: { reversedUsdCents: 300 } }),
+      expect.objectContaining({
+        where: { id: 'afl_1', reversedUsdCents: { lt: 300 } },
+        data: { reversedUsdCents: 300 },
+      }),
     );
     expect(
       mocks.eventUpdate.mock.calls.some((c) => JSON.stringify(c[0]).includes('recruiting-affiliate share of 300 cents')),
@@ -1206,6 +1211,7 @@ describe('refund.created — §9 test 17', () => {
       affiliateShareUsdCents: 300,
       recruiterPractitionerId: 'prac_R',
     });
+    mocks.feeLedgerFindMany.mockResolvedValueOnce([]).mockResolvedValueOnce([{ amountUsdCents: -300 }]);
     mocks.affiliateFindUnique
       .mockResolvedValueOnce({ id: 'afl_1', shareUsdCents: 300 })
       .mockResolvedValueOnce({ state: 'REVERSED', shareUsdCents: 300, reversedUsdCents: 300, transferUsdCents: null });

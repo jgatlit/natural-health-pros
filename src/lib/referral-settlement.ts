@@ -51,10 +51,16 @@ export type SettlementDb = AttributionResolverDb & {
   affiliateLedgerEntry: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     upsert(args: any): Promise<any>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    findUnique(args: any): Promise<any>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    updateMany(args: any): Promise<{ count: number }>;
   };
   feeLedgerEntry: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     upsert(args: any): Promise<any>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    findMany(args: any): Promise<any[]>;
   };
   referralTouch: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any

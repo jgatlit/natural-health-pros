@@ -1,6 +1,8 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  STUCK_SENDING_AFTER_MS,
+  findStuckAffiliateShares,
   MAX_TRANSFER_ATTEMPTS,
   TRANSFERS_DISABLED_REASON,
   isDefinitiveTransferRejection,
@@ -122,6 +124,9 @@ describe('e14: an accrued entry settles through the mocked transfer path', () =>
       originId: 'biz_parent',
       destinationId: 'biz_R',
       amountUsdDollars: 3, // 300 CENTS -> 3 DOLLARS: the 100x trap
+      // so a transfer that left unrecorded can be FOUND by `GET /transfers` and matched to its row
+      metadata: { kind: 'affiliate', affiliate_ledger_entry_id: 'afl_1' },
+      idempotenceKey: 'affiliate-ledger:afl_1',
     });
     expect(db.rows[0]).toMatchObject({
       state: 'SETTLED',
@@ -158,7 +163,22 @@ describe('e14: an accrued entry settles through the mocked transfer path', () =>
     const summary = await settleAffiliateShares(db as any, { transfer, at: NOW });
     expect(transfer).not.toHaveBeenCalled();
     expect(summary.skipped).toBe(1);
-    expect(db.rows[0].state).toBe('ACCRUED');
+    // healed rather than left to sit at the front of the oldest-first batch forever
+    expect(db.rows[0].state).toBe('REVERSED');
+  });
+
+  it('a row that cannot pay does not starve the rows behind it: 60 reversed rows, then a payable one', async () => {
+    enable();
+    const dead = Array.from({ length: 60 }, (_, i) =>
+      entry({ id: `dead${i}`, bookingIntentId: `bd_${i}`, reversedUsdCents: 300, holdUntil: new Date(PAST.getTime() - 1000 * (100 - i)) }),
+    );
+    const db = fakeAffiliateDb({ practitioners: wallets, entries: [...dead, entry({ id: 'live', bookingIntentId: 'bi_live' })] });
+    const transfer = okTransfer();
+    await settleAffiliateShares(db as any, { transfer, at: NOW }); // clears the first 50 dead rows
+    await settleAffiliateShares(db as any, { transfer, at: NOW }); // clears the rest and reaches `live`
+    await settleAffiliateShares(db as any, { transfer, at: NOW });
+    expect(transfer).toHaveBeenCalledTimes(1);
+    expect(db.rows.find((r) => r.id === 'live')!.state).toBe('SETTLED');
   });
 });
 
@@ -354,5 +374,69 @@ describe('isDefinitiveTransferRejection', () => {
     expect(isDefinitiveTransferRejection(new Error('Whop /transfers failed (504): timeout'))).toBe(false);
     expect(isDefinitiveTransferRejection(new TypeError('fetch failed'))).toBe(false);
     expect(isDefinitiveTransferRejection('weird')).toBe(false);
+  });
+});
+
+describe('"while both are active": an inactive recruiter is not paid at settle time', () => {
+  it('an ARCHIVED recruiter stays ACCRUED, unsent; reinstated, the same row pays', async () => {
+    enable();
+    const w: any = { R: { ...VERIFIED, archivedAt: new Date(Date.UTC(2026, 11, 15)) } };
+    const db = fakeAffiliateDb({ practitioners: w, entries: [entry()] });
+    const transfer = okTransfer();
+    await settleAffiliateShares(db as any, { transfer, at: NOW });
+    expect(transfer).not.toHaveBeenCalled();
+    expect(db.rows[0].state).toBe('ACCRUED');
+    w.R = { ...VERIFIED, archivedAt: null };
+    await settleAffiliateShares(db as any, { transfer, at: NOW });
+    expect(transfer).toHaveBeenCalledTimes(1);
+  });
+
+  it('a RETIRED recruiter (trial backdated to the epoch sentinel) is not paid either', async () => {
+    enable();
+    const w: any = { R: { ...VERIFIED, archivedAt: null, trialEndsAt: new Date('1971-01-01T00:00:00.000Z') } };
+    const db = fakeAffiliateDb({ practitioners: w, entries: [entry()] });
+    const transfer = okTransfer();
+    const summary = await settleAffiliateShares(db as any, { transfer, at: NOW });
+    expect(transfer).not.toHaveBeenCalled();
+    expect(summary.skipped).toBe(1);
+    expect(db.rows[0].state).toBe('ACCRUED');
+  });
+
+  it('the activity predicate is in the QUERY, so inactive rows cannot fill the batch either', async () => {
+    enable();
+    const db = fakeAffiliateDb({ practitioners: wallets, entries: [entry()] });
+    const find = vi.spyOn(db.affiliateLedgerEntry, 'findMany');
+    await settleAffiliateShares(db as any, { transfer: okTransfer(), at: NOW });
+    const where = find.mock.calls[0][0].where;
+    expect(where.recruiterPractitioner).toMatchObject({ archivedAt: null });
+    expect(where.state).toBe('ACCRUED');
+  });
+});
+
+describe('stuck rows are found, and only the ones that need a person', () => {
+  const T = NOW.getTime();
+  it('HELD, and SENDING older than an hour; never fresh SENDING, ACCRUED or SETTLED', async () => {
+    const db = fakeAffiliateDb({
+      practitioners: wallets,
+      entries: [
+        entry({ id: 'held', bookingIntentId: 'b1', state: 'HELD', updatedAt: new Date(T - 1000), lastError: 'fetch failed' }),
+        entry({ id: 'old', bookingIntentId: 'b2', state: 'SENDING', transferUsdCents: 300, updatedAt: new Date(T - STUCK_SENDING_AFTER_MS - 1) }),
+        entry({ id: 'fresh', bookingIntentId: 'b3', state: 'SENDING', transferUsdCents: 300, updatedAt: new Date(T - 60_000) }),
+        entry({ id: 'acc', bookingIntentId: 'b4', state: 'ACCRUED', updatedAt: new Date(T - 99_999_999) }),
+        entry({ id: 'set', bookingIntentId: 'b5', state: 'SETTLED', updatedAt: new Date(T - 99_999_999) }),
+      ],
+    });
+    const stuck = await findStuckAffiliateShares(db as any, { at: NOW });
+    expect(stuck.map((r) => r.id).sort()).toEqual(['held', 'old']);
+    expect(stuck.find((r) => r.id === 'held')).toMatchObject({ state: 'HELD', amountUsdCents: 300, lastError: 'fetch failed' });
+  });
+
+  it('is read-only and works with the payout flag OFF', async () => {
+    delete process.env.WHOP_TRANSFERS_ENABLED;
+    const db = fakeAffiliateDb({ practitioners: wallets, entries: [entry({ state: 'HELD', updatedAt: NOW })] });
+    const upd = vi.spyOn(db.affiliateLedgerEntry, 'updateMany');
+    const stuck = await findStuckAffiliateShares(db as any, { at: NOW });
+    expect(stuck).toHaveLength(1);
+    expect(upd).not.toHaveBeenCalled();
   });
 });

@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { resolveBookingFee } from '@/lib/booking-fee';
 import { commitPaymentAttribution } from '@/lib/referral-settlement';
@@ -84,6 +84,8 @@ function commitDb(snapshot: Record<string, any> | null, affiliate = fakeAffiliat
         if (!feeLedger.has(args.where.dedupeKey)) feeLedger.set(args.where.dedupeKey, { ...args.create });
         return feeLedger.get(args.where.dedupeKey);
       },
+      findMany: async (args: any) =>
+        Array.from(feeLedger.values()).filter((l) => Object.entries(args.where).every(([k, v]) => l[k] === v)),
     },
     referralTouch: {
       updateMany: async () => ({ count: 1 }),
@@ -460,20 +462,60 @@ describe('refunds reverse the affiliate ledger entry, by the same rule as the re
       totalReversedUsdCents: 9_999,
     });
     expect(db.rows[0].reversedUsdCents).toBe(300);
+    // MONOTONE: an older, smaller (or nonsense) total can never lower what is stored.
     await applyAffiliateReversal(db as any, {
       bookingIntentId: 'bi_1',
       recruiterPractitionerId: R,
       totalReversedUsdCents: -50,
     });
-    expect(db.rows[0].reversedUsdCents).toBe(0);
+    expect(db.rows[0].reversedUsdCents).toBe(300);
+    await applyAffiliateReversal(db as any, {
+      bookingIntentId: 'bi_1',
+      recruiterPractitionerId: R,
+      totalReversedUsdCents: 120,
+    });
+    expect(db.rows[0].reversedUsdCents).toBe(300);
   });
 
-  it('a payment with no ledger row (accrued before this lane) reverses the marker only', async () => {
+  it('a refund that arrives BEFORE the row exists writes its marker, and the row, when created, picks it up', async () => {
     const db = refundDb(null);
     const out = await refund(db, 100);
     expect(out.affiliateReversedUsdCents).toBe(300);
     expect(out.affiliateRecoveryOwedUsdCents).toBe(0);
     expect(db.ledger.filter((l) => l.kind === 'AFFILIATE_REFUND_REVERSAL')).toHaveLength(1);
+    expect(db.affiliate.rows).toHaveLength(0);
+
+    // The retried payment.succeeded now creates the row.
+    await accrueAffiliateShare(db as any, {
+      bookingIntentId: 'bi_1',
+      recruitedPractitionerId: Y,
+      whopPaymentId: 'pay_1',
+      snapshot: {
+        priceUsdCents: 10_000,
+        applicationFeeUsdCents: 300,
+        nhpFeeUsdCents: 0,
+        affiliateBps: 300,
+        affiliateShareUsdCents: 300,
+        recruiterPractitionerId: R,
+      },
+      holdDays: 90,
+      paidAt: PAID_AT,
+    });
+    expect(db.affiliate.rows[0]).toMatchObject({ shareUsdCents: 300, reversedUsdCents: 300, state: 'REVERSED' });
+  });
+
+  it('a PARTIAL early refund leaves a live row for the remainder', async () => {
+    const db = refundDb(null);
+    await refund(db, 50);
+    await accrueAffiliateShare(db as any, {
+      bookingIntentId: 'bi_1',
+      recruitedPractitionerId: Y,
+      whopPaymentId: 'pay_1',
+      snapshot: { priceUsdCents: 10_000, applicationFeeUsdCents: 300, nhpFeeUsdCents: 0, affiliateBps: 300, affiliateShareUsdCents: 300, recruiterPractitionerId: R },
+      holdDays: 90,
+      paidAt: PAID_AT,
+    });
+    expect(db.affiliate.rows[0]).toMatchObject({ reversedUsdCents: 150, state: 'ACCRUED' });
   });
 
   it('a zero or negative refund touches nothing', async () => {
@@ -557,5 +599,129 @@ describe('a refund after the share has left: recorded and flagged, never clawed 
     const db = refundDb(entry({ state: 'HELD' }));
     await refund(db, 100);
     expect(db.affiliate.rows[0].state).toBe('REVERSED');
+  });
+});
+
+describe('E2E: refund first, retried payment.succeeded second, settle sends nothing', () => {
+  it('a fully refunded payment whose accrual was retried is never paid', async () => {
+    const { snapshot } = await pipeline({ plan: 'PLAN_A' });
+    const db = commitDb(snapshot);
+    // The refund webhook beat the (retried) accrual: its marker is already in the fee ledger.
+    db.feeLedger.set('AFFILIATE_REFUND_REVERSAL:r1:bi_1', {
+      kind: 'AFFILIATE_REFUND_REVERSAL',
+      dedupeKey: 'AFFILIATE_REFUND_REVERSAL:r1:bi_1',
+      bookingIntentId: 'bi_1',
+      amountUsdCents: -300,
+    });
+    await commit(db);
+    expect(db.affiliate.rows[0]).toMatchObject({ shareUsdCents: 300, reversedUsdCents: 300, state: 'REVERSED' });
+
+    process.env.WHOP_TRANSFERS_ENABLED = 'true';
+    process.env.WHOP_COMPANY_API_KEY = 'k';
+    process.env.WHOP_PARENT_COMPANY_ID = 'biz_parent';
+    try {
+      const { settleAffiliateShares } = await import('@/lib/affiliate-payouts');
+      const transfer = vi.fn(async () => ({ transferId: 'tr_x' }));
+      db.affiliate.rows[0].holdUntil = new Date(0);
+      const live = fakeAffiliateDb({
+        practitioners: { [R]: { whopCompanyId: 'biz_R', whopPayoutsEnabled: true } },
+        entries: [db.affiliate.rows[0]],
+      });
+      await settleAffiliateShares(live as any, { transfer, at: new Date(Date.UTC(2030, 0, 1)) });
+      expect(transfer).not.toHaveBeenCalled();
+    } finally {
+      delete process.env.WHOP_TRANSFERS_ENABLED;
+      delete process.env.WHOP_COMPANY_API_KEY;
+      delete process.env.WHOP_PARENT_COMPANY_ID;
+    }
+  });
+});
+
+/** Pauses the FIRST ledger write that carries a reversed total, until `release()` is called. */
+function pauseFirstReversalWrite(db: ReturnType<typeof refundDb>) {
+  const inner = db.affiliate.affiliateLedgerEntry.updateMany;
+  let reached!: () => void;
+  const atWrite = new Promise<void>((r) => (reached = r));
+  let release!: () => void;
+  const gate = new Promise<void>((r) => (release = r));
+  let paused = false;
+  db.affiliate.affiliateLedgerEntry.updateMany = async (args: any) => {
+    if (!paused && args.data.reversedUsdCents !== undefined) {
+      paused = true;
+      reached();
+      await gate;
+    }
+    return inner(args);
+  };
+  return { atWrite, release };
+}
+
+describe('two refunds interleaved never lose one, and never exceed the share', () => {
+  it('the older writer, holding a smaller total, cannot overwrite the newer one', async () => {
+    const db = refundDb(entry());
+    const pause = pauseFirstReversalWrite(db);
+
+    const a = refund(db, 40, 'r1'); // read a sum of 120 and is about to store it
+    await pause.atWrite;
+    const b = await refund(db, 40, 'r2'); // sees A's marker; 120 more; stores 240 first
+    expect(b.affiliateReversedUsdCents).toBe(120);
+    expect(db.affiliate.rows[0].reversedUsdCents).toBe(240);
+
+    pause.release(); // now A's stale write of 120 runs
+    await a;
+    expect(db.affiliate.rows[0].reversedUsdCents).toBe(240);
+  });
+
+  it('two refunds in flight together: the stored total never exceeds the share', async () => {
+    const db = refundDb(entry());
+    await Promise.all([refund(db, 80, 'r1'), refund(db, 80, 'r2')]);
+    const row = db.affiliate.rows[0];
+    expect(row.reversedUsdCents).toBe(300);
+    expect(row.state).toBe('REVERSED');
+  });
+
+  it('control: with the monotone clause stripped (last write wins) the same interleaving LOSES a refund', async () => {
+    const db = refundDb(entry());
+    const stripped = db.affiliate.affiliateLedgerEntry.updateMany;
+    db.affiliate.affiliateLedgerEntry.updateMany = async (args: any) =>
+      stripped(args.data.reversedUsdCents !== undefined ? { ...args, where: { id: args.where.id } } : args);
+    const pause = pauseFirstReversalWrite(db);
+    const a = refund(db, 40, 'r1');
+    await pause.atWrite;
+    await refund(db, 40, 'r2');
+    pause.release();
+    await a;
+    expect(db.affiliate.rows[0].reversedUsdCents).toBe(120); // the lost update the guard prevents
+  });
+});
+
+describe('the funding guard follows the spec: NHP’s fee when NHP charged one, else the application fee', () => {
+  const run = (over: Record<string, unknown>) =>
+    accrueAffiliateShare({ ...fakeAffiliateDb(), feeLedgerEntry: { findMany: async () => [] } } as any, {
+      bookingIntentId: 'bi_1',
+      recruitedPractitionerId: Y,
+      whopPaymentId: 'pay_1',
+      snapshot: {
+        priceUsdCents: 10_000,
+        applicationFeeUsdCents: 3_000,
+        nhpFeeUsdCents: 1_000,
+        affiliateBps: 300,
+        affiliateShareUsdCents: 300,
+        recruiterPractitionerId: R,
+        ...over,
+      } as any,
+      holdDays: 90,
+      paidAt: PAID_AT,
+    } as any);
+
+  it('a referred session: appFee 3000 = NHP 1000 + referrer 2000; a corrupt 2500 share passes the old bound and fails this one', async () => {
+    await expect(run({ affiliateShareUsdCents: 2_500 })).rejects.toThrow(/exceeds NHP's fee/);
+    await expect(run({ affiliateShareUsdCents: 1_001 })).rejects.toThrow(/exceeds NHP's fee/);
+    await expect(run({ affiliateShareUsdCents: 1_000 })).resolves.toMatchObject({ accrued: true });
+  });
+
+  it('no NHP fee: bounded by the application fee, which is the share itself', async () => {
+    await expect(run({ nhpFeeUsdCents: 0, applicationFeeUsdCents: 300 })).resolves.toMatchObject({ accrued: true });
+    await expect(run({ nhpFeeUsdCents: 0, applicationFeeUsdCents: 299 })).rejects.toThrow(/application fee/);
   });
 });

@@ -98,6 +98,13 @@ export type TransferFn = (args: {
   destinationId: string;
   /** DOLLARS. See `toTransferDollars`. */
   amountUsdDollars: number;
+  /**
+   * Optional. Attached to the transfer so a stuck payment can be found again with
+   * `GET /transfers?origin_id=` and matched to its ledger row. The referral path passes none.
+   */
+  metadata?: Record<string, string>;
+  /** Optional. Whop's documented "unique key to prevent duplicate transfers" (ledger transfers). */
+  idempotenceKey?: string;
 }) => Promise<{ transferId: string }>;
 
 export type PayoutsDb = {
