@@ -37,6 +37,15 @@ import {
   setOpenToOutsideWork,
 } from './actions';
 import { OfferingsEditor } from '@/components/practitioners/OfferingsEditor';
+import { SectionsEditor } from '@/components/practitioners/SectionsEditor';
+import { createSection, updateSection, deleteSection, reorderSections } from './section-actions';
+import {
+  TESTIMONIAL_ATTESTATION_ENABLED,
+  embedSrc,
+  maxImageBytes,
+  maxSections,
+  maxVideoBytes,
+} from '@/lib/custom-sections';
 import { resolveHeroLink, offeringsForLink, ctaLabelFor } from '@/lib/profile-ctas';
 import { SubscriptionSection } from '@/components/practitioners/SubscriptionSection';
 import { SetupChecklist, type SetupStep } from '@/components/practitioners/SetupChecklist';
@@ -81,6 +90,18 @@ type Props = {
 };
 
 export const dynamic = 'force-dynamic';
+
+const SECTION_ERRORS: Record<string, string> = {
+  'section-title-required': 'Give the section a name.',
+  'section-embed-invalid': 'That video link is not a YouTube, Vimeo or Loom video link.',
+  'section-media-invalid': 'That uploaded file could not be used. Upload it again.',
+  'section-poster-invalid': 'That cover image could not be used. Upload it again.',
+  'section-attestation-required': 'Please confirm your testimonials are genuine before saving.',
+  'section-empty': 'Add some text or a piece of media to the section.',
+  'section-cap': 'You have reached the maximum number of sections. Remove one to add another.',
+  'section-not-found': 'That section could not be found.',
+  'section-reorder-failed': 'That reorder did not save. Try again.',
+};
 
 /**
  * Outcome copy for the Clients & Referrals section, resolved from the redirect's query string.
@@ -145,6 +166,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
       whopProducts: { where: { archived: false }, orderBy: OFFERING_ORDER },
       bookingLinks: { orderBy: { sortOrder: 'asc' } },
       caseStudies: { orderBy: { createdAt: 'desc' } },
+      profileSections: { orderBy: { sortOrder: 'asc' } },
       // The PROFILE OWNER's role — the subject of the billing exemption, and not the same
       // person as the viewer. Read from the DB, never from the session: isListed() gates on
       // this exact value server-side, and session.user.role is the VIEWER's own role, which
@@ -328,6 +350,10 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
   const publishOfferingAction = publishOffering.bind(null, params.slug);
   const unpublishOfferingAction = unpublishOffering.bind(null, params.slug);
   const reorderOfferingsAction = reorderOffering.bind(null, params.slug);
+  const createSectionAction = createSection.bind(null, params.slug);
+  const updateSectionAction = updateSection.bind(null, params.slug);
+  const deleteSectionAction = deleteSection.bind(null, params.slug);
+  const reorderSectionsAction = reorderSections.bind(null, params.slug);
 
   // WHICH LINK BECOMES THE BIG ROSE BUTTON — computed with resolveHeroLink(), the SAME function
   // the public profile uses, so the edit page cannot drift from what it is predicting. Telling a
@@ -643,6 +669,14 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
               Whop set that offering up but didn&apos;t return a payment plan for it, so checkout
               can&apos;t be shown to clients yet. Try publishing again — nothing was charged and
               nothing was lost.
+            </p>
+          </Card>
+        )}
+
+        {searchParams.error?.startsWith('section-') && (
+          <Card className="border-destructive/30 bg-destructive/5 p-3">
+            <p className="text-xs text-destructive">
+              {SECTION_ERRORS[searchParams.error] ?? 'That section could not be saved.'}
             </p>
           </Card>
         )}
@@ -1066,6 +1100,37 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
           </Card>
         </div>
         </div>
+
+        <SectionsEditor
+          slug={params.slug}
+          practitionerId={practitioner.id}
+          sections={practitioner.profileSections.map((s) => ({
+            id: s.id,
+            title: s.title,
+            bodyHtml: s.bodyHtml,
+            mediaMode:
+              s.mediaKind === 'EMBED'
+                ? 'embed'
+                : s.mediaKind === 'VIDEO_UPLOAD'
+                  ? 'video'
+                  : s.mediaKind === 'IMAGE_UPLOAD'
+                    ? 'image'
+                    : '',
+            embedUrl: embedSrc(s.embedProvider, s.embedId) ?? '',
+            mediaUrl: s.mediaUrl ?? '',
+            posterUrl: s.posterUrl ?? '',
+            caption: s.caption,
+            published: s.published,
+          }))}
+          max={maxSections()}
+          maxVideoMb={Math.round(maxVideoBytes() / (1024 * 1024))}
+          maxImageMb={Math.round(maxImageBytes() / (1024 * 1024))}
+          attestationEnabled={TESTIMONIAL_ATTESTATION_ENABLED}
+          createAction={createSectionAction}
+          updateAction={updateSectionAction}
+          deleteAction={deleteSectionAction}
+          reorderAction={reorderSectionsAction}
+        />
 
         {!isSetUp && bookingsAndClients}
 
