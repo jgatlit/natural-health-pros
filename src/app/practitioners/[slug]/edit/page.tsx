@@ -54,6 +54,9 @@ import { SpecialtyComboboxField } from '@/components/practitioners/SpecialtyComb
 import { PhotoUploadField } from '@/components/practitioners/PhotoUploadField';
 import { PhotoFramingField } from '@/components/practitioners/PhotoFramingField';
 import { AiDraftPanel } from '@/components/practitioners/AiDraftPanel';
+import { JoinLinkCard } from '@/components/practitioners/JoinLinkCard';
+import { joinLinkFor, newRecruiterToken } from '@/lib/recruiter';
+import { SITE_URL } from '@/lib/site';
 
 type Props = {
   params: { slug: string };
@@ -180,6 +183,19 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
   const ownerIsAdmin = practitioner.user.role === 'ADMIN';
   if (!isOwner && !isViewerAdmin) {
     redirect('/auth/error?error=AccessDenied');
+  }
+
+  // The migration backfills every existing row, but any other creation path (scripts, imports)
+  // can leave this null. Fill it lazily; the null guard makes a race harmless.
+  let recruiterToken = practitioner.recruiterToken;
+  if (!recruiterToken) {
+    await prisma.practitioner.updateMany({
+      where: { id: practitioner.id, recruiterToken: null },
+      data: { recruiterToken: newRecruiterToken() },
+    });
+    recruiterToken =
+      (await prisma.practitioner.findUnique({ where: { id: practitioner.id }, select: { recruiterToken: true } }))
+        ?.recruiterToken ?? null;
   }
 
   const [specialties, approvedAliases, intents] = await Promise.all([
@@ -1041,6 +1057,8 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
         </div>
 
         {!isSetUp && bookingsAndClients}
+
+        {recruiterToken && <JoinLinkCard url={joinLinkFor(SITE_URL, 'hhe', recruiterToken)} />}
 
         <AccountEmailSection
           // The OWNER's address, deliberately — not session.user.email, which is the VIEWER's

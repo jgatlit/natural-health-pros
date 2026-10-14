@@ -25,6 +25,8 @@ type Props = {
   initialSpecialties: { specialtyId: string; rawLabel: string }[];
   termsAcceptedAt: Date | null;
   planTerms: { plans: PlanCardView[]; termMonths: number; referralRateLabel: string };
+  /** Spec §5: shown before plan choice, only when a recruiter was captured. */
+  recruiterDisclosure?: string | null;
 };
 
 /**
@@ -43,6 +45,7 @@ export function OnboardingForm({
   initialSpecialties,
   termsAcceptedAt,
   planTerms,
+  recruiterDisclosure,
 }: Props) {
   return (
     <main className="min-h-screen bg-muted/30 px-4 py-10 sm:py-14">
@@ -136,6 +139,12 @@ export function OnboardingForm({
             </Field>
 
             <Separator />
+
+            {recruiterDisclosure && (
+              <p className="rounded-md border border-primary/40 bg-primary/10 px-3 py-2 text-xs">
+                {recruiterDisclosure}
+              </p>
+            )}
 
             <PlanTermsSummary {...planTerms} />
 

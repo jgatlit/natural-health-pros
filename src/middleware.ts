@@ -8,6 +8,12 @@ import {
   signAttribution,
   verifyAttribution,
 } from '@/lib/attribution';
+import {
+  RECRUITER_COOKIE,
+  RECRUITER_COOKIE_DAYS,
+  RECRUITER_PARAM,
+  nextRecruiterCookie,
+} from '@/lib/recruiter-cookie';
 
 // Build the middleware's auth instance from the EDGE-SAFE config only (no Prisma adapter)
 // so this Edge Function stays under Vercel's 1 MB limit.
@@ -95,6 +101,37 @@ async function stampAttribution(req: NextRequest, res: NextResponse): Promise<Ne
   return res;
 }
 
+/**
+ * RECRUITER CAPTURE: `?nhpa=` on the first arrival at /join/<cohort> goes into a signed HttpOnly
+ * cookie. FIRST WINS — a valid cookie already holding a recruiter is never overwritten, even by a
+ * different `nhpa`. `?ref` and `nhpr` are not read here. Never throws.
+ */
+async function stampRecruiter(req: NextRequest, res: NextResponse): Promise<NextResponse> {
+  if (!req.nextUrl.pathname.startsWith('/join/')) return res;
+  try {
+    const value = await nextRecruiterCookie({
+      param: req.nextUrl.searchParams.get(RECRUITER_PARAM),
+      existingCookie: req.cookies.get(RECRUITER_COOKIE)?.value,
+      secret: process.env.AUTH_SECRET,
+      now: Date.now(),
+    });
+    if (value) {
+      res.cookies.set(RECRUITER_COOKIE, value, {
+        httpOnly: true,
+        sameSite: 'lax',
+        secure: req.nextUrl.protocol === 'https:',
+        path: '/',
+        maxAge: RECRUITER_COOKIE_DAYS * 24 * 60 * 60,
+      });
+    }
+  } catch (err) {
+    console.error('[recruiter] failed to stamp cookie', {
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+  return res;
+}
+
 export default auth(async (req) => {
   const { pathname, search } = req.nextUrl;
   const session = req.auth;
@@ -124,7 +161,7 @@ export default auth(async (req) => {
   // Stamped on the PASS-THROUGH path only. The redirects above go to /auth/signin and
   // /auth/error, which are themselves matched by this middleware and get stamped on arrival —
   // so nothing is missed, and a gated-route bounce does not record the gate as the landing page.
-  return stampAttribution(req, NextResponse.next());
+  return stampRecruiter(req, await stampAttribution(req, NextResponse.next()));
 });
 
 export const config = {

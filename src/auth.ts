@@ -52,6 +52,7 @@ async function sendBrandedVerificationRequest(params: {
   const invitation = await resolveInvitation(to, url);
   const isInvite = invitation !== null;
   const invitedBy = invitation?.invitedBy?.name ?? null;
+  const isCohort = Boolean(invitation?.cohortId);
 
   // TRANSACTIONAL SHAPE, deliberately plain. An earlier, prettier version of this mail —
   // promo subject ("You're invited to join…"), a product pitch, and a big styled CTA button —
@@ -63,7 +64,9 @@ async function sendBrandedVerificationRequest(params: {
   const subject = isInvite
     ? 'Sign in to claim your Natural Health Pros profile'
     : 'Sign in to Natural Health Pros';
-  const line = isInvite
+  const line = isCohort
+    ? 'Use this link to set up your practitioner profile on Natural Health Pros.'
+    : isInvite
     ? `${invitedBy ?? 'An HHE admin'} invited you to claim your practitioner profile on Natural Health Pros.`
     : 'Here is your sign-in link for Natural Health Pros.';
 
