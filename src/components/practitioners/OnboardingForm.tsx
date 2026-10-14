@@ -6,6 +6,7 @@ import { CityField } from '@/components/practitioners/CityField';
 import { TermsAcknowledgment } from '@/components/practitioners/TermsAcknowledgment';
 import { PlanTermsSummary } from '@/components/practitioners/PlanTermsSummary';
 import type { PlanCardView } from '@/components/practitioners/PlanChoice';
+import { OUTSIDE_WORK_FIELD, OUTSIDE_WORK_HELPER, OUTSIDE_WORK_QUESTION } from '@/lib/outside-work';
 
 type Props = {
   action: (formData: FormData) => void | Promise<void>;
@@ -19,6 +20,8 @@ type Props = {
     yearsInPractice: number | null;
     telehealth: boolean;
     inPerson: boolean;
+    /** null = never answered: neither radio is checked. */
+    openToOutsideWork: boolean | null;
   };
   specialties: { id: string; name: string }[];
   aliases: { label: string; specialtyId: string }[];
@@ -137,6 +140,38 @@ export function OnboardingForm({
                 </label>
               </div>
             </Field>
+
+            <fieldset className="space-y-1.5">
+              <legend className="block text-xs font-medium">
+                {OUTSIDE_WORK_QUESTION}
+                <span className="ml-0.5 text-destructive">*</span>
+              </legend>
+              <div className="flex gap-6">
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name={OUTSIDE_WORK_FIELD}
+                    value="yes"
+                    required
+                    defaultChecked={values.openToOutsideWork === true}
+                  />
+                  Yes
+                </label>
+                <label className="flex items-center gap-2 text-sm">
+                  <input
+                    type="radio"
+                    name={OUTSIDE_WORK_FIELD}
+                    value="no"
+                    required
+                    defaultChecked={values.openToOutsideWork === false}
+                  />
+                  No
+                </label>
+              </div>
+              <p className="text-[11px] leading-relaxed text-muted-foreground">
+                {OUTSIDE_WORK_HELPER}
+              </p>
+            </fieldset>
 
             <Separator />
 

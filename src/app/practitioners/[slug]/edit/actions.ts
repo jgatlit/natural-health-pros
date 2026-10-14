@@ -30,6 +30,7 @@ import { rateLimit } from '@/lib/rate-limit';
 import { extractError } from '@/lib/action-utils';
 import { loadSettings } from '@/lib/platform-settings';
 import { addClientEntries } from '@/lib/client-list';
+import { OUTSIDE_WORK_FIELD, outsideWorkWrite, parseOutsideWorkAnswer } from '@/lib/outside-work';
 import { createEmailReferral, createReferralLink, referralUrl } from '@/lib/referrals';
 
 async function authorizeForSlug(slug: string) {
@@ -779,6 +780,13 @@ export async function submitOnboarding(slug: string, formData: FormData): Promis
   if (!displayName) {
     redirect(`/practitioners/${slug}/edit?error=name-required`);
   }
+  // Required, no default. HTML `required` on the radios is only the first line; a hand-built POST
+  // (or a stale form) with no answer is refused here. An admin acting for someone else is not
+  // the one being asked, so for them an absent answer simply leaves the stored value alone.
+  const outsideWork = parseOutsideWorkAnswer(formData.get(OUTSIDE_WORK_FIELD));
+  if (outsideWork === null && target.isOwner) {
+    redirect(`/practitioners/${slug}/edit?error=outside-work-required`);
+  }
   // An unresolvable city is an ERROR, not a silent null. Falling through to null clears cityId,
   // which fails isProfileComplete() -> isListed() and DELETES the practitioner from the search
   // index — while the save reports success. That is the exact silent-invisibility failure this
@@ -815,7 +823,15 @@ export async function submitOnboarding(slug: string, formData: FormData): Promis
   const [existing, catalog] = await Promise.all([
     prisma.practitioner.findUnique({
       where: { id: target.id },
-      select: { headline: true, tagline: true, whoIHelp: true, bio: true, specialties: { select: { rawLabel: true } } },
+      select: {
+        headline: true,
+        tagline: true,
+        whoIHelp: true,
+        bio: true,
+        openToOutsideWork: true,
+        openToOutsideWorkUpdatedAt: true,
+        specialties: { select: { rawLabel: true } },
+      },
     }),
     prisma.specialty.findMany({
       where: { status: { in: ['ACTIVE', 'PROPOSED'] } },
@@ -893,6 +909,17 @@ export async function submitOnboarding(slug: string, formData: FormData): Promis
         cityId,
         telehealth,
         inPerson,
+        ...(outsideWork === null
+          ? {}
+          : outsideWorkWrite(
+              {
+                openToOutsideWork: existing?.openToOutsideWork ?? false,
+                openToOutsideWorkUpdatedAt: existing?.openToOutsideWorkUpdatedAt ?? null,
+              },
+              outsideWork,
+              new Date(),
+              { recordFirstAnswer: true },
+            )),
         latitude: coords?.[0] ?? null,
         longitude: coords?.[1] ?? null,
         yearsInPractice,
@@ -948,6 +975,35 @@ export async function submitOnboarding(slug: string, formData: FormData): Promis
   revalidatePath('/');
   revalidatePath('/search');
   redirect(`/practitioners/${slug}?onboarded=1`);
+}
+
+/**
+ * The /edit "open to outside work" switch. Saves immediately and returns the value now stored.
+ * Owner-or-admin via authorizeForSlug, which sends an unknown slug and an unauthorized caller to
+ * the same AccessDenied page (IDOR discipline). The timestamp moves on a real change or on the first explicit answer.
+ *
+ * `updatedAt` is pinned to its current value on purpose: the profile form's optimistic-concurrency
+ * token is `updatedAt`, and this write is not part of that form, so bumping it would make the
+ * practitioner's next "Save profile" in the same tab fail as "changed elsewhere".
+ */
+export async function setOpenToOutsideWork(slug: string, next: boolean): Promise<boolean> {
+  const target = await authorizeForSlug(slug);
+  const current = await prisma.practitioner.findUnique({
+    where: { id: target.id },
+    select: { openToOutsideWork: true, openToOutsideWorkUpdatedAt: true, updatedAt: true },
+  });
+  if (!current) redirect('/auth/error?error=AccessDenied');
+  // recordFirstAnswer: a first explicit answer (timestamp still null) is recorded even when it
+  // equals the column default, e.g. "No" after the missing-answer redirect from onboarding.
+  const write = outsideWorkWrite(current, next === true, new Date(), { recordFirstAnswer: true });
+  if (!write) return current.openToOutsideWork;
+  await prisma.practitioner.update({
+    where: { id: target.id },
+    data: { ...write, updatedAt: current.updatedAt },
+  });
+  revalidatePath(`/practitioners/${slug}/edit`);
+  revalidatePath('/admin/invites');
+  return write.openToOutsideWork;
 }
 
 // ---- Offerings (Phase 2) ----
