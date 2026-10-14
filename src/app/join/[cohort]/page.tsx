@@ -100,9 +100,6 @@ export default async function JoinPage({ params, searchParams }: Props) {
                 </div>
               )}
               <form action={requestJoin.bind(null, cohort.slug)} className="space-y-3">
-                {param && RECRUITER_TOKEN_RE.test(param) && (
-                  <input type="hidden" name="nhpa" value={param} />
-                )}
                 <label className="block space-y-1">
                   <span className="text-xs font-medium text-muted-foreground">Email</span>
                   <input

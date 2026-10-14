@@ -12,6 +12,7 @@ import { crossReferralRates } from '@/lib/referral-fees';
 import { loadSettings } from '@/lib/platform-settings';
 import { newRecruiterToken, recruitedFields, resolveRecruiterId, RECRUITER_DISCLOSURE } from '@/lib/recruiter';
 import { RECRUITER_COOKIE, verifyRecruiterCookie } from '@/lib/recruiter-cookie';
+import { cohortRedemptionOpen } from '@/lib/join-cohort';
 
 type Props = { searchParams: { invitation?: string } };
 
@@ -80,7 +81,10 @@ export default async function OnboardingPage({ searchParams }: Props) {
     redirect('/');
   }
 
-  const invitation = await prisma.invitation.findUnique({ where: { token } });
+  const invitation = await prisma.invitation.findUnique({
+    where: { token },
+    include: { cohort: { select: { enabled: true } } },
+  });
   if (
     !invitation ||
     invitation.expiresAt < new Date() ||
@@ -100,6 +104,20 @@ export default async function OnboardingPage({ searchParams }: Props) {
     where: { userId: session.user.id },
     include: withSpecialties,
   });
+
+  if (!cohortRedemptionOpen(invitation, Boolean(practitioner))) {
+    return (
+      <main className="flex min-h-screen items-center justify-center bg-muted/30 px-4 py-12">
+        <div className="w-full max-w-sm space-y-2 rounded-xl border bg-card p-6 text-center sm:p-8">
+          <h1 className="text-xl font-semibold tracking-tight">Sign-up is closed</h1>
+          <p className="text-sm text-muted-foreground">
+            This sign-up link is not accepting new practitioners right now. Please check with your
+            program lead.
+          </p>
+        </div>
+      </main>
+    );
+  }
 
   if (!practitioner) {
     const slug = await generateUniqueSlug(invitation.email);
@@ -127,17 +145,16 @@ export default async function OnboardingPage({ searchParams }: Props) {
       trialEndsAt = new Date();
       trialEndsAt.setUTCDate(trialEndsAt.getUTCDate() + TRIAL_DAYS);
     }
-    // Recruiter (spec §3): the token captured at /join (stored on the invitation, so it survives
-    // opening the link on another device), else the first-wins cookie. Resolved against the
+    // Recruiter (spec §3): ONLY the signed first-wins cookie of the browser redeeming the link.
+    // Never anything the invitation's requester supplied (a third party can request an invitation
+    // for a victim's address with their own ?nhpa=). No cookie means no recruiter. Resolved against the
     // database now; unknown / self / archived recruiters are ignored. Written here, in the create,
     // and nowhere else — so it can never be changed later.
-    const recruiterToken =
-      invitation.recruiterToken ??
-      (await verifyRecruiterCookie(
-        cookies().get(RECRUITER_COOKIE)?.value,
-        process.env.AUTH_SECRET,
-        Date.now(),
-      ));
+    const recruiterToken = await verifyRecruiterCookie(
+      cookies().get(RECRUITER_COOKIE)?.value,
+      process.env.AUTH_SECRET,
+      Date.now(),
+    );
     const recruiterId = await resolveRecruiterId(prisma, recruiterToken, session.user.id);
 
     practitioner = await prisma.practitioner.create({

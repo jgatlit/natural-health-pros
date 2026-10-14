@@ -29,7 +29,7 @@ export default async function AdminIndex() {
     cohortSignups,
   ] = await Promise.all([
     prisma.invitation.count({
-      where: { acceptedAt: null, expiresAt: { gt: new Date() } },
+      where: { cohortId: null, acceptedAt: null, expiresAt: { gt: new Date() } },
     }),
     prisma.practitioner.count({ where: { whopCompanyId: { not: null } } }),
     prisma.whopWebhookEvent.count({ where: { receivedAt: { gt: weekAgo } } }),

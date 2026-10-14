@@ -1,13 +1,12 @@
 'use server';
 
-import { cookies, headers } from 'next/headers';
+import { headers } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { signIn } from '@/auth';
 import { prisma } from '@/lib/prisma';
 import { normalizeEmail } from '@/lib/email';
 import { rateLimit } from '@/lib/rate-limit';
 import { ensureCohortInvitation, COHORT_SLUG_RE } from '@/lib/join-cohort';
-import { RECRUITER_COOKIE, RECRUITER_TOKEN_RE, verifyRecruiterCookie } from '@/lib/recruiter-cookie';
 
 /**
  * Public, unauthenticated: anyone may request a sign-up link for an ENABLED cohort. What that buys
@@ -32,16 +31,13 @@ export async function requestJoin(cohortSlug: string, formData: FormData): Promi
   // Unknown or disabled: no invitation, no email. The page itself renders the 404 / closed state.
   if (!cohort || !cohort.enabled) redirect(base);
 
-  // First-wins: the signed cookie outranks the form's hidden copy of the URL param.
-  const secret = process.env.AUTH_SECRET;
-  const fromCookie = await verifyRecruiterCookie(cookies().get(RECRUITER_COOKIE)?.value, secret, Date.now());
-  const hidden = String(formData.get('nhpa') ?? '').trim();
-  const recruiterToken = fromCookie ?? (RECRUITER_TOKEN_RE.test(hidden) ? hidden : null);
-
+  // The recruiter is deliberately NOT recorded here. Whoever requests the email is not
+  // necessarily whoever redeems it (anyone can type a victim's address with their own ?nhpa=), so
+  // the invitation carries no recruiter data. /onboarding reads the signed cookie from the browser
+  // that actually redeems the link.
   const invite = await ensureCohortInvitation(prisma, {
     cohortId: cohort.id,
     email,
-    recruiterToken,
   });
 
   let sent = false;

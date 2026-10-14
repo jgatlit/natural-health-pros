@@ -71,7 +71,9 @@ async function inviteOne(rawEmail: string, invitedById: string): Promise<InviteO
 
   // Idempotency: reuse pending unexpired invitation for this email if present.
   const existing = await prisma.invitation.findFirst({
-    where: { email, acceptedAt: null, expiresAt: { gt: new Date() } },
+    // cohortId: null — a pending cohort sign-up is hidden from this list, so reusing it would
+    // silently skip creating the admin invite the admin thinks they just sent.
+    where: { email, cohortId: null, acceptedAt: null, expiresAt: { gt: new Date() } },
     orderBy: { createdAt: 'desc' },
   });
 

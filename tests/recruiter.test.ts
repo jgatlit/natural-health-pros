@@ -145,29 +145,24 @@ describe('cohort invitation', () => {
     },
   });
 
-  it('creates a cohort-tagged, expiring invitation carrying the recruiter token', async () => {
+  it('creates a cohort-tagged, expiring invitation that carries NO recruiter data', async () => {
     const d = mk(null);
     const now = new Date('2026-10-15T00:00:00Z');
-    const r = await ensureCohortInvitation(d, { cohortId: 'c1', email: 'a@x.com', recruiterToken: A, now });
+    const r = await ensureCohortInvitation(d, { cohortId: 'c1', email: 'a@x.com', now });
     expect(r.created).toBe(true);
     const data = d.invitation.create.mock.calls[0][0].data;
-    expect(data).toMatchObject({ cohortId: 'c1', email: 'a@x.com', recruiterToken: A });
+    expect(data).toMatchObject({ cohortId: 'c1', email: 'a@x.com' });
+    expect(data).not.toHaveProperty('recruiterToken');
     expect(data.invitedById).toBeUndefined();
     expect(data.token.length).toBeGreaterThanOrEqual(24);
     expect(data.expiresAt.getTime()).toBeGreaterThan(now.getTime());
   });
 
-  it('reuses a pending invitation and never replaces its recruiter (first-wins)', async () => {
-    const d = mk({ id: 'old', token: 'tok', recruiterToken: A });
-    const r = await ensureCohortInvitation(d, { cohortId: 'c1', email: 'a@x.com', recruiterToken: B });
+  it('reuses a pending invitation (it holds no recruiter, so nothing stale is carried)', async () => {
+    const d = mk({ id: 'old', token: 'tok' });
+    const r = await ensureCohortInvitation(d, { cohortId: 'c1', email: 'a@x.com' });
     expect(r).toEqual({ id: 'old', token: 'tok', created: false });
     expect(d.invitation.create).not.toHaveBeenCalled();
-  });
-
-  it('drops a malformed recruiter token', async () => {
-    const d = mk(null);
-    await ensureCohortInvitation(d, { cohortId: 'c1', email: 'a@x.com', recruiterToken: 'x' });
-    expect(d.invitation.create.mock.calls[0][0].data.recruiterToken).toBeNull();
   });
 
   it('cohort slugs are constrained', () => {
