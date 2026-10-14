@@ -980,7 +980,7 @@ export async function submitOnboarding(slug: string, formData: FormData): Promis
 /**
  * The /edit "open to outside work" switch. Saves immediately and returns the value now stored.
  * Owner-or-admin via authorizeForSlug, which sends an unknown slug and an unauthorized caller to
- * the same AccessDenied page (IDOR discipline). The timestamp moves only on a real change.
+ * the same AccessDenied page (IDOR discipline). The timestamp moves on a real change or on the first explicit answer.
  *
  * `updatedAt` is pinned to its current value on purpose: the profile form's optimistic-concurrency
  * token is `updatedAt`, and this write is not part of that form, so bumping it would make the
@@ -993,12 +993,16 @@ export async function setOpenToOutsideWork(slug: string, next: boolean): Promise
     select: { openToOutsideWork: true, openToOutsideWorkUpdatedAt: true, updatedAt: true },
   });
   if (!current) redirect('/auth/error?error=AccessDenied');
-  const write = outsideWorkWrite(current, next === true, new Date(), { recordFirstAnswer: false });
+  // recordFirstAnswer: a first explicit answer (timestamp still null) is recorded even when it
+  // equals the column default, e.g. "No" after the missing-answer redirect from onboarding.
+  const write = outsideWorkWrite(current, next === true, new Date(), { recordFirstAnswer: true });
   if (!write) return current.openToOutsideWork;
   await prisma.practitioner.update({
     where: { id: target.id },
     data: { ...write, updatedAt: current.updatedAt },
   });
+  revalidatePath(`/practitioners/${slug}/edit`);
+  revalidatePath('/admin/invites');
   return write.openToOutsideWork;
 }
 

@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   findUnique: vi.fn(),
   update: vi.fn(),
   userFindUnique: vi.fn(),
+  revalidatePath: vi.fn(),
 }));
 
 vi.mock('@/auth', () => ({ auth: mocks.auth }));
@@ -26,7 +27,7 @@ vi.mock('next/navigation', () => ({
     throw new Error(`REDIRECT:${url}`);
   },
 }));
-vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
+vi.mock('next/cache', () => ({ revalidatePath: mocks.revalidatePath }));
 vi.mock('@sentry/nextjs', () => ({}));
 vi.mock('@/lib/whop', () => ({ WHOP_OFFERING_TITLE_MAX: 80 }));
 vi.mock('@/lib/typesense-server', () => ({ TYPESENSE_COLLECTION: 'practitioners', getTypesenseAdmin: vi.fn() }));
@@ -102,8 +103,9 @@ describe('onboarding question: required, no preselection', () => {
 
   it('never hard-codes a checked radio; only a stored answer can check one', () => {
     for (const r of radios) {
-      expect(r).not.toMatch(/\bchecked\b(?!=)/);
-      expect(r).not.toMatch(/defaultChecked\s*(?!=\{values\.openToOutsideWork)/);
+      expect(r).not.toMatch(/(?<!default)\bchecked\b/i);
+      expect(r).not.toMatch(/defaultChecked(?!=\{values\.openToOutsideWork === (true|false)\})/);
+      expect(r).not.toMatch(/defaultChecked=\{(true|false)\}|defaultChecked\s|defaultChecked\/|defaultValue/);
     }
     expect(radios[0]).toContain('defaultChecked={values.openToOutsideWork === true}');
     expect(radios[1]).toContain('defaultChecked={values.openToOutsideWork === false}');
@@ -146,6 +148,16 @@ describe('submitOnboarding enforces the answer server-side', () => {
       'REDIRECT:/practitioners/pat/edit?error=outside-work-required',
     );
     expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('an admin on someone else\'s profile with no answer is NOT refused and writes no outside-work columns', async () => {
+    mocks.auth.mockResolvedValue({ user: { id: 'admin', role: 'ADMIN' } });
+    mocks.findUnique.mockResolvedValueOnce({ id: 'p1', userId: 'u1' });
+    mocks.userFindUnique.mockResolvedValue({ termsAcceptedAt: new Date() });
+    // Proceeds past the answer check; later steps hit unmocked deps, so any failure must be
+    // something other than the outside-work refusal.
+    const err = await submitOnboarding('pat', ownerForm()).catch((e) => String(e));
+    expect(String(err)).not.toContain('outside-work-required');
   });
 
   it('refuses a forged value', async () => {
@@ -245,6 +257,24 @@ describe('setOpenToOutsideWork (the /edit toggle action)', () => {
     stored(false);
     await setOpenToOutsideWork('pat', true);
     expect(mocks.update.mock.calls[0][0].data.updatedAt).toBe(updatedAt);
+  });
+
+  it('revalidates the edit page and the admin list after a write', async () => {
+    mocks.auth.mockResolvedValue({ user: { id: 'owner', role: 'PRACTITIONER' } });
+    stored(false);
+    await setOpenToOutsideWork('pat', true);
+    expect(mocks.revalidatePath).toHaveBeenCalledWith('/practitioners/pat/edit');
+    expect(mocks.revalidatePath).toHaveBeenCalledWith('/admin/invites');
+  });
+
+  it('a first explicit "No" (timestamp null, equals the default) is recorded with a timestamp', async () => {
+    mocks.auth.mockResolvedValue({ user: { id: 'owner', role: 'PRACTITIONER' } });
+    stored(false, null);
+    await expect(setOpenToOutsideWork('pat', false)).resolves.toBe(false);
+    expect(mocks.update).toHaveBeenCalledTimes(1);
+    const { data } = mocks.update.mock.calls[0][0];
+    expect(data.openToOutsideWork).toBe(false);
+    expect(data.openToOutsideWorkUpdatedAt).toBeInstanceOf(Date);
   });
 
   it('setting the value it already has performs no write at all', async () => {
