@@ -28,7 +28,7 @@ import {
  * net can be reconciled against Whop once a real transfer exists.
  */
 
-const ENV = ['WHOP_TRANSFERS_ENABLED', 'WHOP_COMPANY_API_KEY', 'WHOP_PARENT_COMPANY_ID'];
+const ENV = ['WHOP_TRANSFERS_ENABLED', 'WHOP_COMPANY_API_KEY', 'WHOP_PARENT_COMPANY_ID', 'WHOP_TRANSFER_FEE_BPS', 'WHOP_TRANSFER_FEE_MODE'];
 let saved: Record<string, string | undefined>;
 
 beforeEach(() => {
@@ -122,6 +122,12 @@ function fakeDb(seed: {
           const w = args.where ?? {};
           if (w.state && r.state !== w.state) return false;
           if (w.holdExpiresAt?.lte && (r.holdExpiresAt as Date) > w.holdExpiresAt.lte) return false;
+          // Honour the share filter: without it a "below the fee" sweep would match every row.
+          const share = r.referrerShareUsdCents as number;
+          const sf = w.referrerShareUsdCents;
+          if (sf?.gt !== undefined && !(share > sf.gt)) return false;
+          if (sf?.gte !== undefined && !(share >= sf.gte)) return false;
+          if (sf?.lt !== undefined && !(share < sf.lt)) return false;
           return true;
         });
       },
@@ -171,7 +177,13 @@ function fakeDb(seed: {
         let count = 0;
         for (const row of Array.from(feeLedger.values())) {
           const w = args.where ?? {};
-          if ((!w.dedupeKey || row.dedupeKey === w.dedupeKey) && (!w.status || row.status === w.status)) {
+          if (
+            (!w.dedupeKey || row.dedupeKey === w.dedupeKey) &&
+            (!w.status ||
+              (typeof w.status === 'object' && 'in' in w.status
+                ? (w.status.in as string[]).includes(row.status as string)
+                : row.status === w.status))
+          ) {
             Object.assign(row, args.data);
             count++;
           }
@@ -246,6 +258,7 @@ describe('settlePayableShares — blocked', () => {
 
 describe('settlePayableShares — unblocked', () => {
   beforeEach(() => {
+    process.env.WHOP_TRANSFER_FEE_BPS = '0';
     process.env.WHOP_TRANSFERS_ENABLED = 'true';
     process.env.WHOP_COMPANY_API_KEY = 'apik_x';
     process.env.WHOP_PARENT_COMPANY_ID = 'biz_parent';
@@ -410,5 +423,96 @@ describe('expireLapsedHolds — ruling 7 §4, and what it must NOT do', () => {
 
     expect(await expireLapsedHolds(db, { at: now })).toBe(0);
     expect(db.ledger.get('led_h')!.state).toBe('HELD');
+  });
+});
+
+describe('L2a: payee absorbs the transfer fee (referral path, mocked /transfers)', () => {
+  beforeEach(() => {
+    process.env.WHOP_TRANSFERS_ENABLED = 'true';
+    process.env.WHOP_COMPANY_API_KEY = 'apik_x';
+    process.env.WHOP_PARENT_COMPANY_ID = 'biz_parent';
+    delete process.env.WHOP_TRANSFER_FEE_BPS;
+    delete process.env.WHOP_TRANSFER_FEE_MODE;
+  });
+  const run = (db: ReturnType<typeof fakeDb>) => {
+    const calls: { amountUsdDollars: number }[] = [];
+    const transfer = async (args: { amountUsdDollars: number }) => {
+      calls.push(args);
+      return { transferId: 'tr_1' };
+    };
+    return { calls, go: () => settlePayableShares(db, { transfer: transfer as never, at: new Date() }) };
+  };
+
+  it('charged-to-sender (the default): 2,000c sends 19.41 dollars and records gross/fee/net on the row', async () => {
+    const db = fakeDb({ payable: [payableRow()] });
+    const { calls, go } = run(db);
+    await go();
+    expect(calls).toEqual([expect.objectContaining({ amountUsdDollars: 19.41 })]);
+    expect(db.ledger.get('led_1')).toMatchObject({
+      state: 'SETTLED',
+      grossShareUsdCents: 2000,
+      transferFeeUsdCents: 59,
+      netPaidUsdCents: 1941,
+    });
+  });
+
+  it('deducted-from-recipient: sends the whole 20 dollars; the payee-borne fee is recorded', async () => {
+    process.env.WHOP_TRANSFER_FEE_MODE = 'deducted-from-recipient';
+    const db = fakeDb({ payable: [payableRow()] });
+    const { calls, go } = run(db);
+    await go();
+    expect(calls).toEqual([expect.objectContaining({ amountUsdDollars: 20 })]);
+    expect(db.ledger.get('led_1')).toMatchObject({
+      grossShareUsdCents: 2000,
+      transferFeeUsdCents: 60,
+      netPaidUsdCents: 1940,
+    });
+  });
+
+  it('a share below the fee is not sent and is recorded with its reason', async () => {
+    const db = fakeDb({ payable: [payableRow({ referrerShareUsdCents: 1 })] });
+    const { calls, go } = run(db);
+    await go();
+    expect(calls).toEqual([]);
+    expect(db.ledger.get('led_1')).toMatchObject({ state: 'PAYABLE' });
+    const fee = Array.from(db.feeLedger.values())[0];
+    expect(fee).toMatchObject({ status: 'BLOCKED' });
+    expect(String(fee!.note)).toMatch(/BELOW_TRANSFER_FEE/);
+  });
+
+  it('rows parked BLOCKED while payouts were off ARE claimed once payouts are on (regression: claim matched PENDING only)', async () => {
+    const db = fakeDb({ payable: [payableRow()] });
+    delete process.env.WHOP_TRANSFERS_ENABLED;
+    await settlePayableShares(db, { transfer: async () => ({ transferId: 'never' }), at: new Date() });
+    expect(Array.from(db.feeLedger.values())[0]).toMatchObject({ status: 'BLOCKED' });
+    process.env.WHOP_TRANSFERS_ENABLED = 'true';
+    const { calls, go } = run(db);
+    await go();
+    expect(calls).toHaveLength(1);
+    expect(db.ledger.get('led_1')).toMatchObject({ state: 'SETTLED' });
+  });
+
+  it('a FAILED transfer row is never re-claimed (no double pay): it needs a human', async () => {
+    const db = fakeDb({ payable: [payableRow()] });
+    await settlePayableShares(db, {
+      transfer: async () => {
+        throw new Error('socket hang up');
+      },
+      at: new Date(),
+    });
+    const { calls, go } = run(db);
+    await go();
+    expect(calls).toEqual([]);
+    expect(db.ledger.get('led_1')).toMatchObject({ state: 'PAYABLE' });
+  });
+
+  it('flag false: no transfer is made and a bad fee config is never read', async () => {
+    delete process.env.WHOP_TRANSFERS_ENABLED;
+    process.env.WHOP_TRANSFER_FEE_BPS = 'garbage';
+    const db = fakeDb({ payable: [payableRow()] });
+    const { calls, go } = run(db);
+    const res = await go();
+    expect(calls).toEqual([]);
+    expect(res.blocked).toMatch(/verif/i);
   });
 });

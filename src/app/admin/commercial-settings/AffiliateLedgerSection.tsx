@@ -91,7 +91,7 @@ export async function AffiliateLedgerSection({ now = new Date() }: { now?: Date 
       </h2>
       <p className="mt-1 max-w-2xl text-sm leading-relaxed text-slate-600">
         Read-only. Recruiter links are written once at sign-up and never change. Amounts are the affiliate
-        ledger&apos;s, net of refunds.{' '}
+        ledger&apos;s, net of refunds. Payouts are net of Whop&apos;s transfer fee.{' '}
         {!transfersOn && <strong>Payouts are off (WHOP_TRANSFERS_ENABLED is not true): nothing has been paid.</strong>}
       </p>
 

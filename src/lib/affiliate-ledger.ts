@@ -111,6 +111,7 @@ export async function accrueAffiliateShare(
       grossUsdCents: snap.priceUsdCents,
       bps: bps as number,
       shareUsdCents: share,
+      grossShareUsdCents: share,
       state: 'ACCRUED',
       holdDays: input.holdDays,
       holdUntil: holdExpiry(input.paidAt, input.holdDays),

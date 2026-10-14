@@ -314,6 +314,7 @@ describe('referrer settlement pass (spec v1.4 §6.2, rulings 6 and 7)', () => {
     process.env.WHOP_TRANSFERS_ENABLED = 'true';
     process.env.WHOP_PARENT_COMPANY_ID = 'biz_parent';
     process.env.WHOP_COMPANY_API_KEY = 'apik_x';
+    process.env.WHOP_TRANSFER_FEE_BPS = '0';
     mocks.ledgerFindMany.mockImplementation(async (args) => {
       const where = (args as { where?: { state?: string } })?.where;
       return where?.state === 'PAYABLE' ? [payable] : [];
@@ -335,6 +336,7 @@ describe('referrer settlement pass (spec v1.4 §6.2, rulings 6 and 7)', () => {
     delete process.env.WHOP_TRANSFERS_ENABLED;
     delete process.env.WHOP_PARENT_COMPANY_ID;
     delete process.env.WHOP_COMPANY_API_KEY;
+    delete process.env.WHOP_TRANSFER_FEE_BPS;
   });
 });
 

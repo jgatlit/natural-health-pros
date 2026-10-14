@@ -80,6 +80,31 @@ export async function RecruitedPractitionersSection({
         Whop account.
         {!payoutsActive && ' (payouts are not active yet)'}
       </p>
+      <p className="text-[11px] leading-relaxed text-muted-foreground" data-testid="affiliate-fee-note">
+        Payouts are net of Whop&apos;s transfer fee.
+      </p>
+      {earnings.paidWithFeeRecordCount > 0 && (
+        <dl className="grid grid-cols-3 gap-2 text-center" data-testid="affiliate-paid-breakdown">
+          <div className="rounded-md border p-2">
+            <dt className="text-[11px] text-muted-foreground">Gross</dt>
+            <dd className="text-sm font-semibold" data-testid="affiliate-paid-gross">
+              {usd(earnings.paidGrossUsdCents)}
+            </dd>
+          </div>
+          <div className="rounded-md border p-2">
+            <dt className="text-[11px] text-muted-foreground">Transfer fee</dt>
+            <dd className="text-sm font-semibold" data-testid="affiliate-paid-fee">
+              {usd(earnings.paidFeeUsdCents)}
+            </dd>
+          </div>
+          <div className="rounded-md border p-2">
+            <dt className="text-[11px] text-muted-foreground">Net paid</dt>
+            <dd className="text-sm font-semibold" data-testid="affiliate-paid-net">
+              {usd(earnings.paidNetUsdCents)}
+            </dd>
+          </div>
+        </dl>
+      )}
 
       {earnings.recruits.length > 0 && (
         <ul className="divide-y rounded-md border text-sm">

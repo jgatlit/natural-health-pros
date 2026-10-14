@@ -1042,6 +1042,13 @@ model ReferralLedgerEntry {
   settledAt      DateTime?
   whopTransferId String?
 
+  /// PAYEE ABSORBS WHOP'S TRANSFER FEE (spec v1.5 s4). Gross = the share before any transfer fee
+  /// (= referrerShareUsdCents at write time; NULL on a row written by a pre-L2a deploy, read as the
+  /// share). Fee and net are recorded when a transfer settles; net = gross - fee.
+  grossShareUsdCents  Int?
+  transferFeeUsdCents Int?
+  netPaidUsdCents     Int?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -1115,6 +1122,12 @@ model AffiliateLedgerEntry {
   transferUsdCents Int?
   settledAt        DateTime?
   whopTransferId   String?
+  /// PAYEE ABSORBS WHOP'S TRANSFER FEE (spec v1.5 s4). Gross = the share payable at claim time
+  /// (share - reversed; NULL until claimed on new rows, backfilled = shareUsdCents on old ones).
+  /// Fee is set at claim, net when the transfer settles; net = gross - fee.
+  grossShareUsdCents  Int?
+  transferFeeUsdCents Int?
+  netPaidUsdCents     Int?
   /// Definitive (4xx) transfer rejections are retried by the next sweep; this counts them and keeps
   /// the last message so a stuck row explains itself.
   transferAttempts Int       @default(0)

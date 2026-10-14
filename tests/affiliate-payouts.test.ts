@@ -23,7 +23,7 @@ import { fakeAffiliateDb } from './helpers/fake-affiliate-db';
  * a failure that is classified before it is retried.
  */
 
-const ENV = ['WHOP_TRANSFERS_ENABLED', 'WHOP_COMPANY_API_KEY', 'WHOP_PARENT_COMPANY_ID'];
+const ENV = ['WHOP_TRANSFERS_ENABLED', 'WHOP_COMPANY_API_KEY', 'WHOP_PARENT_COMPANY_ID', 'WHOP_TRANSFER_FEE_BPS', 'WHOP_TRANSFER_FEE_MODE'];
 let saved: Record<string, string | undefined>;
 
 beforeEach(() => {
@@ -43,6 +43,8 @@ const enable = () => {
   process.env.WHOP_TRANSFERS_ENABLED = 'true';
   process.env.WHOP_COMPANY_API_KEY = 'test-key';
   process.env.WHOP_PARENT_COMPANY_ID = 'biz_parent';
+  // Fee-free here: the pre-L2a assertions are about claim/dollars/refund mechanics. Fee maths has its own tests.
+  process.env.WHOP_TRANSFER_FEE_BPS = '0';
 };
 
 const NOW = new Date(Date.UTC(2027, 0, 1));

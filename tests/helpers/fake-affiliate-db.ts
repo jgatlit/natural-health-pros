@@ -55,6 +55,7 @@ export function fakeAffiliateDb(opts: {
         if ('lte' in v) return r[k] != null && r[k].getTime() <= v.lte.getTime();
         if ('lt' in v) return r[k] < v.lt;
         if ('gt' in v) return r[k] > v.gt;
+        if ('gte' in v) return r[k] >= v.gte;
       }
       return r[k] === v;
     });
