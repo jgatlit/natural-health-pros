@@ -232,7 +232,7 @@ describe('the production source still carries the shared core + batch semantics'
   it('inviteOne only reuses an invitation that is unaccepted AND unexpired', () => {
     const s = src();
     expect(s).toMatch(
-      /where: \{ email, acceptedAt: null, expiresAt: \{ gt: new Date\(\) \} \}/,
+      /where: \{ email, cohortId: null, acceptedAt: null, expiresAt: \{ gt: new Date\(\) \} \}/,
     );
   });
 
