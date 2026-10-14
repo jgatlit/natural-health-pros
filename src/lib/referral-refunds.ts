@@ -17,12 +17,21 @@
  *                                   guaranteed — let alone the judgement.
  *
  * SPEC v1.5 §1: A REFUND ALSO REVERSES THE AFFILIATE SHARE. The recruiter's 3% (O7) is carried on the
- * booking's `BookingFeeSnapshot` (`affiliateShareUsdCents`, `recruiterPractitionerId`); the
- * affiliate LEDGER (`AffiliateLedgerEntry`) arrives with lane L2b and does not exist yet. Until it
- * does the reversal is recorded as an append-only negative `FeeLedgerEntry`
- * (`AFFILIATE_REFUND_REVERSAL`) keyed on the refund, and that entry is the seam: L2b reads it to
- * reduce the ledger row (or to record a recovery owed when the share was already paid). The
- * snapshot itself is never edited — it is the record of what was decided at mint.
+ * booking's `BookingFeeSnapshot` (`affiliateShareUsdCents`, `recruiterPractitionerId`) and recorded
+ * on the `AffiliateLedgerEntry` (lane L2b). The reversal uses the SAME rule as the referrer's:
+ * floor(original x refund / gross), measured against the ORIGINAL share, capped at what remains,
+ * a redelivery a no-op. It is written twice, on purpose:
+ *
+ *   1. as an append-only negative `FeeLedgerEntry` (`AFFILIATE_REFUND_REVERSAL`) keyed on the
+ *      refund: the audit trail and the idempotency marker;
+ *   2. onto the ledger row as an ABSOLUTE `reversedUsdCents` (the sum of those entries), never an
+ *      increment, so replaying a refund, or repairing a crash between the two writes, cannot
+ *      double-count.
+ *
+ * The snapshot and the ledger's `shareUsdCents` are never edited: they are the record of what was
+ * decided at mint. A row already SENDING / SETTLED is only recorded: whatever the recruiter holds
+ * beyond what they are now owed comes back as `affiliateRecoveryOwedUsdCents` and the webhook
+ * flags it. NOTHING is clawed back automatically, same as the referrer path.
  *
  * ⚠️ WHOP SENDS REFUND AMOUNTS IN DOLLARS. The SDK's own type says so in as many words: "The
  * refunded amount as a decimal in the specified currency, such as 10.43 for $10.43 USD"
@@ -31,8 +40,9 @@
  */
 
 import { proRataShare } from './referral-fees';
+import { syncAffiliateReversalFromMarkers, type AffiliateReversalDb } from './affiliate-ledger';
 
-export type RefundDb = {
+export type RefundDb = AffiliateReversalDb & {
   /** Resolves a payment to its booking, for the affiliate half (the snapshot is keyed on booking). */
   bookingFeeSnapshot: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -62,6 +72,8 @@ export type RefundOutcome = {
   matched: boolean;
   /** The recruiter's share reversed by this refund (spec v1.5). 0 when none was owed. */
   affiliateReversedUsdCents: number;
+  /** Of the recruiter's share, what had ALREADY been paid out and is now owed back. Never clawed. */
+  affiliateRecoveryOwedUsdCents: number;
 };
 
 /**
@@ -80,8 +92,8 @@ export async function reverseReferralOnRefund(
   },
 ): Promise<RefundOutcome> {
   const referrer = await reverseReferrerShare(db, input);
-  const affiliateReversedUsdCents = await reverseAffiliateShare(db, input);
-  return { ...referrer, affiliateReversedUsdCents };
+  const affiliate = await reverseAffiliateShare(db, input);
+  return { ...referrer, ...affiliate };
 }
 
 /**
@@ -93,14 +105,15 @@ export async function reverseReferralOnRefund(
 async function reverseAffiliateShare(
   db: RefundDb,
   input: { whopPaymentId: string; refundAmountUsdDollars: number; refundId: string },
-): Promise<number> {
-  if (!(input.refundAmountUsdDollars > 0)) return 0;
+): Promise<{ affiliateReversedUsdCents: number; affiliateRecoveryOwedUsdCents: number }> {
+  const none = { affiliateReversedUsdCents: 0, affiliateRecoveryOwedUsdCents: 0 };
+  if (!(input.refundAmountUsdDollars > 0)) return none;
 
   const fee = (await db.feeLedgerEntry.findFirst({
     where: { kind: 'APPLICATION_FEE', whopPaymentId: input.whopPaymentId },
     select: { bookingIntentId: true },
   })) as { bookingIntentId: string | null } | null;
-  if (!fee?.bookingIntentId) return 0;
+  if (!fee?.bookingIntentId) return none;
 
   const snapshot = (await db.bookingFeeSnapshot.findUnique({
     where: { bookingIntentId: fee.bookingIntentId },
@@ -117,45 +130,63 @@ async function reverseAffiliateShare(
     bookingIntentId: string;
   } | null;
   const owed = snapshot?.affiliateShareUsdCents ?? 0;
-  if (!snapshot || owed <= 0 || !snapshot.recruiterPractitionerId) return 0;
+  if (!snapshot || owed <= 0 || !snapshot.recruiterPractitionerId) return none;
 
   const dedupeKey = `AFFILIATE_REFUND_REVERSAL:${input.refundId}:${snapshot.bookingIntentId}`;
-  const prior = await db.feeLedgerEntry.findMany({
+  const prior = (await db.feeLedgerEntry.findMany({
     where: { kind: 'AFFILIATE_REFUND_REVERSAL', bookingIntentId: snapshot.bookingIntentId },
     select: { dedupeKey: true, amountUsdCents: true },
-  });
-  // Entries are NEGATIVE; this refund's own row (on a redelivery) is excluded so a replay computes
-  // the same answer the first delivery did.
+  })) as Array<{ dedupeKey: string; amountUsdCents: number }>;
+  // Entries are NEGATIVE. This refund's own row (on a redelivery) is excluded from the running
+  // total so the refund is always measured against the reversals that PRECEDED it.
   const alreadyReversed = prior
-    .filter((e: { dedupeKey: string }) => e.dedupeKey !== dedupeKey)
-    .reduce((sum: number, e: { amountUsdCents: number }) => sum - e.amountUsdCents, 0);
+    .filter((e) => e.dedupeKey !== dedupeKey)
+    .reduce((sum, e) => sum - e.amountUsdCents, 0);
+  const mine = prior.find((e) => e.dedupeKey === dedupeKey);
 
-  const refundUsdCents = Math.round(input.refundAmountUsdDollars * 100);
-  const reversal = Math.min(
-    owed - alreadyReversed,
-    proRataShare(owed, refundUsdCents, snapshot.priceUsdCents),
-  );
-  if (reversal <= 0) return 0;
+  let reversal: number;
+  if (mine) {
+    // REDELIVERY: answered from the entry that already exists, which is also immune to a LATER
+    // refund having changed what "remaining" looks like. The marker is not rewritten.
+    reversal = -mine.amountUsdCents;
+  } else {
+    const refundUsdCents = Math.round(input.refundAmountUsdDollars * 100);
+    reversal = Math.min(owed - alreadyReversed, proRataShare(owed, refundUsdCents, snapshot.priceUsdCents));
+    if (reversal <= 0) return none;
 
-  await db.feeLedgerEntry.upsert({
-    where: { dedupeKey },
-    create: {
-      dedupeKey,
-      kind: 'AFFILIATE_REFUND_REVERSAL',
-      status: 'SETTLED',
-      bookingIntentId: snapshot.bookingIntentId,
-      practitionerId: null,
-      counterpartyPractitionerId: snapshot.recruiterPractitionerId,
-      amountUsdCents: -reversal,
-      whopPaymentId: input.whopPaymentId,
-      note:
-        'Recruiting-affiliate share reduced by a refund. No affiliate ledger exists yet (lane L2b): ' +
-        'when it does, it must apply this entry to the booking’s AffiliateLedgerEntry, and record a ' +
-        'recovery owed if that share was already paid out.',
-    },
-    update: {},
+    await db.feeLedgerEntry.upsert({
+      where: { dedupeKey },
+      create: {
+        dedupeKey,
+        kind: 'AFFILIATE_REFUND_REVERSAL',
+        status: 'SETTLED',
+        bookingIntentId: snapshot.bookingIntentId,
+        practitionerId: null,
+        counterpartyPractitionerId: snapshot.recruiterPractitionerId,
+        amountUsdCents: -reversal,
+        whopPaymentId: input.whopPaymentId,
+        note:
+          'Recruiting-affiliate share reduced by a refund. Applied to the booking’s ' +
+          'AffiliateLedgerEntry as an absolute reversedUsdCents; if that share had already been ' +
+          'paid out, the amount owed back is recorded and flagged, never clawed back automatically.',
+      },
+      update: {},
+    });
+  }
+
+  // Applied on EVERY delivery, redeliveries included, from the marker SUM re-read AFTER this
+  // delivery's own marker is in. Two refunds arriving together each read the markers before the
+  // other's upsert if they compute from the earlier read; re-reading here means the later of the
+  // two sees both, and the write itself is monotone (see `applyAffiliateReversal`), so the earlier
+  // one cannot then overwrite it downwards. It also repairs a crash between the marker and the row.
+  const applied = await syncAffiliateReversalFromMarkers(db, {
+    bookingIntentId: snapshot.bookingIntentId,
+    recruiterPractitionerId: snapshot.recruiterPractitionerId,
   });
-  return reversal;
+  return {
+    affiliateReversedUsdCents: reversal,
+    affiliateRecoveryOwedUsdCents: applied.recoveryOwedUsdCents,
+  };
 }
 
 async function reverseReferrerShare(
@@ -167,7 +198,7 @@ async function reverseReferrerShare(
     refundId: string;
     at: Date;
   },
-): Promise<Omit<RefundOutcome, 'affiliateReversedUsdCents'>> {
+): Promise<Omit<RefundOutcome, 'affiliateReversedUsdCents' | 'affiliateRecoveryOwedUsdCents'>> {
   const none = { reversedUsdCents: 0, recoveryOwedUsdCents: 0, matched: false };
   if (!(input.refundAmountUsdDollars > 0)) return none;
 

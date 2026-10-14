@@ -23,6 +23,7 @@
 import { holdExpiry } from './attribution-term';
 import { hashClientEmail, recordAttributedClient } from './attributed-clients';
 import { resolveAttributionDecision, type AttributionResolverDb } from './attribution-resolver';
+import { accrueAffiliateShare } from './affiliate-ledger';
 
 /** STRUCTURAL — see the note on `attributed-clients.ts`'s `Db`. */
 export type SettlementDb = AttributionResolverDb & {
@@ -46,9 +47,20 @@ export type SettlementDb = AttributionResolverDb & {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     upsert(args: any): Promise<any>;
   };
+  /** Spec v1.5 section 5: the recruiting-affiliate ledger. */
+  affiliateLedgerEntry: {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    upsert(args: any): Promise<any>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    findUnique(args: any): Promise<any>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    updateMany(args: any): Promise<{ count: number }>;
+  };
   feeLedgerEntry: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     upsert(args: any): Promise<any>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    findMany(args: any): Promise<any[]>;
   };
   referralTouch: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -71,6 +83,9 @@ type FeeSnapshotRow = {
   referrerShareUsdCents: number;
   referrerPractitionerId: string | null;
   applicationFeeUsdCents: number;
+  affiliateBps: number | null;
+  affiliateShareUsdCents: number | null;
+  recruiterPractitionerId: string | null;
 } | null;
 
 export type CommitResult = {
@@ -78,6 +93,8 @@ export type CommitResult = {
   referrerShareUsdCents: number;
   /** PAYABLE | HELD, or null when nothing was owed to a referrer. */
   referralState: 'PAYABLE' | 'HELD' | null;
+  /** The recruiter's share recorded on the affiliate ledger (spec v1.5). 0 when none was owed. */
+  affiliateShareUsdCents: number;
 };
 
 /**
@@ -87,7 +104,7 @@ export type CommitResult = {
  * and `whopPayoutsEnabled` is the WEBHOOK-authoritative value — Whop's REST read under-reports it,
  * so re-deriving this from a live API call would hold money that is perfectly payable.
  */
-function isPayable(referrer: { whopCompanyId?: string | null; whopPayoutsEnabled?: boolean | null } | null): boolean {
+export function isPayable(referrer: { whopCompanyId?: string | null; whopPayoutsEnabled?: boolean | null } | null): boolean {
   return !!referrer?.whopCompanyId && referrer.whopPayoutsEnabled === true;
 }
 
@@ -133,6 +150,9 @@ export async function commitPaymentAttribution(
       referrerShareUsdCents: true,
       referrerPractitionerId: true,
       applicationFeeUsdCents: true,
+      affiliateBps: true,
+      affiliateShareUsdCents: true,
+      recruiterPractitionerId: true,
     },
   })) as FeeSnapshotRow;
 
@@ -312,5 +332,23 @@ export async function commitPaymentAttribution(
     update: {},
   });
 
-  return { owner, referrerShareUsdCents, referralState };
+  // SPEC v1.5 section 5 — THE RECRUITER'S SHARE. From the snapshot alone, never recomputed from the
+  // current schedule. Deliberately LAST, after the fee row: an affiliate refusal throws (the
+  // snapshot describes a share the payment could not have funded), and the APPLICATION_FEE row is
+  // what the refund path uses to find this booking, so it must already be committed when it does.
+  const affiliate = await accrueAffiliateShare(db, {
+    bookingIntentId: input.bookingIntentId,
+    recruitedPractitionerId: input.practitionerId,
+    whopPaymentId: input.whopPaymentId ?? null,
+    snapshot,
+    holdDays: input.holdDays,
+    paidAt: input.paidAt,
+  });
+
+  return {
+    owner,
+    referrerShareUsdCents,
+    referralState,
+    affiliateShareUsdCents: affiliate.accrued ? affiliate.shareUsdCents : 0,
+  };
 }

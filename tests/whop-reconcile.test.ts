@@ -23,6 +23,8 @@ const mocks = vi.hoisted(() => ({
   feeUpdateMany: vi.fn<(args?: unknown) => Promise<{ count: number }>>(),
   createTransfer: vi.fn<(args?: unknown) => Promise<{ transferId: string }>>(),  feeFindMany: vi.fn<(args?: unknown) => Promise<unknown[]>>(),
   getPaymentFees: vi.fn<(id: string) => Promise<Array<{ origin: string; amount: number }>>>(),
+  affiliateFindMany: vi.fn<(args?: unknown) => Promise<unknown[]>>(),
+  affiliateUpdateMany: vi.fn<(args?: unknown) => Promise<{ count: number }>>(),
 }));
 
 vi.mock('@/lib/prisma', () => ({
@@ -36,6 +38,10 @@ vi.mock('@/lib/prisma', () => ({
       findMany: mocks.ledgerFindMany,
       updateMany: mocks.ledgerUpdateMany,
       update: mocks.ledgerUpdate,
+    },
+    affiliateLedgerEntry: {
+      findMany: mocks.affiliateFindMany,
+      updateMany: mocks.affiliateUpdateMany,
     },
     feeLedgerEntry: {
       upsert: mocks.feeUpsert,
@@ -84,6 +90,8 @@ beforeEach(() => {
   vi.clearAllMocks();
   delete process.env.CRON_SECRET;
   mocks.isWhopPlatformsReady.mockReturnValue(true);
+  mocks.affiliateFindMany.mockResolvedValue([]);
+  mocks.affiliateUpdateMany.mockResolvedValue({ count: 0 });
   mocks.ledgerFindMany.mockResolvedValue([]);
   mocks.ledgerUpdateMany.mockResolvedValue({ count: 0 });
   mocks.ledgerUpdate.mockResolvedValue({});
@@ -327,6 +335,56 @@ describe('referrer settlement pass (spec v1.4 §6.2, rulings 6 and 7)', () => {
     delete process.env.WHOP_TRANSFERS_ENABLED;
     delete process.env.WHOP_PARENT_COMPANY_ID;
     delete process.env.WHOP_COMPANY_API_KEY;
+  });
+});
+
+describe('stuck recruiter payouts are LOUD (lane L2b)', () => {
+  const stuckRow = (over: Record<string, unknown> = {}) => ({
+    id: 'afl_stuck',
+    state: 'SENDING',
+    recruiterPractitionerId: 'prac_R',
+    shareUsdCents: 300,
+    reversedUsdCents: 0,
+    transferUsdCents: 300,
+    lastError: null,
+    updatedAt: new Date('2026-12-01T00:00:00Z'),
+    ...over,
+  });
+
+  it('a clean ledger leaves ok true and reports no stuck rows', async () => {
+    const res = await GET(req());
+    const body = (await res.json()) as { ok: boolean; affiliatesStuck: string[] };
+    expect(res.status).toBe(200);
+    expect(body.affiliatesStuck).toEqual([]);
+  });
+
+  it('a stuck SENDING row makes the cron fail (207, ok false) and names the row id', async () => {
+    mocks.affiliateFindMany.mockImplementation(async (args) => {
+      const w = (args as { where?: { OR?: unknown } })?.where;
+      return w?.OR ? [stuckRow()] : [];
+    });
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await GET(req());
+    const body = (await res.json()) as { ok: boolean; errors: string[]; affiliatesStuck: string[] };
+    expect(res.status).toBe(207);
+    expect(body.ok).toBe(false);
+    expect(body.affiliatesStuck).toEqual(['afl_stuck']);
+    expect(body.errors.join(' ')).toContain('afl_stuck');
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining('AFFILIATE PAYOUTS STUCK'), expect.stringContaining('afl_stuck'));
+    spy.mockRestore();
+  });
+
+  it('is reported even while payouts are switched off', async () => {
+    delete process.env.WHOP_TRANSFERS_ENABLED;
+    mocks.affiliateFindMany.mockImplementation(async (args) =>
+      (args as { where?: { OR?: unknown } })?.where?.OR ? [stuckRow({ state: 'HELD', lastError: 'fetch failed' })] : [],
+    );
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await GET(req());
+    const body = (await res.json()) as { ok: boolean; errors: string[] };
+    expect(body.ok).toBe(false);
+    expect(body.errors.join(' ')).toMatch(/HELD/);
+    vi.restoreAllMocks();
   });
 });
 

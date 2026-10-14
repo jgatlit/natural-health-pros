@@ -102,3 +102,12 @@ export async function getRecruiterFor(db: RecruiterReadDb, practitionerId: strin
 export function recordRecruiter(existing: string | null, incoming: string): string | null {
   return existing ?? incoming ?? null;
 }
+
+/**
+ * READ-SIDE WHERE/SELECT FRAGMENTS for `recruitedById`, kept here for the same reason the write is:
+ * `tests/recruiter.test.ts` pins the column name to this one file, so no other module can grow an
+ * accidental write path. These build query shapes only; they cannot persist anything.
+ */
+export const whereRecruitedBy = (recruiterId: string) => ({ recruitedById: recruiterId });
+export const whereAnyRecruiter = { recruitedById: { not: null } } as const;
+export const selectRecruiter = { recruitedById: true } as const;

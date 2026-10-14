@@ -301,6 +301,10 @@ model Practitioner {
   /// because Prisma cannot guess which side is which.
   referralEntriesEarned    ReferralLedgerEntry[] @relation("ReferralEntriesEarned")
   referralEntriesGenerated ReferralLedgerEntry[] @relation("ReferralEntriesGenerated")
+  /// Spec v1.5 section 5: recruiting-affiliate shares this practitioner EARNS (as recruiter) and
+  /// the ones their own sessions GENERATE (as the recruited practitioner).
+  affiliateEntriesEarned    AffiliateLedgerEntry[] @relation("AffiliateEntriesEarned")
+  affiliateEntriesGenerated AffiliateLedgerEntry[] @relation("AffiliateEntriesGenerated")
 
   /// THIS practitioner's own client list (spec v1.4 §2 `client_list_entry`). An entry made
   /// strictly BEFORE both the client's first booking and any referral of them exempts that client
@@ -739,6 +743,7 @@ model BookingIntent {
   /// rule must not need a migration; the unique constraint on the other side keeps it to one per
   /// referrer today.
   referralEntries ReferralLedgerEntry[]
+  affiliateEntries AffiliateLedgerEntry[]
 
   @@index([practitionerId, status])
   /// §10's abandonment sweep scans by status + age; without this it degrades to a full scan as
@@ -1047,6 +1052,83 @@ model ReferralLedgerEntry {
   /// The admin hold list, and the "did anything lapse today?" sweep.
   @@index([state, holdExpiresAt])
   @@index([referrerPractitionerId, state])
+}
+
+enum AffiliateLedgerState {
+  /// Owed. Payable once the hold has passed AND the recruiter has a verified Whop wallet. A
+  /// recruiter without one simply stays here: nothing is forfeited, released or expired.
+  ACCRUED
+  /// Taken out of the automatic sweep because a transfer attempt FAILED in a way that cannot be
+  /// proven harmless (network error, timeout, 5xx). `POST /transfers` has no idempotency key, so a
+  /// blind retry could pay twice; a human reconciles against `GET /transfers?origin_id=`.
+  HELD
+  /// Claimed by a settle run: the transfer is in flight. A row stuck here is NEVER re-selected.
+  SENDING
+  /// Paid out. `whopTransferId` is the receipt.
+  SETTLED
+  /// Fully reversed by refunds before it was paid. Terminal; nothing is owed.
+  REVERSED
+}
+
+/// One recruiter's affiliate share of one payment (spec v1.5 §5, operator ruling O7): the
+/// recruiting-affiliate ledger, mirroring `ReferralLedgerEntry`.
+///
+/// Written on `payment.succeeded` from the booking's `BookingFeeSnapshot` ALONE. Never recomputed
+/// from the current rate schedule: a schedule change must not reprice a payment already taken.
+///
+/// The share is always funded from money collected on the same transaction (NHP's fee when there
+/// is one, otherwise the 3% added to the practitioner's application fee), so the parent holds the
+/// cash this row will later transfer.
+model AffiliateLedgerEntry {
+  id String @id @default(cuid())
+
+  /// The payment this share came out of.
+  bookingIntentId String
+  bookingIntent   BookingIntent @relation(fields: [bookingIntentId], references: [id], onDelete: Cascade)
+  whopPaymentId   String?
+
+  /// Who is owed (the recruiter) and whose session generated it (the recruited practitioner).
+  recruiterPractitionerId String
+  recruiterPractitioner   Practitioner @relation("AffiliateEntriesEarned", fields: [recruiterPractitionerId], references: [id], onDelete: Cascade)
+  recruitedPractitionerId String
+  recruitedPractitioner   Practitioner @relation("AffiliateEntriesGenerated", fields: [recruitedPractitionerId], references: [id], onDelete: Cascade)
+
+  /// MONEY, IN CENTS, SNAPSHOTTED. `grossUsdCents` is the client's gross payment; `bps` the
+  /// affiliate rate the booking was priced under; `shareUsdCents` the ORIGINAL share, never edited.
+  grossUsdCents    Int
+  bps              Int
+  shareUsdCents    Int
+  /// Refunds reverse the share pro rata. Kept as a running total (set absolutely from the
+  /// append-only FeeLedgerEntry reversals, so a redelivery cannot double-count) rather than by
+  /// editing `shareUsdCents`. Payable amount = shareUsdCents - reversedUsdCents.
+  reversedUsdCents Int @default(0)
+
+  state AffiliateLedgerState @default(ACCRUED)
+
+  /// Snapshot of `referral_hold_days` at write time, and the instant the hold lapses.
+  holdDays  Int
+  holdUntil DateTime
+
+  /// The amount CLAIMED for transfer (shareUsdCents - reversedUsdCents at claim time), in cents.
+  /// Set by the same guarded UPDATE that moves the row to SENDING. What was actually requested,
+  /// so a refund that lands after the claim can tell how much (if any) is owed back.
+  transferUsdCents Int?
+  settledAt        DateTime?
+  whopTransferId   String?
+  /// Definitive (4xx) transfer rejections are retried by the next sweep; this counts them and keeps
+  /// the last message so a stuck row explains itself.
+  transferAttempts Int       @default(0)
+  lastError        String?   @db.Text
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// IDEMPOTENCY ON WEBHOOK RETRIES: one share per recruiter per booking, enforced by the
+  /// database rather than by remembering to check.
+  @@unique([bookingIntentId, recruiterPractitionerId])
+  @@index([state, holdUntil])
+  @@index([recruiterPractitionerId, state])
+  @@index([recruitedPractitionerId])
 }
 
 /// A PRACTITIONER'S OWN CLIENT LIST (spec v1.4 §2 `client_list_entry`, R4/R5).

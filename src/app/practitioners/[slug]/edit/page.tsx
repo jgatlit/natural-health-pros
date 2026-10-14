@@ -64,6 +64,7 @@ import { PhotoUploadField } from '@/components/practitioners/PhotoUploadField';
 import { PhotoFramingField } from '@/components/practitioners/PhotoFramingField';
 import { AiDraftPanel } from '@/components/practitioners/AiDraftPanel';
 import { JoinLinkCard } from '@/components/practitioners/JoinLinkCard';
+import { RecruitedPractitionersSection } from '@/components/practitioners/RecruitedPractitionersSection';
 import { joinLinkFor, newRecruiterToken } from '@/lib/recruiter';
 import { SITE_URL } from '@/lib/site';
 
@@ -1136,6 +1137,10 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
         {!isSetUp && bookingsAndClients}
 
         {recruiterToken && <JoinLinkCard url={joinLinkFor(SITE_URL, 'hhe', recruiterToken)} />}
+
+        {/* The page's practitioner id only (already authorised above), and only for the profile's own
+            owner. Renders nothing unless this practitioner has brought somebody in. */}
+        <RecruitedPractitionersSection practitionerId={practitioner.id} isOwner={isOwner} />
 
         <AccountEmailSection
           // The OWNER's address, deliberately — not session.user.email, which is the VIEWER's

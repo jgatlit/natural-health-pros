@@ -360,7 +360,7 @@ async function handleEvent(
         });
       } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
-        attributionFailure = `payment.succeeded marked booking intent ${intentId} PAID but the attribution/referral ledger write FAILED (${detail}) — the lead attribution term never started for this client, and any referrer share on this payment is unrecorded`;
+        attributionFailure = `payment.succeeded marked booking intent ${intentId} PAID but the attribution/referral/affiliate ledger write FAILED (${detail}) — the lead attribution term never started for this client, and any referrer or recruiter share on this payment may be unrecorded`;
         console.error('v1 webhook: attribution ledger write failed', { intentId, error: detail });
       }
       // Still null on the happy path, so the PAID transition is never reported as a failure.
@@ -401,6 +401,12 @@ async function handleEvent(
       // back automatically, so this must reach /admin/whop-webhooks rather than only a log line.
       if (outcome.recoveryOwedUsdCents > 0) {
         const message = `refund on payment ${paymentId} reverses a referrer share of ${outcome.recoveryOwedUsdCents} cents that was ALREADY PAID OUT — recovery needs an explicit action`;
+        console.error(`v1 webhook: ${message}`);
+        return message;
+      }
+      // The recruiter's (affiliate) share is the same shape of problem: paid out, now partly owed back.
+      if (outcome.affiliateRecoveryOwedUsdCents > 0) {
+        const message = `refund on payment ${paymentId} reverses a recruiting-affiliate share of ${outcome.affiliateRecoveryOwedUsdCents} cents that was ALREADY PAID OUT — recovery needs an explicit action`;
         console.error(`v1 webhook: ${message}`);
         return message;
       }

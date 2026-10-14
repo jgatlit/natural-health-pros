@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { reverseReferralOnRefund } from '@/lib/referral-refunds';
+import { fakeAffiliateDb } from './helpers/fake-affiliate-db';
 
 /**
  * REFUNDS (spec v1.4 §6.2, §9 test 17).
@@ -31,9 +32,11 @@ function fake(
   const ledger: Record<string, unknown>[] = [];
   const updates: Record<string, unknown>[] = [];
   const preexisting = extra.feeLedger ?? [];
+  const affiliate = fakeAffiliateDb();
   return {
     ledger,
     updates,
+    affiliateLedgerEntry: affiliate.affiliateLedgerEntry,
     bookingFeeSnapshot: {
       async findUnique() {
         return extra.snapshot ?? null;
@@ -214,6 +217,7 @@ describe('reverseReferralOnRefund — nothing to do', () => {
       recoveryOwedUsdCents: 0,
       matched: false,
       affiliateReversedUsdCents: 0,
+      affiliateRecoveryOwedUsdCents: 0,
     });
     expect(db.ledger).toEqual([]);
   });
@@ -235,9 +239,9 @@ describe('reverseReferralOnRefund — nothing to do', () => {
 
 
 /**
- * SPEC v1.5 §1 — a refund reverses the AFFILIATE share too, not only the referrer's. The affiliate
- * ledger does not exist yet (lane L2b), so the reversal is an append-only negative FeeLedgerEntry
- * keyed on the refund: that entry is the seam L2b will apply.
+ * SPEC v1.5 §1 — a refund reverses the AFFILIATE share too, not only the referrer's. The reversal is
+ * an append-only negative FeeLedgerEntry keyed on the refund, applied to the AffiliateLedgerEntry
+ * (lane L2b; tests/affiliate-ledger.test.ts covers the ledger side).
  */
 describe('reverseReferralOnRefund — the recruiting affiliate share (spec v1.5)', () => {
   const snapshot = {
