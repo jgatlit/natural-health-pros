@@ -46,9 +46,7 @@ import { BookingsSection, type BookingRow } from '@/components/practitioners/Boo
 import { ClientsAndReferralsSection } from '@/components/practitioners/ClientsAndReferralsSection';
 import { loadClientList } from '@/lib/client-list';
 import { referralUrl } from '@/lib/referrals';
-import { crossReferralRates } from '@/lib/referral-fees';
-import { formatBpsAsPercent } from '@/lib/pricing-plans';
-import { loadSettings } from '@/lib/platform-settings';
+import { getScheduleForCopy } from '@/lib/rate-schedules';
 import { bookableWhere } from '@/lib/practitioner-indexer';
 import { paymentsLive } from '@/lib/booking-flow';
 import { BookingLinksField } from '@/components/practitioners/BookingLinksField';
@@ -264,7 +262,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
   // Loaded after the block above rather than inside it because `loadClientList` issues its own
   // four scoped reads and the term setting is a fifth; folding them in would make the existing
   // tuple destructuring harder to read for no saving.
-  const [clientRows, referable, { leadAttributionTermMonths }] = await Promise.all([
+  const [clientRows, referable, copySchedule] = await Promise.all([
     loadClientList(prisma, practitioner.id),
     // Who this practitioner may refer TO. `bookableWhere()` rather than `listedWhere()`: an
     // unlisted practitioner is absent from directory search but still bookable, so referring to
@@ -276,13 +274,13 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
       orderBy: { displayName: 'asc' },
       take: 200,
     }),
-    loadSettings(prisma),
+    // Words only: this practitioner's own schedule, or the current one if they have none yet.
+    getScheduleForCopy(prisma, practitioner.rateScheduleId),
   ]);
 
   // A freshly minted referral link, echoed back through the redirect so it can be copied. The
   // token addresses a public redirect and belongs to the practitioner being shown it.
   const newReferralLink = searchParams.token ? referralUrl(searchParams.token) : null;
-  const referralRateLabel = formatBpsAsPercent(crossReferralRates().referrerFeeBps);
   const clientsNotice = clientsAndReferralsNotice(searchParams);
 
   const bookingRows: BookingRow[] = intents.map((i) => ({
@@ -372,7 +370,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
   const openPayoutPortalAction = openPayoutPortal.bind(null, params.slug);
   const startSubscriptionCheckoutAction = startSubscriptionCheckout.bind(null, params.slug);
   const choosePlanAction = choosePlan.bind(null, params.slug);
-  const comparison = planComparison();
+  const comparison = planComparison(copySchedule);
   const requestAccountEmailChangeAction = requestAccountEmailChange.bind(null, params.slug);
 
   // ── Setup path ─────────────────────────────────────────────────────────────────────────────
@@ -458,8 +456,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
           rows={clientRows}
           referable={referable}
           newReferralLink={newReferralLink}
-          referralRateLabel={referralRateLabel}
-          termMonths={leadAttributionTermMonths}
+          referral={comparison.referral}
           addAction={addClients.bind(null, params.slug)}
           inviteAction={inviteClients.bind(null, params.slug)}
           referByEmailAction={referClientByEmail.bind(null, params.slug)}
@@ -919,8 +916,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
           plans={comparison.cards}
           breakEven={comparison.breakEven}
           breakEvenMonthlyLabel={comparison.breakEvenMonthlyLabel}
-          termMonths={leadAttributionTermMonths}
-          referralRateLabel={referralRateLabel}
+          referral={comparison.referral}
           chooseAction={choosePlanAction}
         />
 
@@ -936,7 +932,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
           // which fails silently when someone pays from a different address than their profile.
           subscribeAction={startSubscriptionCheckoutAction}
           fallbackCheckoutUrl={process.env.WHOP_PLATFORM_CHECKOUT_URL ?? null}
-          priceLabel={monthlyFeeLabel('PLAN_A')}
+          priceLabel={monthlyFeeLabel(copySchedule, 'PLAN_A')}
         />
         </div>
 

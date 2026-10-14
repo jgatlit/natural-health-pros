@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { V1, V2 } from './helpers/rate-schedule';
 
 /**
  * Covers `/api/cron/trial-sweep` — the cron that warns pilots before their trial ends and then
@@ -18,13 +19,24 @@ import { describe, it, expect, beforeEach, vi } from 'vitest';
  */
 
 const mocks = vi.hoisted(() => ({
+  schedules: {} as Record<string, unknown>,
+  currentScheduleId: null as string | null,
   findMany: vi.fn(),
   sendEmail: vi.fn(),
   indexPractitionerVerified: vi.fn(),
 }));
 
 vi.mock('@/lib/prisma', () => ({
-  prisma: { practitioner: { findMany: mocks.findMany } },
+  prisma: {
+    practitioner: { findMany: mocks.findMany },
+    // The price quoted in the warning email is read from a rate schedule (spec v1.5 s2).
+    platformSetting: {
+      findUnique: async () => (mocks.currentScheduleId ? { value: mocks.currentScheduleId } : null),
+    },
+    rateSchedule: {
+      findUnique: async (a: { where: { id: string } }) => mocks.schedules[a.where.id] ?? null,
+    },
+  },
 }));
 vi.mock('@/lib/email', () => ({
   sendEmail: mocks.sendEmail,
@@ -58,6 +70,8 @@ describe('trial-sweep cron', () => {
     process.env.RESEND_API_KEY = 're_test_key';
     delete process.env.CRON_SECRET; // open endpoint — auth is covered by its own guard
     mocks.findMany.mockReset();
+    mocks.schedules = { [V1.id]: V1, [V2.id]: V2 };
+    mocks.currentScheduleId = V1.id;
     mocks.sendEmail.mockReset();
     mocks.indexPractitionerVerified.mockReset();
     // A CONFIRMED delist is the default. Note the shape matters: this mock previously resolved
@@ -77,6 +91,38 @@ describe('trial-sweep cron', () => {
     // Nothing attempted, and crucially no "sent: 0" success shape.
     expect(mocks.sendEmail).not.toHaveBeenCalled();
     expect(body.ok).toBeUndefined();
+  });
+
+  it('quotes the Plan A price from the practitioner’s RATE SCHEDULE, never from a literal in the email', async () => {
+    mocks.findMany.mockImplementation(async (args: never) =>
+      isBucketQuery(args)
+        ? [{ ...prac('p1'), rateScheduleId: V2.id }, prac('p2')]
+        : [],
+    );
+    mocks.sendEmail.mockResolvedValue({ id: 'msg' });
+
+    await run();
+
+    const byTo = (to: string) =>
+      mocks.sendEmail.mock.calls.map((c) => c[0] as { to: string; text: string; html: string }).find((e) => e.to === to)!;
+    // p1 is on schedule V2 ($29/mo); p2 has none and gets the CURRENT schedule's ($39/mo).
+    expect(byTo('p1@example.com').text).toContain('directory search ($29/mo):');
+    expect(byTo('p1@example.com').html).toContain('directory search ($29/mo):');
+    expect(byTo('p2@example.com').text).toContain('directory search ($39/mo):');
+  });
+
+  it('omits the price (and logs) rather than quoting a stale one when no schedule can be read', async () => {
+    mocks.schedules = {};
+    mocks.currentScheduleId = null;
+    mocks.findMany.mockImplementation(async (args: never) => (isBucketQuery(args) ? [prac('p1')] : []));
+    mocks.sendEmail.mockResolvedValue({ id: 'msg' });
+
+    const { status } = await run();
+
+    expect(status).toBe(200);
+    const text = (mocks.sendEmail.mock.calls[0][0] as { text: string }).text;
+    expect(text).toContain('Subscribe to stay listed in directory search:');
+    expect(text).not.toMatch(/\$\d/);
   });
 
   it('one failed send does not abort the run — later recipients still receive theirs', async () => {

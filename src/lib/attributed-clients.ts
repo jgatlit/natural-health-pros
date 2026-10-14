@@ -116,8 +116,20 @@ export async function recordAttributedClient(
     party?: 'PRACTITIONER' | 'NHP' | null;
     source?: string | null;
     bookingIntentId?: string | null;
-    /** The term to snapshot, in months. Resolve it from `loadSettings()` at the call site. */
+    /**
+     * The LEAD term to snapshot, in months — the serving practitioner's `leadTermMonths` from the
+     * schedule that priced this booking (spec v1.5 §2). Resolved at the call site, never read from
+     * a global setting: a row must keep the term it was sold under.
+     */
     termMonths: number;
+    /**
+     * The REFERRER term to snapshot, in months, and the schedule both came from. Written once, at
+     * creation, and never re-read from the schedule — that copy is what stops a later schedule
+     * change re-pricing an in-flight term. The referrer term is only meaningful when a referrer is
+     * named; it is stored as null otherwise.
+     */
+    referrerTermMonths?: number | null;
+    rateScheduleId?: string | null;
     /**
      * THE DAY OF TRANSACTION — the instant this client's payment to this practitioner succeeded.
      *
@@ -146,6 +158,15 @@ export async function recordAttributedClient(
   const at = input.at ?? new Date();
   const emailHash = hashClientEmail(input.email);
   const term = snapshotTerm({ termMonths: input.termMonths, anchorAt: input.transactedAt });
+  // Capped at the lead term, so a mixed or hand-edited input can never give the referrer a longer
+  // claim than NHP's own.
+  const referrerTerm =
+    input.referrerPractitionerId && input.referrerTermMonths && input.referrerTermMonths > 0
+      ? snapshotTerm({
+          termMonths: Math.min(input.referrerTermMonths, input.termMonths),
+          anchorAt: input.transactedAt,
+        })
+      : null;
   const where = { practitionerId_emailHash: { practitionerId: input.practitionerId, emailHash } };
 
   // CREATE-ONLY. The update branch is deliberately EMPTY: on a repeat booking there is nothing
@@ -166,6 +187,9 @@ export async function recordAttributedClient(
       termMonths: term.termMonths,
       termAnchorAt: term.termAnchorAt,
       termEndsAt: term.termEndsAt,
+      referrerTermMonths: referrerTerm?.termMonths ?? null,
+      referrerTermEndsAt: referrerTerm?.termEndsAt ?? null,
+      rateScheduleId: input.rateScheduleId ?? null,
       referrerPractitionerId: input.referrerPractitionerId ?? null,
       owner: input.owner ?? 'NHP',
       decidedAt: input.owner ? at : null,

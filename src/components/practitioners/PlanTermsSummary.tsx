@@ -1,9 +1,9 @@
 import type { PlanCardView } from './PlanChoice';
+import type { ReferralTermsView } from '@/lib/pricing-plans';
 
 type Props = {
   plans: PlanCardView[];
-  termMonths: number;
-  referralRateLabel: string;
+  referral: ReferralTermsView;
 };
 
 /**
@@ -15,7 +15,8 @@ type Props = {
  * `planComparison()` and the admin term setting, so nothing here can show a number the checkout
  * does not charge.
  */
-export function PlanTermsSummary({ plans, termMonths, referralRateLabel }: Props) {
+export function PlanTermsSummary({ plans, referral }: Props) {
+  const { termMonths } = referral;
   return (
     <div className="space-y-3 rounded-md border bg-muted/30 p-4">
       <div className="space-y-0.5">
@@ -86,8 +87,10 @@ export function PlanTermsSummary({ plans, termMonths, referralRateLabel }: Props
       <p className="text-[11px] leading-relaxed text-muted-foreground">
         The {termMonths} months run from each client&rsquo;s first payment to you. Clients on your
         own list, and anyone you invite, are always 0%. When another practitioner refers a client to
-        you, {referralRateLabel} of those sessions goes to them and {referralRateLabel} to Natural
-        Health Pros for the same term, on either plan.
+        you, {referral.referralTotalLabel} of those sessions is taken for the first{' '}
+        {referral.referrerTermMonths} months, on either plan: {referral.referrerRateLabel} goes to them
+        and {referral.nhpReferralRateLabel} to Natural Health Pros. After that, your plan&rsquo;s rate
+        applies until month {termMonths}.
       </p>
     </div>
   );

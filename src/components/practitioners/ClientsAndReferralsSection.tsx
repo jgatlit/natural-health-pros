@@ -3,6 +3,7 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import type { ClientListRow } from '@/lib/client-list';
+import type { ReferralTermsView } from '@/lib/pricing-plans';
 
 export type ReferablePractitioner = { slug: string; displayName: string };
 
@@ -13,8 +14,7 @@ type Props = {
   /** Rendered so the practitioner can copy it, right after `createReferralLinkFor` mints one. */
   newReferralLink: string | null;
   /** Pre-rendered copy for the disclosure, so no component formats a percentage a second way. */
-  referralRateLabel: string;
-  termMonths: number;
+  referral: ReferralTermsView;
   addAction: (formData: FormData) => void | Promise<void>;
   inviteAction: (formData: FormData) => void | Promise<void>;
   referByEmailAction: (formData: FormData) => void | Promise<void>;
@@ -45,8 +45,7 @@ export function ClientsAndReferralsSection({
   rows,
   referable,
   newReferralLink,
-  referralRateLabel,
-  termMonths,
+  referral,
   addAction,
   inviteAction,
   referByEmailAction,
@@ -119,8 +118,8 @@ export function ClientsAndReferralsSection({
         <div className="space-y-1">
           <h3 className="text-xs font-semibold">Refer a client to another practitioner</h3>
           <p className="text-xs text-muted-foreground">
-            Earn {referralRateLabel} of what they book with that practitioner for {termMonths}{' '}
-            months from that client&rsquo;s first payment.
+            Earn {referral.referrerRateLabel} of what they book with that practitioner for{' '}
+            {referral.referrerTermMonths} months from that client&rsquo;s first payment.
           </p>
         </div>
 
@@ -206,7 +205,7 @@ export function ClientsAndReferralsSection({
               className="w-full rounded border bg-background px-2 py-1 font-mono text-xs"
             />
             <p className="text-xs text-muted-foreground">
-              Valid for {termMonths} months. Anyone who opens it and books counts as your referral.
+              Valid for {referral.termMonths} months. Anyone who opens it and books counts as your referral.
             </p>
           </div>
         )}
@@ -215,9 +214,11 @@ export function ClientsAndReferralsSection({
             a practitioner referring someone should know what it costs the practitioner receiving
             them — it is the same arrangement seen from the other side. */}
         <p className="text-xs text-muted-foreground">
-          When another practitioner refers a client to you, {referralRateLabel} of those sessions
-          goes to them and {referralRateLabel} to Natural Health Pros, for {termMonths} months from
-          that client&rsquo;s first payment, on either plan.
+          When another practitioner refers a client to you, {referral.referralTotalLabel} of those
+          sessions is taken for the first {referral.referrerTermMonths} months from that
+          client&rsquo;s first payment, on either plan: {referral.referrerRateLabel} goes to them and{' '}
+          {referral.nhpReferralRateLabel} to Natural Health Pros. After that your plan&rsquo;s rate
+          applies until month {referral.termMonths}.
         </p>
       </div>
 

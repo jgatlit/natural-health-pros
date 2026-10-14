@@ -16,15 +16,31 @@
  */
 
 import { decideAttribution, type AttributionOwner } from './attribution-decision';
-import { termState, type TermState } from './attribution-term';
+import type { TermState } from './attribution-term';
 import { hashClientEmail } from './attributed-clients';
 import { resolveAttributionInputs, type AttributionResolverDb } from './attribution-resolver';
 import { resolveSessionFee, type SessionFee } from './referral-fees';
 import type { PlanKey } from './pricing-plans';
+import { NoRateScheduleError } from './rate-schedule';
+import { getScheduleById, getScheduleForPractitioner } from './rate-schedules';
+import { getRecruiterFor } from './recruiter';
 
 /** STRUCTURAL, for the same reason as every other Db type here — see `attributed-clients.ts`. */
 export type BookingFeeDb = AttributionResolverDb & {
   attributedClient: {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    findUnique(args: any): Promise<any>;
+  };
+  /** The serving practitioner's schedule (fail closed when absent). */
+  practitioner: {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    findUnique(args: any): Promise<any>;
+    // The recruiter-activity check (src/lib/recruiter.ts).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    findFirst(args: any): Promise<any>;
+  };
+  /** The schedule an in-flight client row was sold under. */
+  rateSchedule: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     findUnique(args: any): Promise<any>;
   };
@@ -81,6 +97,9 @@ export async function resolveBookingFee(
       referrerPractitionerId: true,
       termAnchorAt: true,
       termEndsAt: true,
+      termMonths: true,
+      referrerTermMonths: true,
+      rateScheduleId: true,
     },
   })) as {
     owner?: string | null;
@@ -88,7 +107,24 @@ export async function resolveBookingFee(
     referrerPractitionerId?: string | null;
     termAnchorAt?: Date | null;
     termEndsAt?: Date | null;
+    termMonths?: number | null;
+    referrerTermMonths?: number | null;
+    rateScheduleId?: string | null;
   } | null;
+
+  // FAIL CLOSED, BEFORE ANYTHING ELSE IS DECIDED. A practitioner with no schedule is refused —
+  // never priced against a default. The caller (the checkout page) turns this into "payment is not
+  // available" and logs it; nothing is minted and nothing is charged.
+  const practitionerSchedule = await getScheduleForPractitioner(db, input.practitionerId);
+  if (!practitionerSchedule) throw new NoRateScheduleError(input.practitionerId);
+
+  // AN IN-FLIGHT TERM KEEPS THE SCHEDULE IT WAS SOLD UNDER. A client row carries the schedule id
+  // copied onto it when the claim was created; that schedule — not the practitioner's CURRENT one,
+  // which a cohort migration may since have changed — prices every later session in the term. If
+  // the snapshot points at a schedule that cannot be read, the practitioner's own is used rather
+  // than refusing a booking that is otherwise well-formed.
+  const schedule =
+    (row?.rateScheduleId ? await getScheduleById(db, row.rateScheduleId) : null) ?? practitionerSchedule;
 
   let owner: AttributionOwner;
   let decidedByRule: string;
@@ -116,20 +152,34 @@ export async function resolveBookingFee(
     referralTouchId = decision.referralTouchId ?? referralTouchId;
   }
 
-  const state = termState(
-    { termAnchorAt: row?.termAnchorAt ?? null, termEndsAt: row?.termEndsAt ?? null },
-    input.transactedAt,
-  );
-  // No row at all means we have never claimed this client, so this very session introduces them.
-  const resolvedTerm: TermState = row ? state : 'NONE';
+  // The client's first transaction with this practitioner. No row means THIS session introduces
+  // them; a row with no anchor is a legacy PENDING_ANCHOR row, chargeable from now (a term cannot
+  // have expired before it began) — see attribution-term.ts.
+  const anchorAt = row?.termAnchorAt ?? input.transactedAt;
+
+  // The recruiter (L0b's immutable `recruitedById`), only if still active. See recruiter.ts.
+  const recruiterPractitionerId = await getRecruiterFor(db, input.practitionerId);
 
   const fee = resolveSessionFee({
     plan: input.plan,
     owner,
-    term: resolvedTerm,
     referrerPractitionerId,
     priceUsdCents: input.priceUsdCents,
+    schedule,
+    practitionerId: input.practitionerId,
+    recruiterPractitionerId,
+    anchorAt,
+    at: input.transactedAt,
+    storedTermMonths: { lead: row?.termMonths ?? null, referrer: row?.referrerTermMonths ?? null },
   });
+
+  const resolvedTerm: TermState = !row
+    ? 'NONE'
+    : !row.termAnchorAt
+      ? 'PENDING_ANCHOR'
+      : input.transactedAt.getTime() < fee.leadTermEndsAt.getTime()
+        ? 'IN_TERM'
+        : 'OUT_OF_TERM';
 
   const result: BookingFee = {
     ...fee,
@@ -189,6 +239,14 @@ export async function persistBookingFeeSnapshot(
     practitionerNetUsdCents: fee.practitionerNetUsdCents,
     applicationFeeUsdCents: fee.applicationFeeUsdCents,
     whopCheckoutConfigId: input.whopCheckoutConfigId,
+    // v1.5 — the schedule and the resolved numbers are COPIED here, so this row alone explains the
+    // charge and a later schedule change can never re-price it.
+    rateScheduleId: fee.rateScheduleId,
+    referrerTermState: fee.referrerTermState,
+    affiliateBps: fee.affiliateBps,
+    affiliateShareUsdCents: fee.affiliateShareUsdCents,
+    recruiterPractitionerId: fee.recruiterPractitionerId,
+    nhpNetUsdCents: fee.nhpNetUsdCents,
   };
   // Upsert rather than create: a re-render that re-reaches the mint must not throw on the unique
   // constraint. The amounts are a pure function of state that has not moved, so a rewrite is a

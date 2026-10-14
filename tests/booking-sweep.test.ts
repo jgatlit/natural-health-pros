@@ -1,3 +1,4 @@
+import { V1 } from './helpers/rate-schedule';
 import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
 
 /**
@@ -15,6 +16,8 @@ const mocks = vi.hoisted(() => ({
   ledgerFindMany: vi.fn<(args?: unknown) => Promise<unknown[]>>(),
   ledgerUpdate: vi.fn<(args?: unknown) => Promise<unknown>>(),
   settingFindMany: vi.fn<(args?: unknown) => Promise<Array<{ key: string; value: string }>>>(),
+  settingFindUnique: vi.fn<(args?: unknown) => Promise<{ value: string } | null>>(),
+  scheduleFindUnique: vi.fn<(args?: unknown) => Promise<unknown>>(),
 }));
 
 vi.mock('@/lib/prisma', () => ({
@@ -30,7 +33,8 @@ vi.mock('@/lib/prisma', () => ({
     // a warning about in the Whop webhook tests.
     referralTouch: { findMany: mocks.touchFindMany, update: mocks.touchUpdate },
     referralLedgerEntry: { findMany: mocks.ledgerFindMany, update: mocks.ledgerUpdate },
-    platformSetting: { findMany: mocks.settingFindMany },
+    platformSetting: { findMany: mocks.settingFindMany, findUnique: mocks.settingFindUnique },
+    rateSchedule: { findUnique: mocks.scheduleFindUnique },
   },
 }));
 // `escapeHtml` is a REAL export of this module and the referral copy builders use it. Mocking
@@ -106,7 +110,10 @@ beforeEach(() => {
   mocks.touchUpdate.mockResolvedValue({});
   mocks.ledgerFindMany.mockResolvedValue([]);
   mocks.ledgerUpdate.mockResolvedValue({});
-  mocks.settingFindMany.mockResolvedValue([{ key: 'lead_attribution_term_months', value: '8' }]);
+  mocks.settingFindMany.mockResolvedValue([]);
+  // The referral notice quotes the REFERRED practitioner's rate schedule (spec v1.5 §2).
+  mocks.settingFindUnique.mockResolvedValue({ value: V1.id });
+  mocks.scheduleFindUnique.mockResolvedValue(V1);
   mocks.sendEmail.mockResolvedValue({ id: 'msg_1' });
 });
 
@@ -458,6 +465,10 @@ describe('referral notices (spec v1.4 §5.5 / R10, operator ruling 7 / R15)', ()
     expect(body.referrals.sent).toBe(1);
     const sent = mocks.sendEmail.mock.calls.map((c) => c[0] as { to: string; subject: string });
     expect(sent.some((e) => e.to === 'x@example.com' && /referral booked/i.test(e.subject))).toBe(true);
+    // The promise quoted to the referrer is the schedule's: 20% for the 4-month referrer term.
+    const text = (mocks.sendEmail.mock.calls[0]?.[0] as { text: string }).text;
+    expect(text).toContain('You earn 20% of what they book');
+    expect(text).toContain('for 4 months');
     // Resend's idempotency key lasts 24 HOURS; a referral touch stays a candidate forever. The
     // column is the guard.
     expect(mocks.touchUpdate).toHaveBeenCalledWith(

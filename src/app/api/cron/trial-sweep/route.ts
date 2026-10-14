@@ -3,6 +3,8 @@ import { prisma } from '@/lib/prisma';
 import { indexPractitionerVerified } from '@/lib/practitioner-indexer';
 import { sendEmail } from '@/lib/email';
 import { SITE_URL } from '@/lib/site';
+import { monthlyFeeLabel } from '@/lib/pricing-plans';
+import { getScheduleForCopy } from '@/lib/rate-schedules';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -59,7 +61,22 @@ function startOfUTCDay(d: Date): Date {
   return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
 }
 
-function warningCopy(offsetDays: number, trialEndsAt: Date, slug: string) {
+/**
+ * The Plan A price to quote, read from the practitioner's rate schedule (or the current one) - never
+ * typed here. This is COPY: which Whop plan the subscription button actually charges is a separate
+ * matter (`WHOP_SUBSCRIPTION_PLAN_ID`). If no schedule can be read the price is omitted and the
+ * failure logged, rather than quoting a stale number.
+ */
+async function planAPriceLabel(rateScheduleId: string | null): Promise<string | null> {
+  try {
+    return monthlyFeeLabel(await getScheduleForCopy(prisma, rateScheduleId), 'PLAN_A');
+  } catch (err) {
+    console.error('[trial-sweep] cannot read a rate schedule for the price in the email', err);
+    return null;
+  }
+}
+
+function warningCopy(offsetDays: number, trialEndsAt: Date, slug: string, priceLabel: string | null) {
   const dateLabel = new Intl.DateTimeFormat('en-US', {
     timeZone: 'UTC',
     year: 'numeric',
@@ -74,6 +91,7 @@ function warningCopy(offsetDays: number, trialEndsAt: Date, slug: string) {
 
   const when = offsetDays === 0 ? `today (${dateLabel})` : `in ${offsetDays} days, on ${dateLabel}`;
   const manageUrl = `${SITE_URL}/practitioners/${slug}/edit`;
+  const price = priceLabel ? ` (${priceLabel})` : '';
 
   // TRANSACTIONAL SHAPE, deliberately plain — see src/auth.ts#sendBrandedVerificationRequest.
   // A pretty branded email with a pitch and a styled CTA button landed in Gmail's Promotions
@@ -81,7 +99,7 @@ function warningCopy(offsetDays: number, trialEndsAt: Date, slug: string) {
   const text = [
     `Your free trial listing on Natural Health Pros ends ${when}.`,
     '',
-    'Subscribe to stay listed in directory search ($39/mo):',
+    `Subscribe to stay listed in directory search${price}:`,
     manageUrl,
     '',
     'If you do nothing, your profile stays live at its direct link, but stops appearing in directory search once the trial ends.',
@@ -89,7 +107,7 @@ function warningCopy(offsetDays: number, trialEndsAt: Date, slug: string) {
 
   const html = `<div style="font-family: -apple-system, system-ui, sans-serif; font-size: 15px; line-height: 1.6; color: #1a1a1a;">
 <p>Your free trial listing on Natural Health Pros ends ${when}.</p>
-<p>Subscribe to stay listed in directory search ($39/mo): <a href="${manageUrl}">${manageUrl}</a></p>
+<p>Subscribe to stay listed in directory search${price}: <a href="${manageUrl}">${manageUrl}</a></p>
 <p style="color:#666;">If you do nothing, your profile stays live at its direct link, but stops appearing in directory search once the trial ends.</p>
 </div>`;
 
@@ -142,6 +160,7 @@ export async function GET(request: Request): Promise<NextResponse> {
         id: true,
         slug: true,
         trialEndsAt: true,
+        rateScheduleId: true,
         user: { select: { email: true } },
       },
     });
@@ -155,7 +174,12 @@ export async function GET(request: Request): Promise<NextResponse> {
         continue;
       }
 
-      const { subject, text, html } = warningCopy(bucket.offsetDays, p.trialEndsAt, p.slug);
+      const { subject, text, html } = warningCopy(
+        bucket.offsetDays,
+        p.trialEndsAt,
+        p.slug,
+        await planAPriceLabel(p.rateScheduleId ?? null),
+      );
 
       try {
         await sendEmail({

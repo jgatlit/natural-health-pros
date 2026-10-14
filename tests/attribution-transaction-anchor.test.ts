@@ -2,7 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
-import { SETTING_DEFS } from '@/lib/platform-settings';
+import { SCHEDULE_FORM_FIELDS } from '@/lib/rate-schedule';
 import { referralBookedCopy } from '@/lib/referral-notifications';
 
 /**
@@ -116,8 +116,8 @@ describe('practitioner-facing copy says PAYMENT, not session', () => {
     }
   });
 
-  it('the admin Lead Attribution Term help text describes the payment anchor', () => {
-    const { help } = SETTING_DEFS.leadAttributionTermMonths;
+  it('the admin lead-term field help text describes the payment anchor', () => {
+    const help = SCHEDULE_FORM_FIELDS.find((f) => f.name === 'leadTerm')!.help;
     expect(help).toMatch(/payment/i);
     expect(
       help,

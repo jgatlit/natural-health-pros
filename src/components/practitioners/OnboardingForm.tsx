@@ -7,6 +7,7 @@ import { TermsAcknowledgment } from '@/components/practitioners/TermsAcknowledgm
 import { PlanTermsSummary } from '@/components/practitioners/PlanTermsSummary';
 import type { PlanCardView } from '@/components/practitioners/PlanChoice';
 import { OUTSIDE_WORK_FIELD, OUTSIDE_WORK_HELPER, OUTSIDE_WORK_QUESTION } from '@/lib/outside-work';
+import type { ReferralTermsView } from '@/lib/pricing-plans';
 
 type Props = {
   action: (formData: FormData) => void | Promise<void>;
@@ -27,7 +28,7 @@ type Props = {
   aliases: { label: string; specialtyId: string }[];
   initialSpecialties: { specialtyId: string; rawLabel: string }[];
   termsAcceptedAt: Date | null;
-  planTerms: { plans: PlanCardView[]; termMonths: number; referralRateLabel: string };
+  planTerms: { plans: PlanCardView[]; referral: ReferralTermsView };
   /** Spec §5: shown before plan choice, only when a recruiter was captured. */
   recruiterDisclosure?: string | null;
 };

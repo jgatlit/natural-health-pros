@@ -21,6 +21,7 @@ import { DeleteInviteButton } from './DeleteInviteButton';
 import { ConfirmActionButton } from './ConfirmActionButton';
 import { EditEmailControl } from './EditEmailControl';
 import { matchesOutsideWorkFilter, parseOutsideWorkFilter, type OutsideWorkFilter } from '@/lib/outside-work';
+import { assignScheduleToPractitioner } from '@/app/admin/commercial-settings/actions';
 
 export const dynamic = 'force-dynamic';
 
@@ -75,6 +76,8 @@ export default async function AdminInvitesPage({
               delistedAt: true,
               archivedAt: true,
               openToOutsideWork: true,
+              // Spec v1.5 §2: which rate card this practitioner is priced under.
+              rateSchedule: { select: { label: true } },
             },
           },
         },
@@ -108,6 +111,8 @@ export default async function AdminInvitesPage({
               delistedAt: true,
               archivedAt: true,
               openToOutsideWork: true,
+              // Spec v1.5 §2: which rate card this practitioner is priced under.
+              rateSchedule: { select: { label: true } },
             },
           },
         },
@@ -416,6 +421,34 @@ export default async function AdminInvitesPage({
                       >
                         {practitioner.openToOutsideWork ? 'Open' : 'Not open'}
                       </Badge>
+                    )}
+                    {status === 'accepted' && practitioner && (
+                      <span
+                        className="whitespace-nowrap text-[10px] text-muted-foreground"
+                        title="Rate schedule — change it from Commercial settings"
+                      >
+                        Rates: {practitioner.rateSchedule?.label ?? 'NONE — checkout refuses'}
+                      </span>
+                    )}
+                    {status === 'accepted' && practitioner && !practitioner.rateSchedule && (
+                      <form action={assignScheduleToPractitioner} className="flex items-center gap-1">
+                        <input type="hidden" name="practitionerId" value={practitioner.id} />
+                        <input
+                          name="reason"
+                          required
+                          minLength={3}
+                          placeholder="reason"
+                          aria-label={`Reason for assigning the current rate schedule to ${practitioner.displayName}`}
+                          className="w-28 rounded border border-slate-300 px-1.5 py-1 text-[11px]"
+                        />
+                        <button
+                          type="submit"
+                          className="whitespace-nowrap rounded border border-red-300 px-1.5 py-1 text-[11px] text-red-800 hover:bg-red-50"
+                          title="Assign the current rate schedule (admin only, audited)"
+                        >
+                          Assign current schedule
+                        </button>
+                      </form>
                     )}
                     {status === 'pending' && (
                       <Badge variant="default" className="gap-1 text-[10px]">

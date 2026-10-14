@@ -100,7 +100,14 @@ export async function commitPaymentAttribution(
     party?: 'PRACTITIONER' | 'NHP' | null;
     source?: string | null;
     referralTouchId?: string | null;
+    /**
+     * The serving practitioner's LEAD term, referrer term and schedule id, resolved by the caller
+     * from the schedule that priced this booking (`resolvePaymentTerms`) — snapshotted onto the
+     * attribution row exactly once.
+     */
     termMonths: number;
+    referrerTermMonths?: number | null;
+    rateScheduleId?: string | null;
     holdDays: number;
     /**
      * THE PAYMENT INSTANT — and, since the 2026-09-19 correction, also the term's ANCHOR.
@@ -170,6 +177,8 @@ export async function commitPaymentAttribution(
     source: input.source ?? null,
     bookingIntentId: input.bookingIntentId,
     termMonths: input.termMonths,
+    referrerTermMonths: input.referrerTermMonths ?? null,
+    rateScheduleId: input.rateScheduleId ?? null,
     transactedAt: input.paidAt,
     referrerPractitionerId,
     owner,

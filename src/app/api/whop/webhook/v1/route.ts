@@ -4,6 +4,7 @@ import { prisma } from '@/lib/prisma';
 import { commitPaymentAttribution } from '@/lib/referral-settlement';
 import { reverseReferralOnRefund } from '@/lib/referral-refunds';
 import { loadSettings } from '@/lib/platform-settings';
+import { resolvePaymentTerms } from '@/lib/rate-schedules';
 import { unwrapWebhook } from '@/lib/whop';
 import { indexPractitioner } from '@/lib/practitioner-indexer';
 
@@ -324,10 +325,15 @@ async function handleEvent(
       const effectivePaidAt = marked.count > 0 ? paidAt : (intent.paidAt ?? paidAt);
       let attributionFailure: string | null = null;
       try {
-        // The TERM and the HOLD are snapshotted onto their rows here, read from the admin settings
-        // exactly once. Reading them later would let an operator edit reprice a claim already sold
-        // or move a hold clock that is already running.
-        const { leadAttributionTermMonths, referralHoldDays } = await loadSettings(prisma);
+        // The TERMS and the HOLD are snapshotted onto their rows here, read exactly once. The terms
+        // come from the rate schedule that PRICED this booking (spec v1.5 §2) and the hold from the
+        // admin settings. Reading them later would let a schedule change or an operator edit
+        // reprice a claim already sold or move a hold clock that is already running.
+        const { referralHoldDays } = await loadSettings(prisma);
+        const terms = await resolvePaymentTerms(prisma, {
+          bookingIntentId: intent.id,
+          practitionerId: intent.practitionerId,
+        });
         await commitPaymentAttribution(prisma, {
           bookingIntentId: intent.id,
           practitionerId: intent.practitionerId,
@@ -335,7 +341,9 @@ async function handleEvent(
           party: intent.attributionParty,
           source: intent.attributionSource,
           referralTouchId: intent.referralTouchId,
-          termMonths: leadAttributionTermMonths,
+          termMonths: terms.leadTermMonths,
+          referrerTermMonths: terms.referrerTermMonths,
+          rateScheduleId: terms.rateScheduleId,
           holdDays: referralHoldDays,
           // ANCHOR ON THE DAY OF TRANSACTION (operator correction, 2026-09-19). `effectivePaidAt`
           // is both the payment instant and the term's anchor — there is no second date here any

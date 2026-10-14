@@ -28,7 +28,7 @@ import {
 import { bookableWhere } from '@/lib/practitioner-indexer';
 import { rateLimit } from '@/lib/rate-limit';
 import { extractError } from '@/lib/action-utils';
-import { loadSettings } from '@/lib/platform-settings';
+import { getScheduleForCopy } from '@/lib/rate-schedules';
 import { addClientEntries } from '@/lib/client-list';
 import { OUTSIDE_WORK_FIELD, outsideWorkWrite, parseOutsideWorkAnswer } from '@/lib/outside-work';
 import { createEmailReferral, createReferralLink, referralUrl } from '@/lib/referrals';
@@ -1709,10 +1709,10 @@ async function resolveReferredPractitioner(
   slug: string,
   referredSlug: string,
   selfId: string,
-): Promise<{ id: string; displayName: string; slug: string }> {
+): Promise<{ id: string; displayName: string; slug: string; rateScheduleId: string | null }> {
   const referred = await prisma.practitioner.findFirst({
     where: { slug: referredSlug, delistedAt: null, ...bookableWhere() },
-    select: { id: true, displayName: true, slug: true },
+    select: { id: true, displayName: true, slug: true, rateScheduleId: true },
   });
   // IDOR discipline: "no such practitioner", "not bookable" and "that's you" produce one response.
   if (!referred || referred.id === selfId) {
@@ -1737,9 +1737,13 @@ export async function referClientByEmail(slug: string, formData: FormData): Prom
     redirect(`/practitioners/${slug}/edit?refer=throttled#clients`);
   }
 
-  // SNAPSHOTTED AT ISSUE (R12). Read once, here — reading it again later would let an operator
-  // editing the admin term expire links already handed out.
-  const { leadAttributionTermMonths } = await loadSettings(prisma);
+  // SNAPSHOTTED AT ISSUE (R12). Read once, here, from the schedule of the practitioner being
+  // referred TO — reading it again later would let a schedule change expire links already handed
+  // out. (A link's lifetime is words and a deadline, not a charge; the fee is priced at checkout.)
+  const { leadTermMonths: leadAttributionTermMonths } = await getScheduleForCopy(
+    prisma,
+    referred.rateScheduleId,
+  );
 
   let created: Awaited<ReturnType<typeof createEmailReferral>>;
   try {
@@ -1788,7 +1792,10 @@ export async function createReferralLinkFor(slug: string, formData: FormData): P
   const referredSlug = String(formData.get('referredSlug') ?? '').trim();
   const referred = await resolveReferredPractitioner(slug, referredSlug, target.id);
 
-  const { leadAttributionTermMonths } = await loadSettings(prisma);
+  const { leadTermMonths: leadAttributionTermMonths } = await getScheduleForCopy(
+    prisma,
+    referred.rateScheduleId,
+  );
 
   let link: Awaited<ReturnType<typeof createReferralLink>>;
   try {

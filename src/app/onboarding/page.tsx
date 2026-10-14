@@ -7,12 +7,11 @@ import { isLlmConfigured } from '@/lib/onboarding-draft';
 import { SPECIALTY_ORDER } from '@/lib/practitioner-ordering';
 import { submitOnboarding } from '@/app/practitioners/[slug]/edit/actions';
 import { OnboardingForm } from '@/components/practitioners/OnboardingForm';
-import { formatBpsAsPercent, planComparison } from '@/lib/pricing-plans';
-import { crossReferralRates } from '@/lib/referral-fees';
-import { loadSettings } from '@/lib/platform-settings';
 import { newRecruiterToken, recruitedFields, resolveRecruiterId, RECRUITER_DISCLOSURE } from '@/lib/recruiter';
 import { RECRUITER_COOKIE, verifyRecruiterCookie } from '@/lib/recruiter-cookie';
 import { cohortRedemptionOpen } from '@/lib/join-cohort';
+import { planComparison } from '@/lib/pricing-plans';
+import { getScheduleForCopy, signupScheduleData } from '@/lib/rate-schedules';
 
 type Props = { searchParams: { invitation?: string } };
 
@@ -157,6 +156,10 @@ export default async function OnboardingPage({ searchParams }: Props) {
     );
     const recruiterId = await resolveRecruiterId(prisma, recruiterToken, session.user.id);
 
+    // PRICED UNDER THE CURRENT RATE SCHEDULE FROM THE FIRST WRITE (spec v1.5 §2): the foreign key
+    // and its SIGNUP history row go in the same create, so a practitioner never exists without a
+    // schedule — a practitioner with none is refused at checkout.
+    const schedule = await signupScheduleData(prisma);
     practitioner = await prisma.practitioner.create({
       data: {
         userId: session.user.id,
@@ -166,6 +169,7 @@ export default async function OnboardingPage({ searchParams }: Props) {
         trialEndsAt,
         recruiterToken: newRecruiterToken(),
         ...recruitedFields(recruiterId, new Date()),
+        ...schedule,
       },
       include: withSpecialties,
     });
@@ -213,7 +217,10 @@ export default async function OnboardingPage({ searchParams }: Props) {
   );
 
   const action = submitOnboarding.bind(null, practitioner.slug);
-  const { leadAttributionTermMonths } = await loadSettings(prisma);
+  // Words only: the plan cards quote the practitioner's own schedule, or the current one for a
+  // practitioner who has none yet. Never used to price anything.
+  const copySchedule = await getScheduleForCopy(prisma, practitioner.rateScheduleId);
+  const comparison = planComparison(copySchedule);
 
   return (
     <OnboardingForm
@@ -237,11 +244,7 @@ export default async function OnboardingPage({ searchParams }: Props) {
       initialSpecialties={initialSpecialties}
       termsAcceptedAt={practitioner.user.termsAcceptedAt}
       recruiterDisclosure={practitioner.recruitedById ? RECRUITER_DISCLOSURE : null}
-      planTerms={{
-        plans: planComparison().cards,
-        termMonths: leadAttributionTermMonths,
-        referralRateLabel: formatBpsAsPercent(crossReferralRates().referrerFeeBps),
-      }}
+      planTerms={{ plans: comparison.cards, referral: comparison.referral }}
     />
   );
 }

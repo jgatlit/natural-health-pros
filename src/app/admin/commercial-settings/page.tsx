@@ -5,16 +5,19 @@ import { ArrowLeft } from 'lucide-react';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
 import { loadSettings, SETTING_DEFS } from '@/lib/platform-settings';
-import { formatBpsAsPercent, planComparison } from '@/lib/pricing-plans';
-import { crossReferralRates } from '@/lib/referral-fees';
+import { planComparison } from '@/lib/pricing-plans';
+import { getCurrentSchedule } from '@/lib/rate-schedules';
+import { scheduleNumbers } from '@/lib/rate-schedule';
 
+import { AssignUnassignedForm, MigrateCohortForm, RateScheduleForm } from './RateScheduleForm';
 import { SettingForm } from './SettingForm';
 
 export const dynamic = 'force-dynamic';
 
 /**
- * The two operator-editable numbers that decide money (spec v1.4 §1.1, operator rulings 5 and 7
- * of 2026-09-18). They live on one screen because they are the same KIND of thing — commercial
+ * The operator-editable numbers that decide money. The rate schedule (rates, referral split,
+ * affiliate share and both attribution terms — spec v1.5 §2) and the referral hold period (spec
+ * v1.4 §1.1, ruling 7) live on one screen because they are the same KIND of thing — commercial
  * terms the operator owns — and because the last time a term lived in three files it was three
  * different numbers.
  */
@@ -25,8 +28,19 @@ export default async function CommercialSettingsPage() {
   }
 
   const settings = await loadSettings(prisma);
-  const { cards, breakEvenMonthlyLabel } = planComparison();
-  const referralRateLabel = formatBpsAsPercent(crossReferralRates().referrerFeeBps);
+  const current = await getCurrentSchedule(prisma);
+
+  // Members per schedule: every stored schedule, with how many practitioners are on it.
+  const [allSchedules, memberGroups, noSchedule] = await Promise.all([
+    prisma.rateSchedule.findMany({ orderBy: { createdAt: 'asc' }, select: { id: true, label: true } }),
+    prisma.practitioner.groupBy({ by: ['rateScheduleId'], _count: { _all: true } }),
+    prisma.practitioner.count({ where: { rateScheduleId: null } }),
+  ]);
+  const memberCount = new Map(memberGroups.map((g) => [g.rateScheduleId, g._count._all]));
+  const schedulesWithMembers = allSchedules.map((sc) => ({
+    ...sc,
+    members: memberCount.get(sc.id) ?? 0,
+  }));
 
   // The held money this screen is accountable for. EXPIRED_UNCLAIMED is surfaced separately and
   // on purpose: day-91 policy is deliberately unruled, so the total is shown and NOTHING acts on
@@ -62,74 +76,58 @@ export default async function CommercialSettingsPage() {
 
       <h1 className="mt-4 text-2xl font-semibold text-slate-900">Commercial settings</h1>
       <p className="mt-2 max-w-2xl text-sm leading-relaxed text-slate-600">
-        Two numbers you can change here. Changes apply to <strong>new</strong> attributions and
-        holds only — every existing row keeps the term and hold it was created under.
+        A rate change creates a new schedule for <strong>new sign-ups</strong>; existing
+        practitioners keep theirs until you migrate them, and every attributed client and held
+        share keeps the term and rates it was created under.
       </p>
 
-      {/* READ-ONLY on purpose: prices and rates come from pricing config and change by deploy, not
-          by a form. Shown here so the operator can see, next to the two editable numbers, exactly
-          what a practitioner is being shown on the plan choice — same source, so it cannot drift. */}
-      <section className="mt-6 rounded-lg border border-slate-200 p-5">
-        <div className="flex flex-wrap items-baseline justify-between gap-2">
-          <h2 className="text-sm font-semibold text-slate-900">Plan terms in force</h2>
-          <p className="text-xs text-slate-500">Read-only. Set in pricing config, changed by deploy.</p>
+      {!current ? (
+        <section className="mt-6 rounded-lg border border-red-300 bg-red-50 p-5 text-sm text-red-800">
+          <strong>No current rate schedule is configured.</strong> New sign-ups cannot be created and
+          checkout refuses practitioners without a schedule. Save one below, then assign it to anyone who has none.
+        </section>
+      ) : (
+        <PlanTermsInForce schedule={current} />
+      )}
+
+      {noSchedule > 0 && current && (
+        <div className="mt-4">
+          <AssignUnassignedForm count={noSchedule} />
         </div>
-        <table className="mt-3 w-full text-sm">
-          <thead className="text-left text-xs text-slate-500">
-            <tr>
-              <th className="py-1 font-normal" scope="col"><span className="sr-only">Term</span></th>
-              {cards.map((c) => (
-                <th key={c.key} className="py-1 font-medium text-slate-900" scope="col">
-                  {c.label}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody className="text-slate-700">
-            <tr className="border-t border-slate-100">
-              <th className="py-1.5 text-left font-normal text-slate-500" scope="row">Monthly</th>
-              {cards.map((c) => (<td key={c.key} className="py-1.5">{c.monthlyLabel}</td>))}
-            </tr>
-            <tr className="border-t border-slate-100">
-              <th className="py-1.5 text-left font-normal text-slate-500" scope="row">
-                Share on clients we send, first {settings.leadAttributionTermMonths} months
-              </th>
-              {cards.map((c) => (<td key={c.key} className="py-1.5">{c.sourcedSessionLabel}</td>))}
-            </tr>
-            <tr className="border-t border-slate-100">
-              <th className="py-1.5 text-left font-normal text-slate-500" scope="row">After the term</th>
-              {cards.map((c) => (<td key={c.key} className="py-1.5">{c.afterTermLabel}</td>))}
-            </tr>
-            <tr className="border-t border-slate-100">
-              <th className="py-1.5 text-left font-normal text-slate-500" scope="row">Referral share</th>
-              <td className="py-1.5" colSpan={cards.length}>
-                {referralRateLabel} to the referrer, paid out of our share, on either plan
-              </td>
-            </tr>
-            <tr className="border-t border-slate-100">
-              <th className="py-1.5 text-left font-normal text-slate-500" scope="row">Break-even</th>
-              <td className="py-1.5" colSpan={cards.length}>
-                {cards[0]?.label} is cheaper above about {breakEvenMonthlyLabel} a month of clients we send
-              </td>
-            </tr>
-            <tr className="border-t border-slate-100">
-              <th className="py-1.5 text-left font-normal text-slate-500" scope="row">Own or invited clients</th>
-              <td className="py-1.5" colSpan={cards.length}>0%, on either plan, with no end date</td>
-            </tr>
-          </tbody>
-        </table>
-      </section>
+      )}
+      {noSchedule > 0 && !current && (
+        <p className="mt-4 rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-800">
+          {noSchedule} practitioner{noSchedule === 1 ? ' has' : 's have'} no rate schedule. Save a current
+          schedule below first, then assign it to them here.
+        </p>
+      )}
 
       <div className="mt-6 space-y-4">
-        <SettingForm
-          name="leadAttributionTermMonths"
-          label={SETTING_DEFS.leadAttributionTermMonths.label}
-          help={SETTING_DEFS.leadAttributionTermMonths.help}
-          unit="months"
-          current={settings.leadAttributionTermMonths}
-          min={SETTING_DEFS.leadAttributionTermMonths.min}
-          max={SETTING_DEFS.leadAttributionTermMonths.max}
-        />
+        {current && (
+          <RateScheduleForm initial={scheduleNumbers(current)} currentLabel={current.label ?? current.id} />
+        )}
+
+        <section className="rounded-lg border border-slate-200 p-5">
+          <h2 className="text-sm font-semibold text-slate-900">Practitioners per schedule</h2>
+          <table className="mt-3 w-full text-sm">
+            <tbody className="text-slate-700">
+              {schedulesWithMembers.map((sc) => (
+                <tr key={sc.id} className="border-t border-slate-100">
+                  <td className="py-1.5">
+                    {sc.label}
+                    {current?.id === sc.id && (
+                      <span className="ml-2 rounded bg-slate-100 px-1.5 py-0.5 text-xs">current for sign-ups</span>
+                    )}
+                  </td>
+                  <td className="py-1.5 text-right">{sc.members}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+
+        <MigrateCohortForm schedules={schedulesWithMembers} />
+
         <SettingForm
           name="referralHoldDays"
           label={SETTING_DEFS.referralHoldDays.label}
@@ -186,5 +184,67 @@ export default async function CommercialSettingsPage() {
         )}
       </section>
     </main>
+  );
+}
+
+/** Read-only summary of what a practitioner on the current schedule is shown and charged. */
+function PlanTermsInForce({ schedule }: { schedule: NonNullable<Awaited<ReturnType<typeof getCurrentSchedule>>> }) {
+  const { cards, breakEvenMonthlyLabel, referral } = planComparison(schedule);
+  return (
+    <section className="mt-6 rounded-lg border border-slate-200 p-5">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 className="text-sm font-semibold text-slate-900">Current schedule: {schedule.label}</h2>
+        <p className="text-xs text-slate-500">Read-only summary of the saved schedule.</p>
+      </div>
+      <table className="mt-3 w-full text-sm">
+        <thead className="text-left text-xs text-slate-500">
+          <tr>
+            <th className="py-1 font-normal" scope="col"><span className="sr-only">Term</span></th>
+            {cards.map((c) => (
+              <th key={c.key} className="py-1 font-medium text-slate-900" scope="col">
+                {c.label}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody className="text-slate-700">
+          <tr className="border-t border-slate-100">
+            <th className="py-1.5 text-left font-normal text-slate-500" scope="row">Monthly</th>
+            {cards.map((c) => (<td key={c.key} className="py-1.5">{c.monthlyLabel}</td>))}
+          </tr>
+          <tr className="border-t border-slate-100">
+            <th className="py-1.5 text-left font-normal text-slate-500" scope="row">Yearly (derived)</th>
+            {cards.map((c) => (<td key={c.key} className="py-1.5">{c.annualLabel ?? '—'}</td>))}
+          </tr>
+          <tr className="border-t border-slate-100">
+            <th className="py-1.5 text-left font-normal text-slate-500" scope="row">
+              Share on clients we send, first {referral.termMonths} months
+            </th>
+            {cards.map((c) => (<td key={c.key} className="py-1.5">{c.sourcedSessionLabel}</td>))}
+          </tr>
+          <tr className="border-t border-slate-100">
+            <th className="py-1.5 text-left font-normal text-slate-500" scope="row">After the term</th>
+            {cards.map((c) => (<td key={c.key} className="py-1.5">{c.afterTermLabel}</td>))}
+          </tr>
+          <tr className="border-t border-slate-100">
+            <th className="py-1.5 text-left font-normal text-slate-500" scope="row">Referred client</th>
+            <td className="py-1.5" colSpan={cards.length}>
+              {referral.referralTotalLabel} for the first {referral.referrerTermMonths} months on either plan:{' '}
+              {referral.referrerRateLabel} to the referrer, {referral.nhpReferralRateLabel} to us; then the plan rate
+            </td>
+          </tr>
+          <tr className="border-t border-slate-100">
+            <th className="py-1.5 text-left font-normal text-slate-500" scope="row">Break-even</th>
+            <td className="py-1.5" colSpan={cards.length}>
+              {cards[0]?.label} is cheaper above about {breakEvenMonthlyLabel} a month of clients we send
+            </td>
+          </tr>
+          <tr className="border-t border-slate-100">
+            <th className="py-1.5 text-left font-normal text-slate-500" scope="row">Own or invited clients</th>
+            <td className="py-1.5" colSpan={cards.length}>0%, on either plan, with no end date</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
   );
 }

@@ -284,6 +284,14 @@ model Practitioner {
   plan         String?
   planChosenAt DateTime?
 
+  /// THE RATE SCHEDULE THIS PRACTITIONER IS PRICED UNDER (spec v1.5 §2). Nullable ONLY because this
+  /// is the expand step: the migration backfills every existing row, and a practitioner with none
+  /// FAILS CLOSED at checkout (no schedule => no charge, never a default). NOT NULL is a later
+  /// contract release. Changes only through `RateScheduleAssignment` (signup / audited migration).
+  rateScheduleId          String?
+  rateSchedule            RateSchedule?            @relation(fields: [rateScheduleId], references: [id])
+  rateScheduleAssignments RateScheduleAssignment[]
+
   /// Clients Natural Health Pros introduced to this practitioner — see src/lib/attributed-clients.ts.
   attributedClients AttributedClient[]
 
@@ -880,6 +888,14 @@ model AttributedClient {
   /// termAnchorAt + termMonths, EXCLUSIVE. Month 8 exactly is OUTSIDE the term (spec §9 test 3).
   termEndsAt   DateTime?
 
+  /// SPEC v1.5 §2 SNAPSHOTS, copied from the serving practitioner's schedule when the row is
+  /// created and never re-read from it, so a later schedule change cannot re-price an in-flight
+  /// term. `referrerTermMonths`/`referrerTermEndsAt` are set only when a referrer is named.
+  /// `rateScheduleId` is a soft reference (no FK): the row must outlive any schedule bookkeeping.
+  referrerTermMonths  Int?
+  referrerTermEndsAt  DateTime?
+  rateScheduleId      String?
+
   /// WHO OWNS THIS CLIENT (spec v1.4 §2, R4) — decided ONCE, at the first booking (§3.1).
   ///
   /// PRACTITIONER means the client was on this practitioner's own list strictly before both their
@@ -1208,6 +1224,18 @@ model BookingFeeSnapshot {
   /// There is no second application fee and no account-level split (validated 2026-09-18).
   applicationFeeUsdCents  Int
 
+  /// SPEC v1.5 — the schedule that priced this booking and the resolved affiliate numbers, copied
+  /// here so the snapshot alone explains the charge. All nullable (expand-only): rows minted
+  /// before v1.5 carry none. `rateScheduleId` is a soft reference, never an FK.
+  rateScheduleId           String?
+  /// IN_REFERRER_TERM | PAST_REFERRER_TERM | NOT_REFERRED.
+  referrerTermState        String?
+  affiliateBps             Int?
+  affiliateShareUsdCents   Int?
+  recruiterPractitionerId  String?
+  /// What NHP keeps after the affiliate: nhpFee - affiliate when NHP charged, else 0.
+  nhpNetUsdCents           Int?
+
   whopCheckoutConfigId String?
   whopPaymentId        String?
 
@@ -1278,4 +1306,49 @@ model PlatformSettingChange {
   changedAt       DateTime @default(now())
 
   @@index([key, changedAt])
+}
+
+/// IMMUTABLE, CONTENT-ADDRESSED RATE CARD (spec v1.5 §2). One row per distinct combination of the
+/// numeric fields; `contentHash` is sha256 over their canonical serialisation (src/lib/rate-schedule.ts
+/// is the ONE place that serialisation is defined). Rows are never updated: an admin "save" finds
+/// the existing row by hash or creates a new one, so grandfathering is one id, not N drifting copies.
+model RateSchedule {
+  id          String @id @default(cuid())
+  contentHash String @unique
+  label       String
+
+  planAMonthlyCents  Int
+  annualDiscountBps  Int
+  planASourcedBps    Int
+  planBMonthlyCents  Int
+  planBSourcedBps    Int
+  referralTotalBps   Int
+  referrerBps        Int
+  affiliateBps       Int
+  leadTermMonths     Int
+  referrerTermMonths Int
+  maxTotalFeeBps     Int
+
+  createdAt       DateTime @default(now())
+  createdByUserId String?
+
+  practitioners Practitioner[]
+  assignments   RateScheduleAssignment[]
+}
+
+/// HISTORY of which schedule a practitioner was put on, and why. The CURRENT schedule is
+/// `Practitioner.rateScheduleId`; this table answers "how did they get it". Append-only.
+model RateScheduleAssignment {
+  id             String       @id @default(cuid())
+  practitionerId String
+  practitioner   Practitioner @relation(fields: [practitionerId], references: [id], onDelete: Cascade)
+  rateScheduleId String
+  rateSchedule   RateSchedule @relation(fields: [rateScheduleId], references: [id])
+  effectiveFrom  DateTime     @default(now())
+  /// SIGNUP | COHORT_LINK | ADMIN_MIGRATION | CUSTOM_DEAL.
+  reason         String
+  byUserId       String?
+
+  @@index([practitionerId, effectiveFrom])
+  @@index([rateScheduleId])
 }

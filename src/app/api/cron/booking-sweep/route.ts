@@ -4,9 +4,8 @@ import { bookableWhere } from '@/lib/practitioner-indexer';
 import { sendEmail } from '@/lib/email';
 import { SITE_URL } from '@/lib/site';
 import { paymentsLive } from '@/lib/booking-flow';
-import { formatBpsAsPercent } from '@/lib/pricing-plans';
-import { crossReferralRates } from '@/lib/referral-fees';
-import { loadSettings } from '@/lib/platform-settings';
+import { referralTermsView } from '@/lib/pricing-plans';
+import { getScheduleForCopy } from '@/lib/rate-schedules';
 import {
   referralBookedCopy,
   referralHoldCopy,
@@ -423,10 +422,6 @@ export async function GET(request: Request): Promise<NextResponse> {
   // marketing preference.
   const referrals: Summary = { matched: 0, sent: 0, skipped: 0, failed: 0 };
   if (emailConfigured) {
-    const { referrerFeeBps } = crossReferralRates();
-    const rateLabel = formatBpsAsPercent(referrerFeeBps);
-    const { leadAttributionTermMonths } = await loadSettings(prisma);
-
     // 1 — "your referral booked". Keyed on the TOUCH, because one copied link reaches several
     // clients and each of them is a separate conversion the referrer should hear about.
     const bookedCandidates = await prisma.referralTouch.findMany({
@@ -436,7 +431,7 @@ export async function GET(request: Request): Promise<NextResponse> {
         referral: {
           select: {
             referrer: { select: { user: { select: { email: true } } } },
-            referred: { select: { displayName: true } },
+            referred: { select: { displayName: true, rateScheduleId: true } },
           },
         },
       },
@@ -458,9 +453,18 @@ export async function GET(request: Request): Promise<NextResponse> {
         continue;
       }
       try {
+        // The referrer's rate and window come from the REFERRED practitioner's schedule (the one
+        // that prices these sessions) — words only, no money moves here.
+        const referral = referralTermsView(
+          await getScheduleForCopy(prisma, touch.referral?.referred?.rateScheduleId),
+        );
         await sendEmail({
           to,
-          ...referralBookedCopy({ referredName, rateLabel, termMonths: leadAttributionTermMonths }),
+          ...referralBookedCopy({
+            referredName,
+            rateLabel: referral.referrerRateLabel,
+            termMonths: referral.referrerTermMonths,
+          }),
           idempotencyKey: `referral-booked/${touch.id}`,
           tags: [{ name: 'feature', value: 'referral-booked' }],
         });
