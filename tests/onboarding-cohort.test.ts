@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { signRecruiterCookie, RECRUITER_COOKIE } from '@/lib/recruiter-cookie';
+import { V1 } from './helpers/rate-schedule';
 
 /**
  * Behavioural: renders the real /onboarding page function against mocked I/O.
@@ -18,6 +19,8 @@ const m = vi.hoisted(() => ({
   invitation: null as unknown,
   existingPractitioner: null as unknown,
   recruiterRows: {} as Record<string, { id: string; userId: string; archivedAt: Date | null }>,
+  /** The schedule `current_rate_schedule_id` points at; null = none configured. */
+  currentScheduleId: 'rs_go_forward_2026_10' as string | null,
   create: vi.fn(),
   findFirst: vi.fn(),
 }));
@@ -32,11 +35,8 @@ vi.mock('next/headers', () => ({ cookies: () => ({ get: () => (m.cookie ? { valu
 vi.mock('@/auth', () => ({ auth: async () => m.session }));
 vi.mock('@/lib/practitioner-indexer', () => ({ indexPractitioner: async () => undefined }));
 vi.mock('@/lib/onboarding-draft', () => ({ isLlmConfigured: () => false }));
-vi.mock('@/lib/platform-settings', () => ({ loadSettings: async () => ({ leadAttributionTermMonths: 8 }) }));
-vi.mock('@/lib/referral-fees', () => ({ crossReferralRates: () => ({ referrerFeeBps: 2000 }) }));
 vi.mock('@/lib/pricing-plans', () => ({
-  formatBpsAsPercent: () => '20%',
-  planComparison: () => ({ cards: [] }),
+  planComparison: () => ({ cards: [], referral: {} }),
 }));
 vi.mock('@/app/practitioners/[slug]/edit/actions', () => ({ submitOnboarding: () => undefined }));
 vi.mock('@/components/practitioners/OnboardingForm', () => ({
@@ -72,6 +72,14 @@ vi.mock('@/lib/prisma', () => ({
         };
       },
     },
+    // The REAL rate-schedules lib runs against these (spec v1.5 §2): current id, then the row.
+    platformSetting: {
+      findUnique: async () => (m.currentScheduleId ? { value: m.currentScheduleId } : null),
+    },
+    rateSchedule: {
+      findUnique: async (a: { where: { id: string } }) =>
+        a.where.id === m.currentScheduleId ? V1 : null,
+    },
     user: { update: async () => ({}) },
     specialty: { findMany: async () => [] },
     specialtyAlias: { findMany: async () => [] },
@@ -105,6 +113,7 @@ beforeEach(() => {
   m.create.mockReset();
   m.findFirst.mockReset();
   m.cookie = undefined;
+  m.currentScheduleId = V1.id;
   m.existingPractitioner = null;
   m.invitation = invitation();
   m.recruiterRows = {
@@ -150,6 +159,66 @@ describe('recruiter comes from the redeemer browser, not the requester', () => {
   it('every new practitioner still gets its own recruiter token', async () => {
     await render();
     expect(m.create.mock.calls[0][0].data.recruiterToken).toMatch(/^[0-9a-f]{32}$/);
+  });
+});
+
+describe('EVERY NEW SIGN-UP IS PRICED: the real creation path assigns the current rate schedule (spec v1.5 §2)', () => {
+  // Without this, every practitioner who signs up through /join/<cohort> would fail closed at
+  // checkout. The FK and its SIGNUP history row go in the same create.
+  const SIGNUP = {
+    rateScheduleId: V1.id,
+    rateScheduleAssignments: { create: { rateScheduleId: V1.id, reason: 'SIGNUP' } },
+  };
+
+  it('an admin-invited practitioner is created with the current schedule and a SIGNUP assignment', async () => {
+    m.invitation = invitation({ cohortId: null, cohort: null });
+    await render();
+    expect(m.create.mock.calls[0][0].data).toMatchObject(SIGNUP);
+  });
+
+  it('a cohort sign-up (/join/hhe) is created with the current schedule and a SIGNUP assignment', async () => {
+    await render();
+    expect(m.create.mock.calls[0][0].data).toMatchObject(SIGNUP);
+  });
+
+  it('a recruited sign-up gets BOTH the recruiter and the schedule in one create', async () => {
+    m.cookie = await signRecruiterCookie(REAL, Date.now(), SECRET);
+    await render();
+    expect(m.create).toHaveBeenCalledTimes(1);
+    expect(m.create.mock.calls[0][0].data).toMatchObject({ recruitedById: 'real-recruiter', ...SIGNUP });
+  });
+
+  it('with NO current schedule configured, sign-up fails loudly and creates NO practitioner', async () => {
+    m.currentScheduleId = null;
+    await expect(render()).rejects.toThrow(/No rate schedule/);
+    expect(m.create).not.toHaveBeenCalled();
+  });
+
+  it('a practitioner who already exists is not re-priced by revisiting /onboarding', async () => {
+    m.existingPractitioner = {
+      id: 'p1', slug: 'victim', displayName: 'V', bio: null, headline: null, city: null,
+      yearsInPractice: null, telehealth: false, inPerson: false, specialties: [],
+      recruitedById: null, rateScheduleId: 'rs_old', user: { termsAcceptedAt: null },
+    };
+    await render();
+    expect(m.create).not.toHaveBeenCalled();
+  });
+
+  it('is the ONLY place app code creates a Practitioner row (so no other path can skip the schedule)', async () => {
+    const { readdirSync, readFileSync, statSync } = await import('node:fs');
+    const { join } = await import('node:path');
+    const hits: string[] = [];
+    const walk = (dir: string) => {
+      for (const f of readdirSync(dir)) {
+        const p = join(dir, f);
+        if (statSync(p).isDirectory()) walk(p);
+        else if (/\.(ts|tsx)$/.test(f) && /practitioner\s*\.\s*(create|createMany|upsert)\s*\(/.test(readFileSync(p, 'utf8'))) {
+          hits.push(p.replace(process.cwd() + '/', ''));
+        }
+      }
+    };
+    walk(join(process.cwd(), 'src'));
+    expect(hits).toEqual(['src/app/onboarding/page.tsx']);
   });
 });
 

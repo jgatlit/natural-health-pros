@@ -1,20 +1,25 @@
 import { describe, expect, it, vi } from 'vitest';
+// (no vi.mock of the seam: the real getRecruiterFor runs against the faked Prisma below)
 
 import { resolveBookingFee } from '@/lib/booking-fee';
 import { hashClientEmail } from '@/lib/attributed-clients';
 import { V1 } from './helpers/rate-schedule';
 
 /**
- * THE AFFILIATE OVERLAY, THROUGH `resolveBookingFee` AND INTO THE SNAPSHOT.
+ * THE AFFILIATE OVERLAY, THROUGH THE REAL RECRUITER SEAM AND INTO THE SNAPSHOT.
  *
- * `getRecruiterFor` is the seam to lane L0b and answers null until `Practitioner.recruitedById`
- * exists. Here it is mocked to name a recruiter, so the wiring from the seam through the fee rule
- * to `BookingFeeSnapshot` is proven today — and so merging L0b needs only to change the seam, not
- * to re-verify the money.
+ * `getRecruiterFor` (src/lib/recruiter.ts) reads L0b's immutable `Practitioner.recruitedById`. Only
+ * Prisma is faked here, so this proves the whole chain: the stored recruiter -> the activity check
+ * -> the fee rule -> `BookingFeeSnapshot`.
  */
 
-const recruiter = vi.hoisted(() => ({ id: 'prac_R' as string | null }));
-vi.mock('@/lib/recruiter', () => ({ getRecruiterFor: async () => recruiter.id }));
+const recruiter = vi.hoisted(() => ({
+  /** What `Practitioner.recruitedById` holds for Y. */
+  recruitedById: 'prac_R' as string | null,
+  /** Whether that recruiter is still active (not archived / retired). */
+  active: true,
+  lastActivityCheck: null as unknown,
+}));
 
 const P = 'prac_Y';
 const EMAIL = 'client@example.com';
@@ -24,7 +29,18 @@ function db(attributed: Record<string, unknown> | null = null, clientListed = fa
   const snapshots: Record<string, unknown>[] = [];
   return {
     snapshots,
-    practitioner: { findUnique: async () => ({ rateSchedule: V1 }) },
+    practitioner: {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      findUnique: async (args: any) =>
+        args.select?.recruitedById
+          ? { recruitedById: recruiter.recruitedById }
+          : { rateSchedule: V1 },
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      findFirst: async (args: any) => {
+        recruiter.lastActivityCheck = args.where;
+        return recruiter.active && args.where.id === recruiter.recruitedById ? { id: args.where.id } : null;
+      },
+    },
     rateSchedule: { findUnique: async () => V1 },
     attributedClient: { findUnique: async () => attributed },
     clientListEntry: {
@@ -57,7 +73,8 @@ const price = (fake: ReturnType<typeof db>, plan: 'PLAN_A' | 'PLAN_B', over: Rec
 
 describe('recruited practitioner Y, $100 session — through the fee path and into the snapshot', () => {
   it('own client: Y is charged $3, handed to R; NHP nets $0; the Whop fee is $3', async () => {
-    recruiter.id = 'prac_R';
+    recruiter.recruitedById = 'prac_R';
+    recruiter.active = true;
     const fake = db(null, true);
     const fee = await price(fake, 'PLAN_A');
 
@@ -76,7 +93,8 @@ describe('recruited practitioner Y, $100 session — through the fee path and in
   });
 
   it('Plan A sourced: still $10 total; $3 of it is R’s, so NHP nets $7', async () => {
-    recruiter.id = 'prac_R';
+    recruiter.recruitedById = 'prac_R';
+    recruiter.active = true;
     const fake = db();
     const fee = await price(fake, 'PLAN_A');
 
@@ -90,7 +108,8 @@ describe('recruited practitioner Y, $100 session — through the fee path and in
   });
 
   it('Plan B sourced: $30 total; NHP nets $27', async () => {
-    recruiter.id = 'prac_R';
+    recruiter.recruitedById = 'prac_R';
+    recruiter.active = true;
     const fake = db();
     await price(fake, 'PLAN_B');
     expect(fake.snapshots[0]).toMatchObject({
@@ -101,7 +120,8 @@ describe('recruited practitioner Y, $100 session — through the fee path and in
   });
 
   it('past the lead term: Y bears the $3, NHP nets $0', async () => {
-    recruiter.id = 'prac_R';
+    recruiter.recruitedById = 'prac_R';
+    recruiter.active = true;
     const fake = db({
       owner: 'NHP',
       decidedAt: D(-300),
@@ -118,7 +138,7 @@ describe('recruited practitioner Y, $100 session — through the fee path and in
   });
 
   it('no recruiter: no affiliate columns are populated and nothing extra is charged', async () => {
-    recruiter.id = null;
+    recruiter.recruitedById = null;
     const fake = db();
     const fee = await price(fake, 'PLAN_A');
     expect(fee.applicationFeeUsdCents).toBe(1_000);
@@ -131,10 +151,21 @@ describe('recruited practitioner Y, $100 session — through the fee path and in
   });
 
   it('a recruiter who is the serving practitioner themselves earns nothing', async () => {
-    recruiter.id = P;
+    recruiter.recruitedById = P;
     const fake = db();
     await price(fake, 'PLAN_A');
     expect(fake.snapshots[0]).toMatchObject({ affiliateShareUsdCents: 0, recruiterPractitionerId: null });
+  });
+
+  it('an ARCHIVED or retired recruiter earns nothing: the activity check is bookableWhere()', async () => {
+    recruiter.recruitedById = 'prac_R';
+    recruiter.active = false;
+    const fake = db();
+    const fee = await price(fake, 'PLAN_A');
+
+    expect(fee.applicationFeeUsdCents).toBe(1_000);
+    expect(fake.snapshots[0]).toMatchObject({ affiliateShareUsdCents: 0, recruiterPractitionerId: null, nhpNetUsdCents: 1_000 });
+    expect(recruiter.lastActivityCheck).toMatchObject({ id: 'prac_R', archivedAt: null });
   });
 
   it('uses hashClientEmail consistently (the stored-row lookup is keyed on it)', () => {

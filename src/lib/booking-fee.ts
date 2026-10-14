@@ -35,6 +35,9 @@ export type BookingFeeDb = AttributionResolverDb & {
   practitioner: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     findUnique(args: any): Promise<any>;
+    // The recruiter-activity check (src/lib/recruiter.ts).
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    findFirst(args: any): Promise<any>;
   };
   /** The schedule an in-flight client row was sold under. */
   rateSchedule: {
@@ -154,7 +157,7 @@ export async function resolveBookingFee(
   // have expired before it began) — see attribution-term.ts.
   const anchorAt = row?.termAnchorAt ?? input.transactedAt;
 
-  // Seam to L0b: null until `Practitioner.recruitedById` exists. See recruiter.ts.
+  // The recruiter (L0b's immutable `recruitedById`), only if still active. See recruiter.ts.
   const recruiterPractitionerId = await getRecruiterFor(db, input.practitionerId);
 
   const fee = resolveSessionFee({

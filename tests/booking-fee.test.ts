@@ -40,8 +40,13 @@ function db(seed: {
   return {
     snapshots,
     practitioner: {
-      async findUnique() {
-        return { rateSchedule: schedule };
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      async findUnique(args: any) {
+        // The recruiter read (`select: { recruitedById }`) and the schedule read share this model.
+        return args?.select?.recruitedById ? { recruitedById: null } : { rateSchedule: schedule };
+      },
+      async findFirst() {
+        return null;
       },
     },
     rateSchedule: {
@@ -335,7 +340,7 @@ describe('resolveBookingFee — rate schedules (spec v1.5 §2)', () => {
     expect(fee.rateScheduleId).toBe(V1.id);
   });
 
-  it('the recruiter is read through ONE seam that answers null until L0b lands: no affiliate is charged', async () => {
+  it('a practitioner nobody recruited is charged no affiliate', async () => {
     const fee = await call(db({}), { persist: false });
     expect(fee.affiliateShareUsdCents).toBe(0);
     expect(fee.recruiterPractitionerId).toBeNull();

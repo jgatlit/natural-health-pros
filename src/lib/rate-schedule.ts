@@ -69,7 +69,7 @@ export class NoRateScheduleError extends Error {
   constructor(practitionerId: string | null, detail?: string) {
     super(
       `No rate schedule${practitionerId ? ` for practitioner ${practitionerId}` : ''}` +
-        `${detail ? ` (${detail})` : ''} — refusing to price a booking against a default`,
+        `${detail ? ` (${detail})` : ''} — refusing to price a booking against a default. Assign one: re-run the backfill UPDATE from migration 20261014150000_rate_schedules_fee_rule_v15, or use /admin/commercial-settings`,
     );
     this.name = 'NoRateScheduleError';
     this.practitionerId = practitionerId;
