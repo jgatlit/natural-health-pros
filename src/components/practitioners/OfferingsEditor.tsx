@@ -113,7 +113,7 @@ export function OfferingsEditor({
   const hasMultiple = order.length > 1;
 
   return (
-    <Card id="offerings" className="scroll-mt-8 space-y-5 p-6 sm:p-8">
+    <Card className="space-y-5 p-6 sm:p-8">
       <div className="space-y-1">
         <h2 className="text-sm font-semibold">Offerings</h2>
         <p className="text-xs text-muted-foreground">

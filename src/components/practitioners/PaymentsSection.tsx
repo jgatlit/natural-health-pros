@@ -161,7 +161,7 @@ export function PaymentsSection({
   }
 
   return (
-    <Card id="payments" className="scroll-mt-8 space-y-4 p-6 sm:p-8">
+    <Card className="space-y-4 p-6 sm:p-8">
       <div className="flex items-start gap-3">
         <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-muted">
           <CreditCard className="h-4 w-4 text-muted-foreground" aria-hidden />

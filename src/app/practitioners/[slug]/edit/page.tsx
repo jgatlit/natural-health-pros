@@ -14,6 +14,8 @@ import { Card } from '@/components/ui/card';
 import { Separator } from '@/components/ui/separator';
 import { CityField } from '@/components/practitioners/CityField';
 import { OutsideWorkToggle } from '@/components/practitioners/OutsideWorkToggle';
+import { EditSideNav } from '@/components/practitioners/EditSideNav';
+import { editNavEntries } from './edit-nav';
 import { UnsavedChangesBar } from '@/components/practitioners/UnsavedChangesBar';
 import {
   updatePractitioner,
@@ -495,8 +497,16 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
   );
 
   return (
-    <main className="min-h-screen bg-muted/30 px-4 py-10 sm:py-14">
-      <div className="mx-auto max-w-2xl space-y-4">
+    <main className="min-h-screen bg-muted/30 px-4 pb-10 pt-0 sm:pb-14 lg:pt-14">
+      <div className="mx-auto max-w-5xl lg:grid lg:grid-cols-[13rem_minmax(0,1fr)] lg:gap-10">
+        <EditSideNav
+          entries={editNavEntries({
+            isSetUp,
+            hasCaseStudies: practitioner.caseStudies.length > 0,
+            showJoinLink: Boolean(recruiterToken),
+          })}
+        />
+      <div className="min-w-0 max-w-2xl space-y-4 pt-6 sm:pt-10 lg:pt-0">
         <Link
           href={`/practitioners/${params.slug}`}
           className="inline-flex items-center gap-1.5 text-xs font-medium text-muted-foreground hover:text-foreground"
@@ -692,7 +702,11 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
           </Card>
         )}
 
-        {!isSetUp && <SetupChecklist steps={setupSteps} />}
+        {!isSetUp && (
+          <div id="setup" className="scroll-mt-24">
+            <SetupChecklist steps={setupSteps} />
+          </div>
+        )}
         {isSetUp && bookingsAndClients}
 
         <Card id="profile" className="scroll-mt-24 p-6 sm:p-8">
@@ -722,6 +736,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
             <Separator />
 
             <Field
+              id="profile-photo"
               label="Profile photo"
               hint="Shown on your profile hero and search card. Falls back to your initials when empty."
             >
@@ -739,7 +754,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
               />
             </Field>
 
-            <Field label="Display name" required>
+            <Field id="profile-name" label="Display name" required>
               <input
                 type="text"
                 name="displayName"
@@ -799,6 +814,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
             </Field>
 
             <Field
+              id="profile-qualifications"
               label={QUALIFICATIONS_HEADING}
               hint="One per line — degrees, certifications and training, in your own words. Shown on your public profile. “Draft my profile with AI” fills this in from what you paste, and you can edit every line."
             >
@@ -868,6 +884,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
             </div>
 
             <Field
+              id="profile-specialties"
               label="Specialties"
               hint="Search the curated list, or type your own term — we'll keep your wording on your profile and match it to the right category. Nothing is blocked while we review new terms."
             >
@@ -897,14 +914,16 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
             <UnsavedChangesBar />
           </form>
           <Separator className="my-5" />
-          <OutsideWorkToggle
-            initial={practitioner.openToOutsideWork}
-            action={setOpenToOutsideWork.bind(null, params.slug)}
-          />
+          <div id="profile-extra-work" tabIndex={-1} className="scroll-mt-24">
+            <OutsideWorkToggle
+              initial={practitioner.openToOutsideWork}
+              action={setOpenToOutsideWork.bind(null, params.slug)}
+            />
+          </div>
         </Card>
 
         {practitioner.caseStudies.length > 0 && (
-          <Card className="space-y-4 p-6 sm:p-8">
+          <Card id="client-outcomes" className="scroll-mt-24 space-y-4 p-6 sm:p-8">
             <div className="space-y-0.5">
               <div className="flex items-center gap-2">
                 <Sparkles className="h-4 w-4 text-primary" aria-hidden />
@@ -1165,23 +1184,26 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
           {isViewerAdmin && ' · Admin'}
         </p>
       </div>
+      </div>
     </main>
   );
 }
 
 function Field({
+  id,
   label,
   required,
   hint,
   children,
 }: {
+  id?: string;
   label: string;
   required?: boolean;
   hint?: string;
   children: React.ReactNode;
 }) {
   return (
-    <div className="space-y-1.5">
+    <div id={id} tabIndex={id ? -1 : undefined} className={id ? 'scroll-mt-24 space-y-1.5' : 'space-y-1.5'}>
       <label className="block text-xs font-medium">
         {label}
         {required && <span className="ml-0.5 text-destructive">*</span>}
