@@ -17,13 +17,28 @@ const SETTLE_MS = 150;
 const USER_SCROLL_PX = 4;
 const RECENT_INPUT_MS = 1000;
 const LATE_TARGET_RETRY_MS = 250;
-const LATE_TARGET_TRIES = 40;
+const LATE_TARGET_WAIT_MS = 10_000;
+// Past this, the page moved on its own account (scrollbar drag, find-in-page, assistive tech),
+// with no wheel/touch/key to attribute it to; smaller shifts need input behind them.
+const LARGE_DRIFT_PX = 48;
 const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ']);
-const INTERACTIVE =
-  'input, textarea, select, button, summary, a[href], [contenteditable], ' +
-  '[role="button"], [role="link"], [role="menuitem"], [role="tab"], [role="option"], [role="listbox"], ' +
-  '[role="slider"], [role="combobox"], [role="textbox"], [role="radio"], [role="checkbox"], ' +
-  '[role="switch"], [role="spinbutton"]';
+// Controls that consume arrows/paging themselves; a link or button does not, so PageDown on the
+// link the user just clicked still counts as scrolling.
+const KEY_CONSUMERS =
+  'input, textarea, select, [contenteditable], [role="textbox"], [role="combobox"], [role="listbox"], ' +
+  '[role="menu"], [role="menubar"], [role="slider"], [role="tablist"], [role="radiogroup"], ' +
+  '[role="spinbutton"], [role="grid"], [role="tree"]';
+const ACTIVATES_ON_SPACE = 'a[href], button, summary, [role="button"], [role="link"]';
+
+function hashEntryId(entries: readonly EditSideNavEntry[]): string | null {
+  let id: string;
+  try {
+    id = decodeURIComponent(window.location.hash.slice(1));
+  } catch {
+    return null;
+  }
+  return id && flatten(entries).some((e) => e.id === id) ? id : null;
+}
 
 function flatten(entries: readonly EditSideNavEntry[]): EditSideNavEntry[] {
   return entries.flatMap((e) => [e, ...(e.children ? flatten(e.children) : [])]);
@@ -88,8 +103,8 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
     measurePresent();
     if (hashApplied.current) return;
     hashApplied.current = true;
-    const fromHash = decodeURIComponent(window.location.hash.slice(1));
-    if (fromHash && flatten(entries).some((e) => e.id === fromHash)) {
+    const fromHash = hashEntryId(entries);
+    if (fromHash) {
       hashHold.current = fromHash;
       setActive(fromHash);
       setPresent((prev) => new Set(prev).add(fromHash));
@@ -110,7 +125,12 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
       if (e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
       const link = (e.target as HTMLElement | null)?.closest?.('[data-edit-nav] a[href^="#"]');
       if (!link) return;
-      const id = decodeURIComponent(link.getAttribute('href')!.slice(1));
+      let id: string;
+      try {
+        id = decodeURIComponent(link.getAttribute('href')!.slice(1));
+      } catch {
+        return;
+      }
       // Registered on window in the capture phase so it runs, and calls preventDefault, before
       // UnsavedChangesBar's document-level capture listener: a same-page jump is not leaving.
       if (jumpToSection(id)) {
@@ -133,9 +153,10 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
   // A clicked or hash-loaded entry is HELD until the user scrolls on their own: a target near the
   // page bottom can never reach the line, so no timer can stand in for "the user moved on". Wheel,
   // touch, scroll keys and pointer-down only mark recent input; the hold is released when the page
-  // then really moves (>= USER_SCROLL_PX from the position it settled at after the jump). A late
-  // layout shift with no input behind it does not release it, and a held section that disappears
-  // does.
+  // then really moves (>= USER_SCROLL_PX from the position it settled at after the jump), or moves
+  // more than LARGE_DRIFT_PX with no input at all (scrollbar drag, find-in-page, assistive tech).
+  // A small late layout shift with no input behind it does not release it, and a held section that
+  // disappears does.
   orderRef.current = order;
   useEffect(() => scheduleRef.current(), [order]);
 
@@ -143,10 +164,10 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
     let frame = 0;
     let settleTimer = 0;
     let retryTimer = 0;
-    let retries = 0;
     let lastInputAt = -Infinity;
     let pointerDown = false;
-    let held: { id: string; since: number; baseline: number | null; seen: boolean } | null = null;
+    let held: { id: string; since: number; deadline: number; baseline: number | null; seen: boolean } | null =
+      null;
 
     const settle = () => {
       if (held) held.baseline = window.scrollY;
@@ -166,7 +187,7 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
           measurePresent();
         } else if (!present && held.seen) {
           release();
-        } else if (!present && retries++ < LATE_TARGET_TRIES) {
+        } else if (!present && Date.now() < held.deadline) {
           window.clearTimeout(retryTimer);
           retryTimer = window.setTimeout(schedule, LATE_TARGET_RETRY_MS);
         } else if (!present) {
@@ -183,8 +204,9 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
     }
     scheduleRef.current = schedule;
     const hold = (id: string) => {
-      held = { id, since: Date.now(), baseline: null, seen: document.getElementById(id) !== null };
-      retries = 0;
+      const now = Date.now();
+      held = { id, since: now, deadline: now + LATE_TARGET_WAIT_MS, baseline: null, seen: document.getElementById(id) !== null };
+      lastInputAt = -Infinity;
       window.clearTimeout(settleTimer);
       settleTimer = window.setTimeout(settle, SETTLE_MS);
     };
@@ -195,11 +217,10 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
         if (held.baseline === null) {
           window.clearTimeout(settleTimer);
           settleTimer = window.setTimeout(settle, SETTLE_MS);
-        } else if (
-          Math.abs(window.scrollY - held.baseline) >= USER_SCROLL_PX &&
-          (pointerDown || Date.now() - lastInputAt < RECENT_INPUT_MS)
-        ) {
-          release();
+        } else {
+          const drift = Math.abs(window.scrollY - held.baseline);
+          const recentInput = pointerDown || Date.now() - lastInputAt < RECENT_INPUT_MS;
+          if (drift > LARGE_DRIFT_PX || (drift >= USER_SCROLL_PX && recentInput)) release();
         }
       }
       schedule();
@@ -211,8 +232,17 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
     };
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
-      if (!SCROLL_KEYS.has(e.key) || t?.closest?.(INTERACTIVE)) return;
+      if (!SCROLL_KEYS.has(e.key) || t?.closest?.(KEY_CONSUMERS)) return;
+      if (e.key === ' ' && t?.closest?.(ACTIVATES_ON_SPACE)) return;
       markInput();
+    };
+    const onHashChange = () => {
+      const id = hashEntryId(entriesRef.current);
+      if (!id) return;
+      hashHold.current = id;
+      setActive(id);
+      setPresent((prev) => new Set(prev).add(id));
+      hold(id);
     };
     const onPointerDown = () => {
       pointerDown = true;
@@ -231,6 +261,7 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
     window.addEventListener('wheel', markInput, { passive: true });
     window.addEventListener('touchmove', markInput, { passive: true });
     window.addEventListener('keydown', onKey);
+    window.addEventListener('hashchange', onHashChange);
     window.addEventListener('pointerdown', onPointerDown, true);
     window.addEventListener('pointerup', onPointerUp, true);
     window.addEventListener('pointercancel', onPointerUp, true);
@@ -243,6 +274,7 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
       window.removeEventListener('wheel', markInput);
       window.removeEventListener('touchmove', markInput);
       window.removeEventListener('keydown', onKey);
+      window.removeEventListener('hashchange', onHashChange);
       window.removeEventListener('pointerdown', onPointerDown, true);
       window.removeEventListener('pointerup', onPointerUp, true);
       window.removeEventListener('pointercancel', onPointerUp, true);

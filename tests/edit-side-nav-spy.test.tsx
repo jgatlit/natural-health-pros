@@ -238,12 +238,111 @@ describe('EditSideNav reading-line scroll-spy', () => {
     expect(currentIds()).toEqual(['#sections']);
   });
 
-  it('a late layout shift with no input does not release the hold', () => {
+  it('a 20px layout shift with no input does not release the hold', () => {
     mount();
     clickShareSignup();
     wait(1000);
-    scrollTo(scrollY - 200);
+    scrollTo(scrollY - 20);
     expect(currentIds()).toEqual(['#share-signup']);
+  });
+
+  it('a large drift (120px) releases the hold with no input at all', () => {
+    mount();
+    clickShareSignup();
+    wait(1000);
+    scrollTo(scrollY - 120);
+    expect(currentIds()).toEqual(['#sections']);
+  });
+
+  it('a 10px move with recent input releases (the small threshold is ~4px, not tens)', () => {
+    mount();
+    clickShareSignup();
+    wait(1000);
+    act(() => {
+      window.dispatchEvent(new Event('wheel'));
+    });
+    scrollTo(scrollY - 10);
+    expect(currentIds()).toEqual(['#sections']);
+  });
+
+  it('a wheel burst 60ms after the click is momentum and does not release', () => {
+    mount();
+    clickShareSignup();
+    wait(60);
+    act(() => {
+      window.dispatchEvent(new Event('wheel'));
+    });
+    wait(100);
+    scrollTo(scrollY - 30);
+    expect(currentIds()).toEqual(['#share-signup']);
+  });
+
+  it('a wheel just before the click does not leak into the new hold', () => {
+    mount();
+    act(() => {
+      window.dispatchEvent(new Event('wheel'));
+    });
+    wait(300);
+    clickShareSignup();
+    wait(200);
+    scrollTo(scrollY - 30);
+    expect(currentIds()).toEqual(['#share-signup']);
+  });
+
+  it('PageDown with focus on the clicked link scrolls and releases; Space on it does not', () => {
+    mount();
+    clickShareSignup();
+    wait(1000);
+    const a = link('share-signup');
+    a.focus();
+    act(() => {
+      a.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    });
+    scrollTo(scrollY - 30);
+    expect(currentIds()).toEqual(['#share-signup']);
+    act(() => {
+      a.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageDown', bubbles: true }));
+    });
+    scrollTo(scrollY - 30);
+    expect(currentIds()).toEqual(['#sections']);
+  });
+
+  it('a hashchange re-derives the hold from the new hash; unknown and malformed hashes are ignored', () => {
+    mount();
+    scrollTo(MAX);
+    expect(currentIds()).toEqual(['#account']);
+    window.history.replaceState(null, '', '/practitioners/x/edit#sections');
+    act(() => {
+      window.dispatchEvent(new Event('hashchange'));
+    });
+    wait(1000);
+    scrollTo(MAX);
+    expect(currentIds()).toEqual(['#sections']);
+    for (const bad of ['#nope', '#%E0%A4%A']) {
+      window.history.replaceState(null, '', `/practitioners/x/edit${bad}`);
+      expect(() =>
+        act(() => {
+          window.dispatchEvent(new Event('hashchange'));
+        }),
+      ).not.toThrow();
+    }
+    expect(currentIds()).toEqual(['#sections']);
+  });
+
+  it('a malformed hash on load does not throw', () => {
+    window.history.replaceState(null, '', '/practitioners/x/edit#%E0%A4%A');
+    expect(() => mount()).not.toThrow();
+  });
+
+  it('the late-target wait is wall-clock, not a count of scroll events', () => {
+    window.history.replaceState(null, '', '/practitioners/x/edit#share-signup');
+    document.getElementById('share-signup')!.remove();
+    mount();
+    for (let i = 0; i < 80; i++) scrollTo(scrollY + (i % 2));
+    expect(currentIds()).toEqual(['#share-signup']);
+    wait(11_000);
+    scrollTo(scrollY);
+    expect(currentIds()).not.toEqual(['#share-signup']);
   });
 
   it('a scroll key releases only when focus is not in an interactive control', () => {
