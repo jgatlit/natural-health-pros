@@ -3,6 +3,8 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { PendingButton } from './PendingButton';
+import { StrikePrice } from './StrikePrice';
+import type { PlanADiscountView } from '@/lib/pricing-plans';
 
 type Props = {
   status: 'NONE' | 'ACTIVE' | 'PAST_DUE' | 'CANCELED';
@@ -48,6 +50,8 @@ type Props = {
   annualPriceLabel: string;
   /** "Save $49 vs monthly", or null when the yearly price saves nothing. */
   annualSavingsLabel: string | null;
+  /** The regular Plan A prices, struck through beside these, or null when there is no discount. */
+  discount?: PlanADiscountView | null;
   /**
    * `success`: back from Whop checkout, before the webhook has activated the subscription; the
    * choices are hidden so the payer is not invited to buy twice. `error`: checkout could not open.
@@ -82,6 +86,7 @@ export function SubscriptionSection({
   priceLabel,
   annualPriceLabel,
   annualSavingsLabel,
+  discount = null,
   notice = null,
 }: Props) {
   let title = plan === 'PLAN_A' ? 'Plan A · Listing' : 'Plan B · No monthly fee';
@@ -231,17 +236,22 @@ export function SubscriptionSection({
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-2 rounded-md border p-4">
               <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Monthly</p>
-              <p className="text-lg font-semibold">{priceLabel}</p>
+              <p className="text-lg font-semibold">
+                <StrikePrice listLabel={discount?.monthlyListLabel} priceLabel={priceLabel} />
+              </p>
+              {discount && <p className="text-xs font-medium text-muted-foreground">{discount.monthlySavingsLabel}</p>}
               {checkoutButton(monthlyAction, `Pay monthly · ${priceLabel}`, 'monthly')}
             </div>
             <div className="space-y-2 rounded-md border p-4">
               <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Annual</p>
               <p className="text-lg font-semibold">
-                {annualPriceLabel}
-                {annualSavingsLabel && (
-                  <span className="ml-2 text-xs font-medium text-muted-foreground">{annualSavingsLabel}</span>
-                )}
+                <StrikePrice listLabel={discount?.annualListLabel} priceLabel={annualPriceLabel} />
               </p>
+              {(discount?.annualSavingsLabel || annualSavingsLabel) && (
+                <p className="text-xs font-medium text-muted-foreground">
+                  {[discount?.annualSavingsLabel, annualSavingsLabel].filter(Boolean).join(' · ')}
+                </p>
+              )}
               {checkoutButton(annualAction, `Pay annually · ${annualPriceLabel}`, 'annual')}
             </div>
           </div>
