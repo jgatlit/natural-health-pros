@@ -20,7 +20,7 @@ const mocks = vi.hoisted(() => ({
   isWhopPlatformsReady: vi.fn<() => boolean>(),
   feeUpsert: vi.fn<(args?: unknown) => Promise<unknown>>(),
   createTransfer: vi.fn<(args?: unknown) => Promise<{ transferId: string }>>(),
-  findTransfer: vi.fn<(args?: unknown) => Promise<{ transferId: string; amountUsdDollars: number } | null>>(),
+  findTransfer: vi.fn<(args?: unknown) => Promise<{ kind: 'found'; transferId: string; amountUsdDollars: number } | { kind: 'not-found' } | { kind: 'unknown'; reason: string }>>(),
   feeFindMany: vi.fn<(args?: unknown) => Promise<unknown[]>>(),
   getPaymentFees: vi.fn<(id: string) => Promise<Array<{ origin: string; amount: number }>>>(),
   /** The two payout ledgers: replaced per test with an in-memory fake that keeps the guarded-update semantics. */
@@ -96,7 +96,7 @@ beforeEach(() => {
   mocks.ledger.db = fakeLedgerDb();
   mocks.feeUpsert.mockResolvedValue({});
   mocks.createTransfer.mockResolvedValue({ transferId: 'tr_test' });
-  mocks.findTransfer.mockResolvedValue(null);
+  mocks.findTransfer.mockResolvedValue({ kind: 'not-found' });
   mocks.feeFindMany.mockResolvedValue([]);
   mocks.getPaymentFees.mockResolvedValue([]);
   mocks.update.mockResolvedValue({});
@@ -310,9 +310,10 @@ describe('fee reconciliation (spec §7)', () => {
 });
 
 const OLD = new Date(Date.UTC(2026, 0, 1)); // far outside the 30-minute window
-const ENVS = ['WHOP_TRANSFERS_ENABLED', 'WHOP_TRANSFERS_ALLOWLIST', 'WHOP_PARENT_COMPANY_ID', 'WHOP_COMPANY_API_KEY'];
+const ENVS = ['WHOP_TRANSFERS_ENABLED', 'WHOP_TRANSFERS_ALLOWLIST', 'WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED', 'WHOP_PARENT_COMPANY_ID', 'WHOP_COMPANY_API_KEY'];
 const enableTransfers = () => {
   process.env.WHOP_TRANSFERS_ENABLED = 'true';
+  process.env.WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED = 'true';
   process.env.WHOP_PARENT_COMPANY_ID = 'biz_parent';
   process.env.WHOP_COMPANY_API_KEY = 'apik_x';
 };
@@ -424,7 +425,7 @@ describe('share transfers: the hourly sweep is the RETRY BACKSTOP (spec v1.4 §6
     expect(body.ok).toBe(false);
     expect(body.transfersUnconfirmed).toEqual([{ ledger: 'affiliate', id: 'afl_1' }]);
     expect(body.errors.join(' ')).toContain('afl_1');
-    expect(body.errors.join(' ')).toMatch(/no confirmed receipt 30\+ minutes/);
+    expect(body.errors.join(' ')).toMatch(/no confirmed receipt.*30\+ minutes/);
     expect(spy).toHaveBeenCalledWith(expect.stringContaining('SHARE TRANSFERS WITHOUT A CONFIRMED RECEIPT'), expect.stringContaining('afl_1'));
   });
 
@@ -470,11 +471,69 @@ describe('share transfers: the hourly sweep is the RETRY BACKSTOP (spec v1.4 §6
     await GET(req());
     expect(mocks.ledger.db.affiliateRows[0]).toMatchObject({ state: 'ACCRUED', transferAttempts: 1 });
 
-    mocks.findTransfer.mockResolvedValue({ transferId: 'tr_found', amountUsdDollars: 3 });
+    mocks.findTransfer.mockResolvedValue({ kind: 'found', transferId: 'tr_found', amountUsdDollars: 3 });
     mocks.ledger.db.affiliateRows[0].nextAttemptAt = new Date(0); // the backoff has passed
     await GET(req());
     expect(mocks.createTransfer).toHaveBeenCalledTimes(1);
     expect(mocks.ledger.db.affiliateRows[0]).toMatchObject({ state: 'SETTLED', whopTransferId: 'tr_found' });
+  });
+
+  it('a transfer with an unknown outcome while the lookup is unverified waits for a person: ONE transfer, 207, listed as needs-attention, never re-sent by later sweeps', async () => {
+    enableTransfers();
+    delete process.env.WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED;
+    mocks.createTransfer.mockRejectedValue(new Error('Whop /transfers failed (502): bad gateway'));
+    mocks.ledger.db = fakeLedgerDb({ practitioners: wallets, affiliate: { entries: [affiliateRow()] } });
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const first = await GET(req());
+    const body = (await first.json()) as { ok: boolean; errors: string[]; transfersUnconfirmed: Array<{ id: string }>; affiliates: { needsAttention: number } };
+    expect(first.status).toBe(207);
+    expect(body.affiliates.needsAttention).toBe(1);
+    expect(body.transfersUnconfirmed).toEqual([{ ledger: 'affiliate', id: 'afl_1' }]);
+    expect(body.errors.join(' ')).toContain('needs-attention');
+    expect(mocks.ledger.db.affiliateRows[0]).toMatchObject({ state: 'ACCRUED', attentionReason: 'ambiguous-unverified', transferUsdCents: 300 });
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining('NEEDS ATTENTION'), expect.stringContaining('afl_1'));
+
+    mocks.createTransfer.mockResolvedValue({ transferId: 'would-be-second' });
+    await GET(req());
+    await GET(req());
+    expect(mocks.createTransfer).toHaveBeenCalledTimes(1);
+    expect(mocks.ledger.db.affiliateRows[0].state).toBe('ACCRUED');
+  });
+
+  it('a flagged row is settled by a later sweep if Whop SHOWS the transfer (found is positive evidence at any gate)', async () => {
+    enableTransfers();
+    delete process.env.WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED;
+    mocks.createTransfer.mockRejectedValueOnce(new Error('The operation was aborted due to timeout'));
+    mocks.ledger.db = fakeLedgerDb({ practitioners: wallets, affiliate: { entries: [affiliateRow({ createdAt: new Date() })] } });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    await GET(req());
+    expect(mocks.ledger.db.affiliateRows[0].attentionReason).toBe('ambiguous-unverified');
+
+    mocks.findTransfer.mockResolvedValue({ kind: 'found', transferId: 'tr_seen', amountUsdDollars: 3 });
+    await GET(req());
+    expect(mocks.ledger.db.affiliateRows[0]).toMatchObject({ state: 'SETTLED', whopTransferId: 'tr_seen', attentionReason: null });
+    expect(mocks.createTransfer).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops cleanly when the wall-clock budget is spent: 207 with a "budget exhausted" note, the rest left untouched', async () => {
+    enableTransfers();
+    mocks.ledger.db = fakeLedgerDb({
+      practitioners: wallets,
+      affiliate: { entries: [affiliateRow(), affiliateRow({ id: 'afl_2', bookingIntentId: 'bi_3' })] },
+    });
+    const real = Date.now;
+    let calls = 0;
+    // The first reading is the route start; every later reading is far past the 240 s budget.
+    vi.spyOn(Date, 'now').mockImplementation(() => (calls++ === 0 ? real() : real() + 10 * 60_000));
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await GET(req());
+    const body = (await res.json()) as { ok: boolean; errors: string[]; affiliates: { budgetExhausted: boolean; deferred: number; settled: number } };
+    expect(res.status).toBe(207);
+    expect(body.errors.join(' ')).toMatch(/budget exhausted/);
+    expect(body.affiliates).toMatchObject({ budgetExhausted: true, deferred: 2, settled: 0 });
+    expect(mocks.createTransfer).not.toHaveBeenCalled();
+    expect(mocks.ledger.db.affiliateRows.map((r: { state: string }) => r.state)).toEqual(['ACCRUED', 'ACCRUED']);
   });
 
   it('exports maxDuration so a sweep of transfers is not cut off', async () => {

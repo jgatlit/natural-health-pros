@@ -41,12 +41,15 @@ export function settleAffiliateShares(
     at: Date;
     /** Restrict the run to ONE ledger row (the post-payment trigger). Same rules, same guards. */
     only?: { bookingIntentId: string; recruiterPractitionerId: string };
+    /** Wall-clock budget (epoch ms): stop cleanly once it passes. See `SettleOptions`. */
+    deadlineMs?: number;
   },
 ): Promise<AffiliateSettlementSummary> {
   return settleLedger(db, AFFILIATE_LEDGER, {
     transfer: opts.transfer,
     lookup: opts.lookup,
     at: opts.at,
+    deadlineMs: opts.deadlineMs,
     only: opts.only && { bookingIntentId: opts.only.bookingIntentId, payeeId: opts.only.recruiterPractitionerId },
   });
 }

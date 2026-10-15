@@ -77,7 +77,7 @@ async function whopPost<T>(
   path: string,
   body: unknown,
   action: string,
-  opts: { timeoutMs?: number; headers?: Record<string, string> } = {},
+  opts: { timeoutMs?: number } = {},
 ): Promise<T> {
   if (!isWhopPlatformsReady()) throw new WhopNotConfigured(action);
   const base = process.env.WHOP_API_BASE ?? 'https://api.whop.com/api/v1';
@@ -86,7 +86,6 @@ async function whopPost<T>(
     headers: {
       Authorization: `Bearer ${process.env.WHOP_COMPANY_API_KEY}`,
       'Content-Type': 'application/json',
-      ...opts.headers,
     },
     body: JSON.stringify(body),
     ...(opts.timeoutMs ? { signal: AbortSignal.timeout(opts.timeoutMs) } : {}),
@@ -522,10 +521,11 @@ export const TRANSFER_TIMEOUT_MS = 25_000;
  * produced "-$24,999.00" in a live rejection probe, which is the evidence this is dollars.
  *
  * DUPLICATE PROTECTION. The request carries `idempotence_key` (the SDK's documented "unique key to
- * prevent duplicate transfers") in the body and the same value as an `Idempotency-Key` header, and
- * `metadata` so the transfer can be found again with `findTransferForLedgerEntry`. Whether Whop
- * honours any of the three on a parent -> sibling transfer is confirmed by the canary
- * (scripts/whop-canary-transfer.ts); until then the caller looks a transfer up before it re-sends.
+ * prevent duplicate transfers") in the body and `metadata` so the transfer can be found again with
+ * `findTransferForLedgerEntry`. Whether Whop honours the key on a parent -> sibling transfer, and
+ * whether the list returns the metadata, is what the canary measures
+ * (scripts/whop-canary-transfer.ts); until the operator records that result
+ * (`WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED`) an attempt with an unknown outcome is never re-sent.
  *
  * 🚧 The parent company is not business-verified, so every call currently fails with "Please
  * verify your business before transferring funds". `payoutsGuard()` is what stops us reaching here
@@ -552,10 +552,7 @@ export async function createTransfer(params: {
       ...(params.idempotenceKey ? { idempotence_key: params.idempotenceKey } : {}),
     },
     'transfer a share',
-    {
-      timeoutMs: TRANSFER_TIMEOUT_MS,
-      ...(params.idempotenceKey ? { headers: { 'Idempotency-Key': params.idempotenceKey } } : {}),
-    },
+    { timeoutMs: TRANSFER_TIMEOUT_MS },
   );
   return { transferId: res.id };
 }
@@ -573,19 +570,37 @@ export type WhopTransferRecord = {
 };
 
 /**
- * Find the first transfer from `originId` to `destinationId` that satisfies `match`: `GET /transfers`
- * (the list endpoint has no metadata filter, so the match runs here), newest first, following the
- * cursor up to `TRANSFER_LOOKUP_MAX_PAGES` pages. `createdAfter` bounds the scan.
+ * The outcome of looking for a transfer.
  *
- * THROWS on any failure to read: a lookup that could not run proves nothing, and the caller must not
- * treat it as "no transfer exists". Returns null only after reaching the end of the list.
+ *   found      a transfer matched.
+ *   not-found  POSITIVE evidence of absence: the list answered with the expected envelope, its rows
+ *              expose a `metadata` field (or it is empty), and the scan reached the end. Even this is
+ *              only as good as the lookup mechanism; the caller trusts it only after the operator has
+ *              recorded the canary result (`WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED`).
+ *   unknown    the list cannot answer the question: an unexpected envelope, rows that carry no
+ *              `metadata` field at all (metadata is not returned), or a list too long to scan.
+ *
+ * A request that fails outright THROWS; that is also "unknown" to every caller.
+ */
+export type TransferLookup =
+  | { kind: 'found'; transfer: WhopTransferRecord }
+  | { kind: 'not-found' }
+  | { kind: 'unknown'; reason: string };
+
+/**
+ * Look for the first transfer from `originId` to `destinationId` that satisfies `match`:
+ * `GET /transfers` (the list endpoint has no metadata filter, so the match runs here), newest first,
+ * following the cursor up to `TRANSFER_LOOKUP_MAX_PAGES` pages. `createdAfter` bounds the scan.
+ *
+ * "No row matched" is NOT "no transfer exists" unless the list could have shown it, hence the
+ * three-way result (`TransferLookup`).
  */
 export async function findTransfer(params: {
   originId: string;
   destinationId: string;
   createdAfter?: Date;
   match: (t: WhopTransferRecord) => boolean;
-}): Promise<WhopTransferRecord | null> {
+}): Promise<TransferLookup> {
   if (!isWhopPlatformsReady()) throw new WhopNotConfigured('look up a transfer');
   const base = process.env.WHOP_API_BASE ?? 'https://api.whop.com/api/v1';
   let after: string | undefined;
@@ -605,19 +620,28 @@ export async function findTransfer(params: {
     if (!res.ok) {
       throw new Error(`Whop /transfers lookup failed (${res.status}): ${await res.text().catch(() => '')}`);
     }
-    const body = (await res.json()) as {
-      data?: Array<{
-        id?: string;
-        amount?: number;
-        fee_amount?: number | null;
-        created_at?: string;
-        metadata?: Record<string, unknown> | null;
-      }>;
+    const body = (await res.json().catch(() => null)) as {
+      data?: unknown;
       page_info?: { end_cursor?: string | null };
-    };
-    const rows = body.data ?? [];
+    } | null;
+    if (!body || !Array.isArray(body.data)) {
+      return { kind: 'unknown', reason: 'the transfer list did not have the expected { data: [...] } envelope' };
+    }
+    const rows = body.data as Array<{
+      id?: string;
+      amount?: number;
+      fee_amount?: number | null;
+      created_at?: string;
+      metadata?: Record<string, unknown> | null;
+    }>;
+    if (rows.length > 0 && rows.every((t) => !t || typeof t !== 'object' || !('metadata' in t))) {
+      return {
+        kind: 'unknown',
+        reason: 'the transfer list rows carry no metadata field, so a transfer cannot be matched by metadata',
+      };
+    }
     for (const t of rows) {
-      if (!t.id) continue;
+      if (!t?.id) continue;
       const record: WhopTransferRecord = {
         id: t.id,
         amount: typeof t.amount === 'number' ? t.amount : NaN,
@@ -625,28 +649,81 @@ export async function findTransfer(params: {
         metadata: t.metadata ?? null,
         createdAt: t.created_at ?? null,
       };
-      if (params.match(record)) return record;
+      if (params.match(record)) return { kind: 'found', transfer: record };
     }
     after = body.page_info?.end_cursor ?? undefined;
-    if (rows.length < TRANSFER_LOOKUP_PAGE || !after) return null;
+    if (rows.length < TRANSFER_LOOKUP_PAGE || !after) return { kind: 'not-found' };
   }
-  throw new Error('Whop /transfers lookup did not reach the end of the transfer list');
+  return { kind: 'unknown', reason: 'the transfer list did not end within the page budget' };
 }
 
-/** Find the transfer made for one ledger row (`metadata.ledger_entry_id`), if any. See `findTransfer`. */
+/** The result of looking for the transfer made for one ledger row. See `TransferLookup`. */
+export type LedgerTransferLookup =
+  | { kind: 'found'; transferId: string; amountUsdDollars: number }
+  | { kind: 'not-found' }
+  | { kind: 'unknown'; reason: string };
+
+/** Find the transfer made for one ledger row (`metadata.ledger_entry_id`). See `findTransfer`. */
 export async function findTransferForLedgerEntry(params: {
   originId: string;
   destinationId: string;
   ledgerEntryId: string;
   createdAfter?: Date;
-}): Promise<{ transferId: string; amountUsdDollars: number } | null> {
+}): Promise<LedgerTransferLookup> {
   const hit = await findTransfer({
     originId: params.originId,
     destinationId: params.destinationId,
     createdAfter: params.createdAfter,
     match: (t) => t.metadata?.ledger_entry_id === params.ledgerEntryId,
   });
-  return hit ? { transferId: hit.id, amountUsdDollars: hit.amount } : null;
+  if (hit.kind === 'found') return { kind: 'found', transferId: hit.transfer.id, amountUsdDollars: hit.transfer.amount };
+  return hit;
+}
+
+/**
+ * Is `companyId` a connected account (sibling) of the configured parent company? Read-only.
+ * `GET /companies/{id}` is read first and its `parent_company_id` compared when present; when the
+ * company object does not expose it, membership in the parent's connected-account list
+ * (`GET /companies?parent_company_id=<parent>`) decides. THROWS when neither can be read.
+ */
+export async function isConnectedAccountOfParent(companyId: string): Promise<boolean> {
+  if (!isWhopPlatformsReady()) throw new WhopNotConfigured('read a company');
+  const base = process.env.WHOP_API_BASE ?? 'https://api.whop.com/api/v1';
+  const parent = process.env.WHOP_PARENT_COMPANY_ID!;
+  const headers = { Authorization: `Bearer ${process.env.WHOP_COMPANY_API_KEY}` };
+
+  const one = await fetch(`${base}/companies/${encodeURIComponent(companyId)}`, {
+    headers,
+    signal: AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
+  });
+  if (!one.ok) {
+    throw new Error(`Whop /companies/${companyId} failed (${one.status}): ${await one.text().catch(() => '')}`);
+  }
+  const company = (await one.json().catch(() => null)) as { parent_company_id?: string | null } | null;
+  if (company && typeof company.parent_company_id === 'string') return company.parent_company_id === parent;
+
+  let after: string | undefined;
+  for (let page = 0; page < TRANSFER_LOOKUP_MAX_PAGES; page += 1) {
+    const qs = new URLSearchParams({ parent_company_id: parent, first: String(TRANSFER_LOOKUP_PAGE) });
+    if (after) qs.set('after', after);
+    const res = await fetch(`${base}/companies?${qs.toString()}`, {
+      headers,
+      signal: AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
+    });
+    if (!res.ok) throw new Error(`Whop /companies list failed (${res.status}): ${await res.text().catch(() => '')}`);
+    const body = (await res.json().catch(() => null)) as {
+      data?: unknown;
+      page_info?: { end_cursor?: string | null };
+    } | null;
+    if (!body || !Array.isArray(body.data)) {
+      throw new Error('Whop /companies list did not have the expected { data: [...] } envelope');
+    }
+    const rows = body.data as Array<{ id?: string }>;
+    if (rows.some((c) => c?.id === companyId)) return true;
+    after = body.page_info?.end_cursor ?? undefined;
+    if (rows.length < TRANSFER_LOOKUP_PAGE || !after) return false;
+  }
+  throw new Error('Whop /companies list did not end within the page budget');
 }
 
 /**

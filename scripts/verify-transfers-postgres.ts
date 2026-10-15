@@ -29,6 +29,8 @@ import {
   type TransferFn,
 } from '../src/lib/ledger-transfer';
 import { reverseReferralOnRefund, type RefundDb } from '../src/lib/referral-refunds';
+import { resolveTransferAttention } from '../src/lib/transfer-attention';
+import { fakeWhop } from '../tests/helpers/fake-whop';
 
 const LOCAL = new Set(['localhost', '127.0.0.1', '::1', '[::1]']);
 
@@ -117,7 +119,7 @@ const debitsOf = (cfg: LedgerConfig, payeeId: string): Promise<Array<Record<stri
   (prisma as any)[cfg.adjustment].findMany({ where: { [cfg.payeeKey]: payeeId }, orderBy: { createdAt: 'asc' } }); // eslint-disable-line @typescript-eslint/no-explicit-any
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
-const noLookup: LookupFn = async () => null;
+const noLookup: LookupFn = async () => ({ kind: 'not-found' });
 
 /** A mock transfer that records every call and answers after a short delay (so runs genuinely overlap). */
 function mockTransfer() {
@@ -177,7 +179,7 @@ async function scenarioFor(cfg: LedgerConfig): Promise<void> {
     const lookups: Array<unknown> = [];
     const lookup: LookupFn = async (a) => {
       lookups.push(a);
-      return null;
+      return { kind: 'not-found' };
     };
     const later = new Date(NOW.getTime() + 2 * 60_000);
     await Promise.all([settle(fn, lookup, { only, at: later }), settle(fn, lookup, { only, at: later })]);
@@ -188,7 +190,7 @@ async function scenarioFor(cfg: LedgerConfig): Promise<void> {
     const only2 = { bookingIntentId: row2.bookingId, payeeId: payee.id };
     await settle(bad, noLookup, { only: only2 });
     const { fn: fn2, calls: calls2 } = mockTransfer();
-    await settle(fn2, async () => ({ transferId: 'tr_found', amountUsdDollars: 3 }), { only: only2, at: later });
+    await settle(fn2, async () => ({ kind: 'found' as const, transferId: 'tr_found', amountUsdDollars: 3 }), { only: only2, at: later });
     const r2 = await rowOf(cfg, row2.id);
     check(`${tag}: when Whop already has the transfer the row is settled from it and nothing is sent`, calls2.length === 0 && r2?.state === 'SETTLED' && r2?.whopTransferId === 'tr_found', { calls: calls2.length, r2 });
   }
@@ -199,10 +201,10 @@ async function scenarioFor(cfg: LedgerConfig): Promise<void> {
     await (prisma as any)[cfg.entry].update({ where: { id: row.id }, data: { state: 'SENDING', transferUsdCents: 300, transferAttempts: 1, lastAttemptAt: NOW } }); // eslint-disable-line @typescript-eslint/no-explicit-any
     const only = { bookingIntentId: row.bookingId, payeeId: payee.id };
     const { fn, calls } = mockTransfer();
-    await settle(fn, async () => ({ transferId: 'tr_recovered', amountUsdDollars: 3 }), { only, at: new Date(NOW.getTime() + STALE_SENDING_AFTER_MS - 1) });
+    await settle(fn, async () => ({ kind: 'found' as const, transferId: 'tr_recovered', amountUsdDollars: 3 }), { only, at: new Date(NOW.getTime() + STALE_SENDING_AFTER_MS - 1) });
     let r = await rowOf(cfg, row.id);
     check(`${tag}: a fresh SENDING row is left alone`, r?.state === 'SENDING' && calls.length === 0, r);
-    await settle(fn, async () => ({ transferId: 'tr_recovered', amountUsdDollars: 3 }), { only, at: new Date(NOW.getTime() + STALE_SENDING_AFTER_MS) });
+    await settle(fn, async () => ({ kind: 'found' as const, transferId: 'tr_recovered', amountUsdDollars: 3 }), { only, at: new Date(NOW.getTime() + STALE_SENDING_AFTER_MS) });
     r = await rowOf(cfg, row.id);
     check(`${tag}: a stale SENDING row is settled from the transfer Whop has, with nothing re-sent`, r?.state === 'SETTLED' && r?.whopTransferId === 'tr_recovered' && calls.length === 0, r);
   }
@@ -288,6 +290,109 @@ async function scenarioFor(cfg: LedgerConfig): Promise<void> {
   }
 }
 
+async function outcomesFor(cfg: LedgerConfig): Promise<void> {
+  const tag = cfg.kind;
+  const payee = await newPractitioner('opayee');
+  const serving = await newPractitioner('oserving');
+  const NOW = new Date();
+  const only = (r: Seeded) => ({ bookingIntentId: r.bookingId, payeeId: payee.id });
+  const gate = (on: boolean) => {
+    if (on) process.env.WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED = 'true';
+    else delete process.env.WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED;
+  };
+  const sweep = (row: Seeded, whop: ReturnType<typeof fakeWhop>, at: Date, lookup: LookupFn = whop.lookup) =>
+    settleLedger(db, cfg, { transfer: whop.transfer, lookup, at, only: only(row) });
+  const later = (min: number) => new Date(NOW.getTime() + min * 60_000);
+
+  // ---- G. the reviewer's mock: key ignored, list omits metadata, 502 after the transfer exists
+  {
+    gate(false);
+    const row = await seedRow(cfg, payee.id, serving.id, 3_000, 10_000);
+    const whop = fakeWhop({ honourKey: false, listShows: 'no-metadata', afterCreate: ['bad-gateway'] });
+    await sweep(row, whop, NOW);
+    for (const m of [2, 61, 25 * 60]) await sweep(row, whop, later(m));
+    let r = await rowOf(cfg, row.id);
+    check(`${tag}: a 502 after the transfer exists, key ignored, metadata not listed: ONE transfer ($30.00) and a needs-attention row`,
+      whop.transfers.length === 1 && whop.posts === 1 && r?.attentionReason === 'ambiguous-unverified' && r?.state === cfg.waiting, { transfers: whop.transfers.length, posts: whop.posts, r });
+
+    // the admin records that it went out
+    const res = await resolveTransferAttention(db, { ledger: cfg.kind, rowId: row.id, outcome: 'went-out', transferId: 'wt_1', reason: 'seen in the dashboard', adminUserId: null, at: later(30) });
+    r = await rowOf(cfg, row.id);
+    const audit = await prisma.feeLedgerEntry.findFirst({ where: { kind: 'TRANSFER_RESOLUTION', practitionerId: payee.id, bookingIntentId: row.bookingId } });
+    check(`${tag}: "it went out" settles the row with the recorded id, audited in the same transaction`, res.ok && r?.state === 'SETTLED' && r?.whopTransferId === 'wt_1' && audit?.whopTransferId === 'wt_1', { res, r, audit });
+    await sweep(row, whop, later(60));
+    check(`${tag}: nothing is sent after the decision`, whop.posts === 1);
+  }
+
+  // ---- H. "it did not go out" returns a fresh row (debits restored) that is then sent once
+  {
+    gate(false);
+    const src = await seedRow(cfg, payee.id, serving.id, 300);
+    const debitRow = await (prisma as any)[cfg.adjustment].create({ data: { [cfg.payeeKey]: payee.id, sourceLedgerEntryId: src.id, amountUsdCents: 120, dedupeKey: uid('hdebit') } }); // eslint-disable-line @typescript-eslint/no-explicit-any
+    await (prisma as any)[cfg.entry].update({ where: { id: src.id }, data: { state: 'SETTLED', settledAt: NOW, transferUsdCents: 300 } }); // eslint-disable-line @typescript-eslint/no-explicit-any
+    const row = await seedRow(cfg, payee.id, serving.id, 300);
+    const whop = fakeWhop({ honourKey: false, listShows: 'no-metadata', afterCreate: ['timeout'] });
+    await sweep(row, whop, NOW);
+    let r = await rowOf(cfg, row.id);
+    let d = (await debitsOf(cfg, payee.id)).find((x) => x.id === debitRow.id);
+    check(`${tag}: the flagged row had netted the open debit (applied 120) at its claim`, r?.attentionReason != null && r?.adjustmentAppliedUsdCents === 120 && d?.appliedUsdCents === 120, { r, d });
+    const res = await resolveTransferAttention(db, { ledger: cfg.kind, rowId: row.id, outcome: 'did-not-go-out', reason: 'checked, none', adminUserId: null, at: later(10) });
+    r = await rowOf(cfg, row.id);
+    d = (await debitsOf(cfg, payee.id)).find((x) => x.id === debitRow.id);
+    check(`${tag}: "it did not go out" makes the row fresh and restores the debit exactly`, res.ok && r?.transferUsdCents == null && r?.attentionReason == null && d?.appliedUsdCents === 0 && d?.state === 'OPEN', { res, r, d });
+    await sweep(row, whop, later(11));
+    r = await rowOf(cfg, row.id);
+    check(`${tag}: the next sweep sends it once, netting the debit again ($1.80)`, whop.posts === 2 && r?.state === 'SETTLED' && r?.netPaidUsdCents === 180, { posts: whop.posts, r });
+  }
+
+  // ---- I. gate true, key honoured, list lags: one retry with the same key, one transfer
+  {
+    gate(true);
+    const row = await seedRow(cfg, payee.id, serving.id, 3_000, 10_000);
+    const whop = fakeWhop({ honourKey: true, afterCreate: ['timeout'] });
+    const lagging: LookupFn = async () => ({ kind: 'not-found' });
+    await sweep(row, whop, NOW, lagging);
+    await sweep(row, whop, later(1), lagging);
+    const r = await rowOf(cfg, row.id);
+    check(`${tag}: gate true + key honoured: retried once with the same key, one transfer, settled`, whop.posts === 2 && whop.transfers.length === 1 && r?.state === 'SETTLED', { posts: whop.posts, r });
+  }
+
+  // ---- J. a refund after a REFUSED attempt reduces the share; the claim's debits are restored
+  {
+    gate(true);
+    const refusing = (): import('../src/lib/ledger-transfer').TransferFn => {
+      let first = true;
+      return async (args) => {
+        if (first) {
+          first = false;
+          throw new Error('Whop /transfers failed (402): insufficient available balance');
+        }
+        calls.push(args);
+        return { transferId: `tr_${run}_j${calls.length}` };
+      };
+    };
+    const calls: Array<Parameters<import('../src/lib/ledger-transfer').TransferFn>[0]> = [];
+    const row = await seedRow(cfg, payee.id, serving.id, 3_000, 10_000);
+    const t = refusing();
+    await settleLedger(db, cfg, { transfer: t, lookup: noLookup, at: NOW, only: only(row) });
+    let r = await rowOf(cfg, row.id);
+    check(`${tag}: a refused attempt leaves the row fresh (no fixed amount)`, r?.state === cfg.waiting && r?.transferUsdCents == null && r?.adjustmentAllocations == null, r);
+    await applyLedgerReversal(prisma as unknown as ReversalDb, cfg, { bookingIntentId: row.bookingId, payeeId: payee.id, totalReversedUsdCents: 1_000 });
+    await settleLedger(db, cfg, { transfer: t, lookup: noLookup, at: later(2), only: only(row) });
+    r = await rowOf(cfg, row.id);
+    const rowDebits = (await debitsOf(cfg, payee.id)).filter((x) => x.sourceLedgerEntryId === row.id);
+    check(`${tag}: refund (1000) after the refusal: the retry sends 2000 and books no debit`, calls.length === 1 && calls[0]?.amountUsdDollars === 20 && rowDebits.length === 0 && r?.state === 'SETTLED', { calls, rowDebits, r });
+
+    const full = await seedRow(cfg, payee.id, serving.id, 3_000, 10_000);
+    const t2 = refusing();
+    await settleLedger(db, cfg, { transfer: t2, lookup: noLookup, at: NOW, only: only(full) });
+    await applyLedgerReversal(prisma as unknown as ReversalDb, cfg, { bookingIntentId: full.bookingId, payeeId: payee.id, totalReversedUsdCents: 3_000 });
+    const fr = await rowOf(cfg, full.id);
+    check(`${tag}: the reviewer's sequence (refused, then a FULL refund) ends REVERSED and sends nothing`, fr?.state === 'REVERSED' && calls.length === 1, { fr, calls: calls.length });
+  }
+  gate(true);
+}
+
 async function referralRefundPipeline(): Promise<void> {
   // The whole refund path (markers, absolute reversal, debit) through reverseReferralOnRefund on real tables.
   const payee = await newPractitioner('rpayee');
@@ -315,9 +420,14 @@ async function main(): Promise<void> {
   process.env.WHOP_COMPANY_API_KEY = 'pg-check-not-a-real-key';
   process.env.WHOP_PARENT_COMPANY_ID = 'biz_pg_parent';
   delete process.env.WHOP_TRANSFERS_ALLOWLIST;
+  delete process.env.WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED;
 
+  // The scenarios above G run with the lookup verified; G..J set the gate themselves.
+  process.env.WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED = 'true';
   await scenarioFor(AFFILIATE_LEDGER);
   await scenarioFor(REFERRAL_LEDGER);
+  await outcomesFor(AFFILIATE_LEDGER);
+  await outcomesFor(REFERRAL_LEDGER);
   await referralRefundPipeline();
 
   console.log(failures === 0 ? '\nALL CHECKS PASSED' : `\n${failures} CHECK(S) FAILED`);

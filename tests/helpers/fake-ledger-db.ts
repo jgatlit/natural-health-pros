@@ -134,6 +134,9 @@ export function fakeLedgerDb(
       transferFeeUsdCents: null,
       lastAttemptAt: null,
       nextAttemptAt: null,
+      maybeSentAt: null,
+      attentionReason: null,
+      adjustmentAllocations: null,
     });
 
     const rows: Entry[] = (seed.entries ?? []).map((e, i) => ({

@@ -14,7 +14,7 @@
  *
  *   waiting --claim--> SENDING --receipt--> SETTLED
  *      ^                  |
- *      +--- release ------+   (failed or ambiguous attempt: back to waiting, with a retry time)
+ *      +--- release ------+   (an attempt without a receipt: back to waiting)
  *
  *   `waiting` is ACCRUED (recruiter) / PAYABLE (referrer): owed to a payee who can receive money,
  *   or waiting to retry. A payee who cannot receive money yet is not selected and loses nothing.
@@ -28,21 +28,29 @@
  *   - CLAIM, THEN CALL. One guarded `UPDATE ... WHERE id = ? AND state = <waiting> AND
  *     reversedUsdCents = ? AND transferUsdCents IS NULL` moves the row to SENDING and fixes the
  *     amount. The loser of a race matches nothing and skips.
- *   - THE AMOUNT IS FIXED AT THE FIRST CLAIM (`transferUsdCents`). Every retry sends that amount
- *     with the same `idempotence_key` (the ledger row id). A refund after the first claim is a
- *     debit against the payee's next transfer (`ledger-reversal.ts`), never a change to this amount.
- *   - LOOK BEFORE RE-SENDING. A row that has been claimed before (a failed or ambiguous attempt, or a
- *     SENDING row whose run died) is looked up in Whop by `metadata.ledger_entry_id` first; if the
- *     transfer exists the row is settled with its id and nothing is sent. A lookup that cannot run
- *     sends nothing and retries later.
+ *   - THE AMOUNT IS FIXED WHILE A TRANSFER MAY EXIST (`transferUsdCents`). Every retry sends that
+ *     amount with the same `idempotence_key` (the ledger row id). A refund while the amount is fixed
+ *     is a debit against the payee's next transfer (`ledger-reversal.ts`), never a change to it.
+ *   - AN ATTEMPT WITH AN UNKNOWN OUTCOME (timeout, 5xx, network error after the request was sent) is
+ *     NEVER blindly re-sent. "No row matched" is not "no transfer exists": the lookup can only say so
+ *     when its list is usable (`findTransfer` answers found / not-found / unknown) AND the operator has
+ *     recorded that the canary proved the key or the metadata lookup works
+ *     (`WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED=true`). Until then such a row waits for a person
+ *     (`attentionReason = ambiguous-unverified`): the retry selection excludes it, the cron returns
+ *     207, the admin table lists it, and an admin records "it went out (transfer id)" or "it did not go
+ *     out" (`transfer-attention.ts`). A transfer found in Whop settles the row either way, because a
+ *     found transfer is positive evidence. Once the gate is true an unknown outcome is retried with
+ *     backoff, the lookup first, the same key and the same amount.
  *
  * A FAILED ATTEMPT IS CLASSIFIED (`classifyTransferFailure`):
  *   RETRY      Whop answered "no" for a reason that passes (insufficient available balance, rate
- *              limit): back to waiting with backoff.
- *   AMBIGUOUS  Timeout, network error, 5xx: the transfer may exist. Back to waiting with backoff;
- *              the next attempt looks it up before sending.
- *   PARKED     A definitive refusal that retrying will not fix (not verified, not allowed, invalid):
- *              back to waiting with a long retry delay and a reason, and an alert.
+ *              limit): nothing exists.
+ *   PARKED     Whop answered "no" for a reason that retrying will not fix (not verified, not allowed,
+ *              invalid): nothing exists, long retry delay, an alert.
+ *   AMBIGUOUS  Timeout, network error, 5xx: the transfer may exist (see above).
+ *   After a RETRY or PARKED answer to an attempt that no earlier unknown outcome preceded, the row is
+ *   made fresh again (`restoreRowToFresh`): the fixed amount is cleared and the debits the claim
+ *   applied are restored, so a refund that arrives before the next claim reduces the share.
  *
  * REFUND NETTING. Claiming a row first nets the payee's open debits against it, oldest first, in the
  * SAME transaction as the claim and with a compare-and-swap on each debit, so two settles that read
@@ -53,7 +61,7 @@
  * (gross minus the debit applied). The two are identical when no debit applied.
  */
 
-import { isWhopPlatformsReady, WhopNotConfigured } from './whop';
+import { isWhopPlatformsReady, WhopNotConfigured, type LedgerTransferLookup } from './whop';
 import { RETIREMENT_SENTINEL, bookableWhere } from './practitioner-indexer';
 import { AFFILIATE_LEDGER, REFERRAL_LEDGER, type LedgerConfig } from './ledger-config';
 import { isPayable } from './referral-settlement';
@@ -70,6 +78,8 @@ export const UNCONFIRMED_AFTER_MS = 30 * 60 * 1000;
 /** Retry delay for a definitive refusal that retrying will not fix by itself. */
 export const PARKED_RETRY_MS = 6 * 60 * 60 * 1000;
 const MAX_BACKOFF_MS = 60 * 60 * 1000;
+/** The `attentionReason` of a row whose transfer outcome is unknown and cannot be verified. */
+export const AMBIGUOUS_UNVERIFIED = 'ambiguous-unverified';
 /** A netting transaction that loses its compare-and-swap is re-read and retried this many times. */
 const MAX_NETTING_ATTEMPTS = 4;
 const BATCH = 50;
@@ -146,6 +156,15 @@ export function transfersAllowlist(env: Record<string, string | undefined> = pro
   );
 }
 
+/**
+ * `WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED`, exactly 'true': the operator's record that the canary
+ * (scripts/whop-canary-transfer.ts, Step 0) showed Whop honours the idempotence key or that the
+ * metadata lookup finds a transfer. Only then may an attempt with an unknown outcome be re-sent.
+ */
+export function idempotenceVerified(env: Record<string, string | undefined> = process.env): boolean {
+  return env.WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED === 'true';
+}
+
 /** The transfer call itself, injected so nothing in the test suite can reach the live API. */
 export type TransferFn = (args: {
   originId: string;
@@ -156,13 +175,16 @@ export type TransferFn = (args: {
   idempotenceKey?: string;
 }) => Promise<{ transferId: string }>;
 
-/** Finds the transfer made for a ledger row, or null. Throws when the lookup could not run. */
+/**
+ * Looks for the transfer made for a ledger row. `not-found` is positive evidence of absence only (see
+ * `findTransfer`); a list that cannot answer is `unknown`, and so is a lookup that throws.
+ */
 export type LookupFn = (args: {
   originId: string;
   destinationId: string;
   ledgerEntryId: string;
   createdAfter?: Date;
-}) => Promise<{ transferId: string; amountUsdDollars: number } | null>;
+}) => Promise<LedgerTransferLookup>;
 
 export type TransferFailure = 'RETRY' | 'AMBIGUOUS' | 'PARKED';
 
@@ -221,6 +243,12 @@ export type LedgerSettlementSummary = {
   parked: number;
   /** Rows settled from a transfer Whop already had, without sending. */
   recovered: number;
+  /** Attempts with an unknown outcome parked for a person (the lookup is not verified). */
+  needsAttention: number;
+  /** The wall-clock budget ran out: the remaining rows were left for the next run. */
+  budgetExhausted: boolean;
+  /** How many rows that left untouched. */
+  deferred: number;
   /** Rows on which at least one refund debit was netted this run. */
   netted: number;
   /** Total cents of refund debits netted this run. */
@@ -237,6 +265,9 @@ const emptySummary = (): LedgerSettlementSummary => ({
   retrying: 0,
   parked: 0,
   recovered: 0,
+  needsAttention: 0,
+  budgetExhausted: false,
+  deferred: 0,
   netted: 0,
   debitAppliedUsdCents: 0,
   blocked: null,
@@ -259,6 +290,8 @@ type Candidate = {
   transferUsdCents: number | null;
   attempts: number;
   createdAt: Date;
+  /** An earlier attempt ended with an unknown outcome: a transfer may exist. */
+  maybeSentAt: Date | null;
   payee: Payee | null;
 };
 
@@ -273,6 +306,7 @@ function selectFor(cfg: LedgerConfig) {
     reversedUsdCents: true,
     transferUsdCents: true,
     transferAttempts: true,
+    maybeSentAt: true,
     [cfg.payeeRel]: {
       select: { whopCompanyId: true, whopPayoutsEnabled: true, archivedAt: true, trialEndsAt: true },
     },
@@ -291,6 +325,7 @@ function toCandidate(cfg: LedgerConfig, raw: any): Candidate {
     transferUsdCents: raw.transferUsdCents ?? null,
     attempts: raw.transferAttempts ?? 0,
     createdAt: raw.createdAt,
+    maybeSentAt: raw.maybeSentAt ?? null,
     payee: raw[cfg.payeeRel] ?? null,
   };
 }
@@ -303,8 +338,24 @@ function payeeFilter(cfg: LedgerConfig) {
   };
 }
 
-/** Thrown inside the netting transaction to roll it back when a debit was taken by someone else. */
+/** Thrown inside a netting or restoring transaction to roll it back when a debit moved under it. */
 class NettingConflict extends Error {}
+
+type Allocation = { id: string; amountUsdCents: number };
+
+function parseAllocations(raw: unknown): Allocation[] {
+  if (typeof raw !== 'string' || raw === '') return [];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    return Array.isArray(parsed)
+      ? parsed.filter(
+          (a): a is Allocation => !!a && typeof a.id === 'string' && Number.isInteger(a.amountUsdCents) && a.amountUsdCents > 0,
+        )
+      : [];
+  } catch {
+    return [];
+  }
+}
 
 type Fresh =
   /** The claim missed: the row moved (another run, or a refund). Nothing was written. */
@@ -318,7 +369,8 @@ type Fresh =
 
 /**
  * The atomic heart: read the payee's open debits, decide what to net, CLAIM the row (fixing its
- * transfer amount) and apply the debits, all in one transaction. See the module docstring.
+ * transfer amount and recording how the netting was split) and apply the debits, all in one
+ * transaction. See the module docstring.
  */
 async function claimFresh(db: LedgerTransferDb, cfg: LedgerConfig, row: Candidate, at: Date): Promise<Fresh> {
   return db.$transaction(async (tx): Promise<Fresh> => {
@@ -346,6 +398,16 @@ async function claimFresh(db: LedgerTransferDb, cfg: LedgerConfig, row: Candidat
       }
     }
 
+    // How much of each debit this claim takes, decided before the claim so it is recorded on the row.
+    const plan: Array<{ d: (typeof debits)[number]; take: number }> = [];
+    let left = debitApplied;
+    for (const d of debits) {
+      if (left <= 0) break;
+      const take = Math.min(left, d.amountUsdCents - d.appliedUsdCents);
+      plan.push({ d, take });
+      left -= take;
+    }
+
     // The claim names the state, the refund total AND the absence of an earlier claim, so none of
     // the three can have moved since this row was read.
     const claimed = await tx[cfg.entry].updateMany({
@@ -354,6 +416,8 @@ async function claimFresh(db: LedgerTransferDb, cfg: LedgerConfig, row: Candidat
         grossShareUsdCents: gross,
         transferUsdCents: net,
         adjustmentAppliedUsdCents: debitApplied > 0 ? debitApplied : null,
+        adjustmentAllocations:
+          plan.length > 0 ? JSON.stringify(plan.map((p) => ({ id: p.d.id, amountUsdCents: p.take }))) : null,
         lastError: null,
         nextAttemptAt: null,
         ...(net > 0
@@ -363,10 +427,7 @@ async function claimFresh(db: LedgerTransferDb, cfg: LedgerConfig, row: Candidat
     });
     if (claimed.count === 0) return { kind: 'MISSED' };
 
-    let left = debitApplied;
-    for (const d of debits) {
-      if (left <= 0) break;
-      const take = Math.min(left, d.amountUsdCents - d.appliedUsdCents);
+    for (const { d, take } of plan) {
       const nowApplied = d.appliedUsdCents + take;
       const swapped = await tx[cfg.adjustment].updateMany({
         // The CAS: still OPEN and still at the applied total we read. Another settle that took any
@@ -375,38 +436,147 @@ async function claimFresh(db: LedgerTransferDb, cfg: LedgerConfig, row: Candidat
         data: { appliedUsdCents: nowApplied, state: nowApplied >= d.amountUsdCents ? 'APPLIED' : 'OPEN' },
       });
       if (swapped.count === 0) throw new NettingConflict();
-      left -= take;
     }
 
     return net > 0 ? { kind: 'SEND', amountCents: net, debitApplied } : { kind: 'SWALLOWED', debitApplied };
   });
 }
 
+/**
+ * A DEFINITIVE refusal (Whop answered "no": nothing was created) of an attempt that could not have
+ * been preceded by one with an unknown outcome: make the row fresh again. The fixed transfer amount
+ * is cleared and the debits the claim applied are restored exactly (from the recorded allocations),
+ * all in one transaction, so a refund that arrives before the next claim REDUCES the share instead
+ * of becoming a debit on a transfer that never left.
+ *
+ * Not done (returns false, and the caller keeps the fixed amount) when a refund landed while the
+ * attempt was in flight: that refund is already a debit and its reduction is already on the row, and
+ * un-fixing the amount would charge it twice.
+ */
+export async function restoreRowToFresh(
+  db: LedgerTransferDb,
+  cfg: LedgerConfig,
+  input: {
+    rowId: string;
+    fromState: string;
+    patch: Record<string, unknown>;
+    /** Runs inside the same transaction once the row is fresh (e.g. an audit row). */
+    afterRestore?: (tx: LedgerTx) => Promise<void>;
+  },
+): Promise<boolean> {
+  try {
+    return await db.$transaction(async (tx) => {
+      const cur = await tx[cfg.entry].findUnique({
+        where: { id: input.rowId },
+        select: {
+          state: true,
+          transferUsdCents: true,
+          reversedUsdCents: true,
+          grossShareUsdCents: true,
+          adjustmentAllocations: true,
+          [cfg.shareKey]: true,
+        },
+      });
+      if (!cur || cur.state !== input.fromState || cur.transferUsdCents == null) return false;
+      const share = cur[cfg.shareKey] as number;
+      const reversedAtClaim = share - (cur.grossShareUsdCents ?? share);
+      if (cur.reversedUsdCents !== reversedAtClaim) return false;
+
+      for (const a of parseAllocations(cur.adjustmentAllocations)) {
+        const [d] = (await tx[cfg.adjustment].findMany({
+          where: { id: a.id },
+          select: { id: true, appliedUsdCents: true },
+        })) as Array<{ id: string; appliedUsdCents: number }>;
+        if (!d || d.appliedUsdCents < a.amountUsdCents) throw new NettingConflict();
+        const restored = await tx[cfg.adjustment].updateMany({
+          where: { id: d.id, appliedUsdCents: d.appliedUsdCents },
+          data: { appliedUsdCents: d.appliedUsdCents - a.amountUsdCents, state: 'OPEN' },
+        });
+        if (restored.count === 0) throw new NettingConflict();
+      }
+
+      const fresh = await tx[cfg.entry].updateMany({
+        where: {
+          id: input.rowId,
+          state: input.fromState,
+          transferUsdCents: cur.transferUsdCents,
+          reversedUsdCents: cur.reversedUsdCents,
+        },
+        data: {
+          state: cfg.waiting,
+          transferUsdCents: null,
+          grossShareUsdCents: share,
+          netPaidUsdCents: null,
+          adjustmentAppliedUsdCents: null,
+          adjustmentAllocations: null,
+          maybeSentAt: null,
+          attentionReason: null,
+          ...input.patch,
+        },
+      });
+      if (fresh.count === 0) throw new NettingConflict();
+      await input.afterRestore?.(tx);
+      return true;
+    });
+  } catch (err) {
+    if (err instanceof NettingConflict) return false;
+    throw err;
+  }
+}
+
+type ReleaseMode = 'retry' | 'parked' | 'ambiguous' | 'attention';
+
+/**
+ * Put a SENDING row back to waiting after an attempt that produced no receipt.
+ *
+ *   retry / parked  Whop answered "no". When no earlier attempt could have created a transfer, the row
+ *                   is made fresh again (`restoreRowToFresh`); otherwise it keeps its fixed amount.
+ *   ambiguous       the outcome is unknown: the amount stays fixed, `maybeSentAt` is set and the row is
+ *                   retried with backoff (lookup first), which is only allowed once the lookup is verified.
+ *   attention       the outcome is unknown and the lookup is not verified: the row waits for a person
+ *                   (`attentionReason`) and the retry selection excludes it.
+ */
 async function releaseAttempt(
   db: LedgerTransferDb,
   cfg: LedgerConfig,
   row: Candidate,
   attemptsNow: number,
-  failure: TransferFailure,
+  mode: ReleaseMode,
   message: string,
   at: Date,
+  canRestore: boolean,
 ): Promise<void> {
-  const parked = failure === 'PARKED';
+  const parked = mode === 'parked';
+  const lastError = (parked ? `PARKED: ${message}` : message).slice(0, 500);
+  const nextAttemptAt =
+    mode === 'attention' ? null : new Date(at.getTime() + (parked ? PARKED_RETRY_MS : retryDelayMs(attemptsNow)));
+
+  if ((mode === 'retry' || mode === 'parked') && canRestore) {
+    const restored = await restoreRowToFresh(db, cfg, {
+      rowId: row.id,
+      fromState: 'SENDING',
+      patch: { lastError, nextAttemptAt },
+    });
+    if (restored) return;
+  }
+
   await db[cfg.entry].updateMany({
     where: { id: row.id, state: 'SENDING' },
     data: {
       state: cfg.waiting,
-      lastError: (parked ? `PARKED: ${message}` : message).slice(0, 500),
-      nextAttemptAt: new Date(at.getTime() + (parked ? PARKED_RETRY_MS : retryDelayMs(attemptsNow))),
+      lastError,
+      nextAttemptAt,
+      ...(mode === 'ambiguous' || mode === 'attention' ? { maybeSentAt: row.maybeSentAt ?? at } : {}),
+      ...(mode === 'attention' ? { attentionReason: AMBIGUOUS_UNVERIFIED } : {}),
     },
   });
 }
 
 /** The referral path also keeps its append-only fee-ledger receipt for the transfer. */
-async function recordFeeLedgerReceipt(
+export async function recordFeeLedgerReceipt(
   db: LedgerTransferDb,
   cfg: LedgerConfig,
-  row: Candidate,
+  row: { id: string; bookingIntentId: string; payeeId: string },
   info: { transferId: string; netCents: number },
 ): Promise<void> {
   if (cfg.kind !== 'referral' || !db.feeLedgerEntry) return;
@@ -427,16 +597,23 @@ async function recordFeeLedgerReceipt(
   });
 }
 
+export type SettleOptions = {
+  transfer: TransferFn;
+  lookup: LookupFn;
+  at: Date;
+  /** Restrict the run to ONE ledger row (the post-payment trigger). Same rules, same guards. */
+  only?: { bookingIntentId: string; payeeId: string };
+  /**
+   * A wall-clock budget (epoch ms). Rows are processed oldest first; once it passes, the run stops
+   * cleanly, reports `budgetExhausted` and leaves the remaining rows untouched for the next run.
+   */
+  deadlineMs?: number;
+};
+
 export async function settleLedger(
   db: LedgerTransferDb,
   cfg: LedgerConfig,
-  opts: {
-    transfer: TransferFn;
-    lookup: LookupFn;
-    at: Date;
-    /** Restrict the run to ONE ledger row (the post-payment trigger). Same rules, same guards. */
-    only?: { bookingIntentId: string; payeeId: string };
-  },
+  opts: SettleOptions,
 ): Promise<LedgerSettlementSummary> {
   const summary = emptySummary();
 
@@ -460,13 +637,15 @@ export async function settleLedger(
   const select = selectFor(cfg);
 
   // Waiting rows whose payee can receive money and whose retry time has come. A payee who cannot
-  // receive money yet is simply not selected and stays waiting, forfeiting nothing.
+  // receive money yet is simply not selected and stays waiting, forfeiting nothing. Rows waiting for
+  // a person (`attentionReason`) are never selected.
   const due = (await db[cfg.entry].findMany({
     where: {
       ...scope,
       ...allowScope,
       state: cfg.waiting,
       settledAt: null,
+      attentionReason: null,
       OR: [{ nextAttemptAt: null }, { nextAttemptAt: { lte: at } }],
       [cfg.payeeRel]: payeeFilter(cfg),
     },
@@ -490,21 +669,132 @@ export async function settleLedger(
     take: BATCH,
   })) as unknown[];
 
-  const rows = [...due, ...stale].map((r) => toCandidate(cfg, r));
-  summary.matched = rows.length;
+  // Rows waiting for a person: only ever LOOKED UP here (a transfer found is positive evidence and
+  // settles the row); nothing is sent for them.
+  const flagged = (await db[cfg.entry].findMany({
+    where: {
+      ...scope,
+      ...allowScope,
+      state: cfg.waiting,
+      settledAt: null,
+      attentionReason: { not: null },
+      [cfg.payeeRel]: { whopCompanyId: { not: null } },
+    },
+    select,
+    orderBy: { createdAt: 'asc' },
+    take: BATCH,
+  })) as unknown[];
 
-  for (const row of rows) {
+  const toSend = [...due, ...stale]
+    .map((r) => toCandidate(cfg, r))
+    .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+  const toCheck = flagged.map((r) => toCandidate(cfg, r));
+  summary.matched = toSend.length + toCheck.length;
+
+  const work: Array<() => Promise<void>> = [
+    ...toCheck.map((row) => () => recoverFlaggedRow(db, cfg, row, { ...opts, originId }, summary)),
+    ...toSend.map((row) => () => processRow(db, cfg, row, { ...opts, originId, allowlist }, summary)),
+  ];
+  const ids = [...toCheck, ...toSend].map((r) => r.id);
+
+  for (let i = 0; i < work.length; i += 1) {
+    if (opts.deadlineMs !== undefined && Date.now() >= opts.deadlineMs) {
+      summary.budgetExhausted = true;
+      summary.deferred = work.length - i;
+      break;
+    }
     try {
-      await processRow(db, cfg, row, { ...opts, originId, allowlist }, summary);
+      await work[i]();
     } catch (err) {
       summary.failed += 1;
       console.error(
         `[${cfg.logTag}] ROW FAILED`,
-        JSON.stringify({ entryId: row.id, error: err instanceof Error ? err.message : String(err) }),
+        JSON.stringify({ entryId: ids[i], error: err instanceof Error ? err.message : String(err) }),
       );
     }
   }
   return summary;
+}
+
+/** The lookup result for a row, with a thrown failure folded into `unknown`. */
+async function lookupRow(
+  lookup: LookupFn,
+  args: { originId: string; destinationId: string; row: Candidate },
+): Promise<LedgerTransferLookup> {
+  try {
+    return await lookup({
+      originId: args.originId,
+      destinationId: args.destinationId,
+      ledgerEntryId: args.row.id,
+      createdAfter: args.row.createdAt,
+    });
+  } catch (err) {
+    return { kind: 'unknown', reason: `transfer lookup failed: ${err instanceof Error ? err.message : String(err)}` };
+  }
+}
+
+function foundNet(
+  cfg: LedgerConfig,
+  row: Candidate,
+  found: { transferId: string; amountUsdDollars: number },
+  claimedCents: number,
+): number {
+  const foundCents = Math.round(found.amountUsdDollars * 100);
+  if (Number.isInteger(foundCents) && foundCents !== claimedCents) {
+    console.error(
+      `[${cfg.logTag}] FOUND TRANSFER DIFFERS FROM THE CLAIMED AMOUNT`,
+      JSON.stringify({ entryId: row.id, transferId: found.transferId, claimedUsdCents: claimedCents, foundUsdCents: foundCents }),
+    );
+    return foundCents;
+  }
+  return claimedCents;
+}
+
+/** A row waiting for a person: settle it only if Whop shows its transfer. */
+async function recoverFlaggedRow(
+  db: LedgerTransferDb,
+  cfg: LedgerConfig,
+  row: Candidate,
+  ctx: { lookup: LookupFn; at: Date; originId: string },
+  summary: LedgerSettlementSummary,
+): Promise<void> {
+  const destination = row.payee?.whopCompanyId;
+  if (!destination || row.transferUsdCents == null) {
+    summary.skipped += 1;
+    return;
+  }
+  const result = await lookupRow(ctx.lookup, { originId: ctx.originId, destinationId: destination, row });
+  if (result.kind !== 'found') {
+    summary.skipped += 1;
+    return;
+  }
+  const netCents = foundNet(cfg, row, result, row.transferUsdCents);
+  const done = await db[cfg.entry].updateMany({
+    where: { id: row.id, state: cfg.waiting, attentionReason: { not: null }, settledAt: null },
+    data: {
+      state: 'SETTLED',
+      settledAt: ctx.at,
+      whopTransferId: result.transferId,
+      netPaidUsdCents: netCents,
+      lastError: null,
+      nextAttemptAt: null,
+      attentionReason: null,
+    },
+  });
+  if (done.count === 0) {
+    summary.skipped += 1;
+    return;
+  }
+  summary.settled += 1;
+  summary.recovered += 1;
+  try {
+    await recordFeeLedgerReceipt(db, cfg, row, { transferId: result.transferId, netCents });
+  } catch (err) {
+    console.error(
+      `[${cfg.logTag}] FEE LEDGER RECEIPT NOT WRITTEN`,
+      JSON.stringify({ entryId: row.id, transferId: result.transferId, error: err instanceof Error ? err.message : String(err) }),
+    );
+  }
 }
 
 async function processRow(
@@ -528,7 +818,10 @@ async function processRow(
 
   let amountCents: number;
   let attemptsNow: number;
-  let lookupFirst: boolean;
+  /** A transfer for this row may already exist in Whop: look before any send. */
+  let needsLookup: boolean;
+  /** No earlier attempt could have created a transfer, so a definitive refusal leaves nothing behind. */
+  let canRestore: boolean;
 
   if (row.transferUsdCents == null) {
     // A FRESH row: nothing has been claimed for it yet.
@@ -591,10 +884,11 @@ async function processRow(
     }
     amountCents = outcome.amountCents;
     attemptsNow = row.attempts + 1;
-    lookupFirst = false;
+    needsLookup = false;
+    canRestore = true;
   } else {
-    // A row that was claimed before: a retry of a failed or ambiguous attempt, or a SENDING row
-    // whose run died. The amount is the one fixed at the first claim.
+    // A row that was claimed before: a retry of an attempt, or a SENDING row whose run died. The
+    // amount is the one fixed at the first claim.
     if (row.state !== 'SENDING' && !mayPay()) {
       summary.skipped += 1;
       return;
@@ -605,6 +899,7 @@ async function processRow(
         state: row.state,
         transferUsdCents: row.transferUsdCents,
         transferAttempts: row.attempts,
+        attentionReason: null,
       },
       data: { state: 'SENDING', transferAttempts: row.attempts + 1, lastAttemptAt: at },
     });
@@ -614,50 +909,48 @@ async function processRow(
     }
     amountCents = row.transferUsdCents;
     attemptsNow = row.attempts + 1;
-    lookupFirst = true;
+    // A SENDING row's run died mid-flight, and a waiting row with `maybeSentAt` ended an attempt with an
+    // unknown outcome: either may have created a transfer. A waiting row without it was refused outright.
+    needsLookup = row.state === 'SENDING' || row.maybeSentAt != null;
+    canRestore = !needsLookup;
   }
 
-  const fail = async (failure: TransferFailure, message: string) => {
+  const verified = idempotenceVerified();
+
+  const release = async (mode: ReleaseMode, message: string) => {
     summary.failed += 1;
-    if (failure === 'PARKED') summary.parked += 1;
+    if (mode === 'parked') summary.parked += 1;
+    else if (mode === 'attention') summary.needsAttention += 1;
     else summary.retrying += 1;
-    await releaseAttempt(db, cfg, row, attemptsNow, failure, message, at);
+    await releaseAttempt(db, cfg, row, attemptsNow, mode, message, at, canRestore);
     console.error(
-      `[${cfg.logTag}] TRANSFER ${failure === 'PARKED' ? 'PARKED' : 'FAILED'}`,
-      JSON.stringify({ entryId: row.id, failure, attempt: attemptsNow, error: message }),
+      `[${cfg.logTag}] TRANSFER ${mode === 'parked' ? 'PARKED' : mode === 'attention' ? 'NEEDS ATTENTION' : 'FAILED'}`,
+      JSON.stringify({ entryId: row.id, mode, attempt: attemptsNow, error: message }),
     );
   };
+  /** An unknown outcome: retry (lookup first) once the lookup is verified, otherwise wait for a person. */
+  const unknownOutcome = (message: string) => release(verified ? 'ambiguous' : 'attention', message);
 
   let transferId: string | null = null;
   let netCents = amountCents;
 
-  if (lookupFirst) {
-    try {
-      const found = await ctx.lookup({
-        originId: ctx.originId,
-        destinationId: destination,
-        ledgerEntryId: row.id,
-        createdAfter: row.createdAt,
-      });
-      if (found) {
-        transferId = found.transferId;
-        const foundCents = Math.round(found.amountUsdDollars * 100);
-        if (Number.isInteger(foundCents) && foundCents !== amountCents) {
-          console.error(
-            `[${cfg.logTag}] FOUND TRANSFER DIFFERS FROM THE CLAIMED AMOUNT`,
-            JSON.stringify({ entryId: row.id, transferId, claimedUsdCents: amountCents, foundUsdCents: foundCents }),
-          );
-          netCents = foundCents;
-        }
-        summary.recovered += 1;
-      }
-    } catch (err) {
-      await fail('AMBIGUOUS', `transfer lookup failed: ${err instanceof Error ? err.message : String(err)}`);
+  if (needsLookup) {
+    const result = await lookupRow(ctx.lookup, { originId: ctx.originId, destinationId: destination, row });
+    if (result.kind === 'found') {
+      transferId = result.transferId;
+      netCents = foundNet(cfg, row, result, amountCents);
+      summary.recovered += 1;
+    } else if (result.kind === 'unknown') {
+      // The lookup could not see the transfer: "no row matched" is not evidence it does not exist.
+      await unknownOutcome(result.reason);
       return;
-    }
-    if (!transferId && !mayPay()) {
+    } else if (!verified) {
+      // The list looks usable, but nothing has proven it would show our transfer.
+      await unknownOutcome('ambiguous-unverified: no transfer found, but the transfer lookup has not been verified');
+      return;
+    } else if (!mayPay()) {
       // Nothing was sent and the payee cannot be paid now: back to waiting, with the reason.
-      await fail('RETRY', 'payee cannot receive transfers right now');
+      await release('retry', 'payee cannot receive transfers right now');
       return;
     }
   }
@@ -672,7 +965,10 @@ async function processRow(
         idempotenceKey: row.id,
       }));
     } catch (err) {
-      await fail(classifyTransferFailure(err), err instanceof Error ? err.message : String(err));
+      const failure = classifyTransferFailure(err);
+      const message = err instanceof Error ? err.message : String(err);
+      if (failure === 'AMBIGUOUS') await unknownOutcome(message);
+      else await release(failure === 'PARKED' ? 'parked' : 'retry', message);
       return;
     }
   }
@@ -760,25 +1056,43 @@ export async function settleLedgerEntryBestEffort(
   }
 }
 
+export type UnconfirmedReason =
+  /** A person must decide whether the transfer went out (`attentionReason`). */
+  | 'needs-attention'
+  /** SENDING for 30+ minutes after accrual. */
+  | 'sending'
+  /** Waiting for a payee who can receive money, 30+ minutes after accrual. */
+  | 'waiting'
+  /** Waiting, but the recruiter is archived or retired: nothing will move until they are reinstated. */
+  | 'payee-inactive'
+  /** A transfer was claimed (it may exist) and the payee can no longer receive money. */
+  | 'payee-unpayable';
+
 export type UnconfirmedTransfer = {
   ledger: LedgerConfig['kind'];
   id: string;
   payeeId: string;
   state: string;
+  reason: UnconfirmedReason;
   amountUsdCents: number;
   attempts: number;
   lastError: string | null;
+  attentionReason: string | null;
   createdAt: Date;
 };
 
 /**
- * Rows that should have a receipt by now and do not: SENDING, or waiting with a payee who can
- * receive money, in either case older than `UNCONFIRMED_AFTER_MS` since accrual. The cron turns a
- * non-empty result into a 207 and a console.error naming the ids, and the admin page lists them.
+ * Rows that should have a receipt by now and do not. A row is listed when it
+ *   - is waiting for a person (`attentionReason`), at once; or
+ *   - is older than `UNCONFIRMED_AFTER_MS` since accrual and is SENDING, or waiting with a payee who
+ *     can receive money (an inactive recruiter included, listed as `payee-inactive`), or waiting with a
+ *     transfer already claimed whatever the payee's state now (`payee-unpayable`: it may exist).
+ * The cron turns a non-empty result into a 207 and a console.error naming the ids, and the admin page
+ * lists them.
  *
  * Empty unless transfers are enabled (while they are off nothing is expected to move), and it
- * respects the allowlist (a row for a payee outside it is not expected to move either). A payee who
- * cannot receive money yet is not a failure and is not listed.
+ * respects the allowlist (a row for a payee outside it is not expected to move either). An unclaimed
+ * row whose payee cannot receive money yet is not a failure and is not listed.
  */
 export async function findUnconfirmedTransfers(
   db: LedgerTransferDb,
@@ -793,8 +1107,17 @@ export async function findUnconfirmedTransfers(
       where: {
         ...allowScope,
         settledAt: null,
-        createdAt: { lte: new Date(opts.at.getTime() - UNCONFIRMED_AFTER_MS) },
-        OR: [{ state: 'SENDING' }, { state: cfg.waiting, [cfg.payeeRel]: payeeFilter(cfg) }],
+        OR: [
+          { attentionReason: { not: null } },
+          {
+            createdAt: { lte: new Date(opts.at.getTime() - UNCONFIRMED_AFTER_MS) },
+            OR: [
+              { state: 'SENDING' },
+              { state: cfg.waiting, transferUsdCents: { not: null } },
+              { state: cfg.waiting, [cfg.payeeRel]: { whopCompanyId: { not: null }, whopPayoutsEnabled: true } },
+            ],
+          },
+        ],
       },
       select: {
         id: true,
@@ -806,22 +1129,33 @@ export async function findUnconfirmedTransfers(
         transferUsdCents: true,
         transferAttempts: true,
         lastError: true,
+        attentionReason: true,
+        [cfg.payeeRel]: { select: { whopCompanyId: true, whopPayoutsEnabled: true, archivedAt: true, trialEndsAt: true } },
       },
       orderBy: { createdAt: 'asc' },
       take: 200,
     })) as Array<Record<string, any>>; // eslint-disable-line @typescript-eslint/no-explicit-any
     for (const r of rows) {
+      const payee = (r[cfg.payeeRel] ?? null) as Payee | null;
+      let reason: UnconfirmedReason;
+      if (r.attentionReason) reason = 'needs-attention';
+      else if (r.state === 'SENDING') reason = 'sending';
+      else if (!isPayable(payee)) reason = 'payee-unpayable';
+      else if (cfg.activePayeeOnly && !isActivePayee(payee)) reason = 'payee-inactive';
+      else reason = 'waiting';
       out.push({
         ledger: cfg.kind,
         id: r.id,
         payeeId: r[cfg.payeeKey],
         state: r.state,
+        reason,
         amountUsdCents: r.transferUsdCents ?? Math.max(0, r[cfg.shareKey] - (r.reversedUsdCents ?? 0)),
         attempts: r.transferAttempts ?? 0,
         lastError: r.lastError ?? null,
+        attentionReason: r.attentionReason ?? null,
         createdAt: r.createdAt,
       });
     }
   }
-  return out.filter((r) => r.amountUsdCents > 0 || r.state === 'SENDING');
+  return out.filter((r) => r.amountUsdCents > 0 || r.state === 'SENDING' || r.reason === 'needs-attention');
 }

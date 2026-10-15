@@ -14,6 +14,10 @@ import { fakeLedgerDb } from './helpers/fake-ledger-db';
  */
 
 const state = vi.hoisted(() => ({ db: null as any }));
+// The component renders forms bound to a server action; the action module needs these at import time.
+vi.mock('@/auth', () => ({ auth: vi.fn() }));
+vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
+vi.mock('next/navigation', () => ({ redirect: vi.fn() }));
 vi.mock('@/lib/prisma', () => ({
   get prisma() {
     return state.db;
@@ -70,7 +74,29 @@ describe('TransfersNeedingAttention', () => {
     expect(html).toContain('$20.00');
     expect(html).toContain('verify your business');
     expect(html).toContain('metadata.ledger_entry_id');
-    expect(html).not.toMatch(/<form|<button|<input/);
+    // Only the rows waiting for a person get the audited decision forms.
+    expect((html.match(/<form/g) ?? []).length).toBe(0);
+  });
+
+  it('a row waiting for a person is listed at once, with both decisions as forms to the admin action', async () => {
+    process.env.WHOP_TRANSFERS_ENABLED = 'true';
+    state.db = fakeLedgerDb({
+      practitioners: wallets,
+      affiliate: {
+        entries: [
+          { id: 'afl_flag', bookingIntentId: 'b9', recruiterPractitionerId: 'R', shareUsdCents: 300, state: 'ACCRUED', transferUsdCents: 300, attentionReason: 'ambiguous-unverified', lastError: 'timeout', createdAt: NOW },
+        ],
+      },
+    });
+    const html = (await render())!;
+    expect(html).toContain('afl_flag');
+    expect(html).toContain('Outcome unknown: decide');
+    expect((html.match(/<form/g) ?? []).length).toBe(2);
+    expect(html).toContain('It went out (record id)');
+    expect(html).toContain('It did not go out (retry)');
+    expect(html).toContain('name="outcome" value="went-out"');
+    expect(html).toContain('name="outcome" value="did-not-go-out"');
+    expect(html).toContain('name="rowId" value="afl_flag"');
   });
 
   it('renders nothing when every share has a receipt', async () => {
@@ -83,7 +109,12 @@ describe('TransfersNeedingAttention', () => {
     const page = readFileSync(join(__dirname, '..', 'src/app/admin/commercial-settings/page.tsx'), 'utf8');
     expect(page.indexOf("role !== 'ADMIN'")).toBeLessThan(page.indexOf('<TransfersNeedingAttention'));
     const src = readFileSync(join(__dirname, '..', 'src/app/admin/commercial-settings/TransfersNeedingAttention.tsx'), 'utf8');
+    // No direct database writes of its own: the only write path is the audited admin action.
     expect(src).not.toMatch(/\.(update|updateMany|create|createMany|upsert|delete|deleteMany)\(/);
-    expect(src).not.toMatch(/'use server'/);
+    expect(src).toMatch(/action=\{resolveTransferAttentionAction\}/);
+    const actions = readFileSync(join(__dirname, '..', 'src/app/admin/commercial-settings/actions.ts'), 'utf8');
+    const fn = actions.slice(actions.indexOf('export async function resolveTransferAttentionAction'));
+    expect(fn.indexOf('await authorizeAdmin()')).toBeGreaterThan(-1);
+    expect(fn.indexOf('await authorizeAdmin()')).toBeLessThan(fn.indexOf('resolveTransferAttention('));
   });
 });

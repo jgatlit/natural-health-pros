@@ -31,9 +31,9 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function fakeDeps(over: Partial<{ firstId: string; repeatId: string; found: boolean; balances: Array<number | Error> }> = {}) {
+function fakeDeps(over: Partial<{ firstId: string; repeatId: string; found: boolean; sibling: boolean; balances: Array<number | Error> }> = {}) {
   const calls: string[] = [];
-  const o = { firstId: 'tr_1', repeatId: 'tr_1', found: true, ...over };
+  const o = { firstId: 'tr_1', repeatId: 'tr_1', found: true, sibling: true, ...over };
   // parent before, sibling before, parent after, sibling after
   const balances = over.balances ?? [100, 10, 98.97, 10.97];
   let b = 0;
@@ -53,7 +53,11 @@ function fakeDeps(over: Partial<{ firstId: string; repeatId: string; found: bool
     find: vi.fn(async (args: any) => {
       calls.push('find');
       const rec = { id: o.firstId, amount: 1, feeAmount: 0.03, metadata: { canary: 'step0' }, createdAt: null };
-      return o.found && args.match(rec) ? rec : null;
+      return o.found && args.match(rec) ? { kind: 'found' as const, transfer: rec } : { kind: 'not-found' as const };
+    }),
+    isSibling: vi.fn(async (id: string) => {
+      calls.push(`sibling:${id}`);
+      return o.sibling;
     }),
   };
   return { deps, calls };
@@ -77,8 +81,10 @@ describe('dry run (the default): sends nothing', () => {
     expect(text).toContain('biz_sibling');
     expect(text).toContain('$1.00');
     expect(text).toContain('idempotence_key');
+    expect(text).toMatch(/GET \/companies\/biz_sibling .*connected account of biz_parent/);
     expect(text).toContain('{"canary":"step0"}');
     expect(text).toContain(`CANARY_CONFIRM=${TODAY}`);
+    expect(deps.isSibling).not.toHaveBeenCalled();
     expect(deps.balance).not.toHaveBeenCalled();
     expect(deps.transfer).not.toHaveBeenCalled();
     expect(deps.find).not.toHaveBeenCalled();
@@ -111,6 +117,7 @@ describe('--go needs the confirmation', () => {
       const out = await runCanary({ argv: GO, env: { ...ENV, ...(confirm === undefined ? {} : { CANARY_CONFIRM: confirm }) }, now: NOW, deps });
       expect(out.kind).toBe('refused');
       if (out.kind === 'refused') expect(out.reason).toContain(`CANARY_CONFIRM=${TODAY}`);
+      expect(deps.isSibling).not.toHaveBeenCalled();
       expect(deps.balance).not.toHaveBeenCalled();
       expect(deps.transfer).not.toHaveBeenCalled();
       expect(deps.find).not.toHaveBeenCalled();
@@ -147,6 +154,43 @@ describe('--go needs the confirmation', () => {
   });
 });
 
+describe('--go refuses a destination that is not a sibling', () => {
+  const run = (deps: CanaryDeps) => runCanary({ argv: GO, env: { ...ENV, CANARY_CONFIRM: TODAY }, now: NOW, deps });
+
+  it('reads the company first and refuses, sending nothing, when it is not a connected account of the parent', async () => {
+    const { deps, calls } = fakeDeps({ sibling: false });
+    const out = await run(deps);
+    expect(out.kind).toBe('refused');
+    if (out.kind === 'refused') expect(out.reason).toMatch(/not a connected account \(sibling\) of biz_parent.*nothing was sent/);
+    expect(calls).toEqual(['sibling:biz_sibling']);
+    expect(deps.transfer).not.toHaveBeenCalled();
+    expect(deps.balance).not.toHaveBeenCalled();
+  });
+
+  it('refuses, sending nothing, when the company cannot be read', async () => {
+    const { deps } = fakeDeps();
+    (deps.isSibling as any).mockRejectedValue(new Error('Whop /companies/biz_sibling failed (404)'));
+    const out = await run(deps);
+    expect(out.kind).toBe('refused');
+    if (out.kind === 'refused') expect(out.reason).toMatch(/could not verify.*404.*nothing was sent/);
+    expect(deps.transfer).not.toHaveBeenCalled();
+  });
+
+  it('against a fake fetch: a company under ANOTHER parent is refused and no balance or transfer request is made', async () => {
+    const requests: string[] = [];
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (url: string, init: any = {}) => {
+        requests.push(`${init.method ?? 'GET'} ${url}`);
+        return new Response(JSON.stringify({ id: 'biz_sibling', parent_company_id: 'biz_someone_else' }), { status: 200 });
+      }),
+    );
+    const out = await runCanary({ argv: GO, env: { ...ENV, CANARY_CONFIRM: TODAY }, now: NOW });
+    expect(out.kind).toBe('refused');
+    expect(requests).toEqual(['GET https://api.whop.com/api/v1/companies/biz_sibling']);
+  });
+});
+
 describe('--go with the confirmation: the Step 0 sequence', () => {
   const go = (deps: CanaryDeps) => runCanary({ argv: GO, env: { ...ENV, CANARY_CONFIRM: TODAY }, now: NOW, deps });
 
@@ -155,6 +199,7 @@ describe('--go with the confirmation: the Step 0 sequence', () => {
     const out = await go(deps);
     expect(out.kind).toBe('done');
     expect(calls).toEqual([
+      'sibling:biz_sibling',
       'balance:biz_parent',
       'balance:biz_sibling',
       'transfer',
@@ -184,6 +229,7 @@ describe('--go with the confirmation: the Step 0 sequence', () => {
       repeatTransferId: 'tr_1',
       repeatCreatedSecondTransfer: false,
       lookupFoundFirst: true,
+      idempotenceVerdict: expect.stringMatching(/returned the SAME transfer \(tr_1\).*key is honoured/),
       parentDecreaseUsd: 1.03,
       siblingIncreaseUsd: 0.97,
       observedFeeUsd: 0.06,
@@ -199,6 +245,7 @@ describe('--go with the confirmation: the Step 0 sequence', () => {
     if (out.kind !== 'done') throw new Error('expected a report');
     expect(out.report.repeatCreatedSecondTransfer).toBe(true);
     expect(out.report.repeatTransferId).toBe('tr_2');
+    expect(out.report.idempotenceVerdict).toMatch(/created a SECOND transfer \(tr_2\): \$2\.00 moved and the key is NOT honoured/);
   });
 
   it('metadata ignored: the lookup does not find the transfer', async () => {
@@ -219,6 +266,15 @@ describe('--go with the confirmation: the Step 0 sequence', () => {
     expect(out.report.lookupFoundFirst).toBe(true);
   });
 
+  it('a transfer list that cannot answer (unknown) is reported with its reason, not as not-found', async () => {
+    const { deps } = fakeDeps();
+    (deps.find as any).mockResolvedValue({ kind: 'unknown', reason: 'the transfer list rows carry no metadata field' });
+    const out = await go(deps);
+    if (out.kind !== 'done') throw new Error('expected a report');
+    expect(out.report.lookupFoundFirst).toBeNull();
+    expect(out.report.lookupError).toMatch(/no metadata field/);
+  });
+
   it('a refused first transfer stops the sequence: no repeat, no lookup, exit code 1, the reason in the report', async () => {
     const { deps } = fakeDeps();
     (deps.transfer as any).mockRejectedValueOnce(new Error('Whop /transfers failed (403): Please verify your business before transferring funds'));
@@ -237,13 +293,14 @@ describe('--go with the confirmation: the Step 0 sequence', () => {
     const out = await go(deps);
     if (out.kind !== 'done') throw new Error('expected a report');
     expect(out.report.repeatError).toMatch(/409/);
+    expect(out.report.idempotenceVerdict).toMatch(/rejected.*does not by itself show/);
     expect(out.report.repeatCreatedSecondTransfer).toBeNull();
     expect(out.exitCode).toBe(0);
   });
 });
 
 describe('--go through the REAL whop.ts helpers against a fake fetch: the wire format', () => {
-  it('posts dollars with idempotence_key, metadata and the Idempotency-Key header; reads balances and the transfer list', async () => {
+  it('posts dollars with idempotence_key and metadata in the BODY only; verifies the sibling, reads balances and the transfer list', async () => {
     const requests: Array<{ url: string; method: string; headers: Record<string, string>; body: any }> = [];
     const balances = [100, 10, 98.97, 10.97];
     let b = 0;
@@ -254,6 +311,9 @@ describe('--go through the REAL whop.ts helpers against a fake fetch: the wire f
         const method = init.method ?? 'GET';
         const body = init.body ? JSON.parse(init.body) : null;
         requests.push({ url, method, headers: init.headers ?? {}, body });
+        if (/\/companies\/biz_sibling$/.test(url)) {
+          return new Response(JSON.stringify({ id: 'biz_sibling', parent_company_id: 'biz_parent' }), { status: 200 });
+        }
         if (url.includes('/ledger_accounts/')) {
           return new Response(JSON.stringify({ balances: [{ currency: 'usd', balance: balances[b++], pending_balance: 0 }] }), { status: 200 });
         }
@@ -286,7 +346,8 @@ describe('--go through the REAL whop.ts helpers against a fake fetch: the wire f
     });
     expect(transferBodies[0].idempotence_key).toMatch(/^canary-step0-2026-10-15-/);
     const post = requests.find((r) => r.method === 'POST')!;
-    expect(post.headers['Idempotency-Key']).toBe(transferBodies[0].idempotence_key);
+    expect(post.headers).not.toHaveProperty('Idempotency-Key');
+    expect(requests[0]!.url).toMatch(/\/companies\/biz_sibling$/); // the sibling check comes before anything is sent
     expect(post.headers.Authorization).toBe('Bearer k_test');
     const list = requests.find((r) => r.url.includes('/transfers?'))!;
     expect(list.url).toContain('origin_id=biz_parent');

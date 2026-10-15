@@ -738,7 +738,7 @@ describe('E2E: refund first, retried payment.succeeded second, settle sends noth
         practitioners: { [R]: { whopCompanyId: 'biz_R', whopPayoutsEnabled: true } },
         entries: [db.affiliate.rows[0]],
       });
-      await settleAffiliateShares(live as any, { transfer, lookup: async () => null, at: new Date(Date.UTC(2030, 0, 1)) });
+      await settleAffiliateShares(live as any, { transfer, lookup: async () => ({ kind: 'not-found' as const }), at: new Date(Date.UTC(2030, 0, 1)) });
       expect(transfer).not.toHaveBeenCalled();
     } finally {
       delete process.env.WHOP_TRANSFERS_ENABLED;

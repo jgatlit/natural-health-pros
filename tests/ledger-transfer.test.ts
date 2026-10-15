@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   PARKED_RETRY_MS,
@@ -13,11 +13,10 @@ import {
   transfersAllowlist,
   type LookupFn,
 } from '@/lib/ledger-transfer';
-import { AFFILIATE_LEDGER, REFERRAL_LEDGER } from '@/lib/ledger-config';
 import { settleAffiliateShares } from '@/lib/affiliate-payouts';
-import { settlePayableShares } from '@/lib/referral-payouts';
 import { WhopNotConfigured } from '@/lib/whop';
-import { fakeLedgerDb, type Entry } from './helpers/fake-ledger-db';
+import { KINDS, MIN, NOW, at, enable, installTransferTestEnv, makeDb, noLookup, okTransfer, VERIFIED, wallets } from './helpers/ledger-kinds';
+import { fakeLedgerDb } from './helpers/fake-ledger-db';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -31,114 +30,7 @@ import { fakeLedgerDb, type Entry } from './helpers/fake-ledger-db';
  * guarded updates, unique keys, transaction rollback); the money arithmetic is the real code.
  */
 
-const ENV = ['WHOP_TRANSFERS_ENABLED', 'WHOP_TRANSFERS_ALLOWLIST', 'WHOP_COMPANY_API_KEY', 'WHOP_PARENT_COMPANY_ID'];
-let saved: Record<string, string | undefined>;
-
-beforeEach(() => {
-  saved = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
-  for (const k of ENV) delete process.env[k];
-  vi.spyOn(console, 'error').mockImplementation(() => {});
-});
-afterEach(() => {
-  for (const [k, v] of Object.entries(saved)) {
-    if (v === undefined) delete process.env[k];
-    else process.env[k] = v;
-  }
-  vi.restoreAllMocks();
-});
-
-const enable = () => {
-  process.env.WHOP_TRANSFERS_ENABLED = 'true';
-  process.env.WHOP_COMPANY_API_KEY = 'test-key';
-  process.env.WHOP_PARENT_COMPANY_ID = 'biz_parent';
-};
-
-const NOW = new Date(Date.UTC(2027, 0, 1));
-const at = (ms: number) => new Date(NOW.getTime() + ms);
-const MIN = 60_000;
-
-const VERIFIED = { whopCompanyId: 'biz_R', whopPayoutsEnabled: true };
-const wallets = {
-  R: VERIFIED,
-  S: { whopCompanyId: 'biz_S', whopPayoutsEnabled: true },
-  U: { whopCompanyId: null, whopPayoutsEnabled: false },
-  P: { whopCompanyId: 'biz_P', whopPayoutsEnabled: false },
-};
-
-const okTransfer = () => {
-  let n = 0;
-  return vi.fn<(args: any) => Promise<{ transferId: string }>>(async () => ({ transferId: `tr_${++n}` }));
-};
-const noLookup: LookupFn = async () => null;
-
-type Kind = {
-  name: 'affiliate' | 'referral';
-  cfg: typeof AFFILIATE_LEDGER;
-  waiting: 'ACCRUED' | 'PAYABLE';
-  payee: 'recruiterPractitionerId' | 'referrerPractitionerId';
-  entry(over?: Record<string, any>): Entry;
-  settle(db: any, over?: Record<string, any>): ReturnType<typeof settleAffiliateShares>;
-  rows(db: any): Entry[];
-  adjustments(db: any): Entry[];
-  entryDelegate(db: any): any;
-  adjustmentDelegate(db: any): any;
-  debit(amount: number, over?: Record<string, any>): Entry;
-};
-
-const KINDS: Kind[] = [
-  {
-    name: 'affiliate',
-    cfg: AFFILIATE_LEDGER,
-    waiting: 'ACCRUED',
-    payee: 'recruiterPractitionerId',
-    entry: (over = {}) => ({
-      bookingIntentId: 'bi_1',
-      recruiterPractitionerId: 'R',
-      recruitedPractitionerId: 'Y',
-      grossUsdCents: 10_000,
-      bps: 300,
-      shareUsdCents: 300,
-      holdDays: 0,
-      holdUntil: new Date(Date.UTC(2026, 11, 1)),
-      ...over,
-    }),
-    settle: (db, over = {}) =>
-      settleAffiliateShares(db, { transfer: okTransfer(), lookup: noLookup, at: NOW, ...over } as any),
-    rows: (db) => db.affiliateRows,
-    adjustments: (db) => db.affiliateAdjustments,
-    entryDelegate: (db) => db.affiliateLedgerEntry,
-    adjustmentDelegate: (db) => db.affiliateBalanceAdjustment,
-    debit: (amount, over = {}) => ({ recruiterPractitionerId: 'R', sourceLedgerEntryId: 'afl_old', amountUsdCents: amount, ...over }),
-  },
-  {
-    name: 'referral',
-    cfg: REFERRAL_LEDGER as any,
-    waiting: 'PAYABLE',
-    payee: 'referrerPractitionerId',
-    entry: (over = {}) => ({
-      bookingIntentId: 'bi_1',
-      referrerPractitionerId: 'R',
-      servingPractitionerId: 'Y',
-      grossUsdCents: 1_500,
-      referrerShareUsdCents: 300,
-      ...over,
-    }),
-    settle: (db, over = {}) =>
-      settlePayableShares(db, { transfer: okTransfer(), lookup: noLookup, at: NOW, ...over } as any) as any,
-    rows: (db) => db.referralRows,
-    adjustments: (db) => db.referralAdjustments,
-    entryDelegate: (db) => db.referralLedgerEntry,
-    adjustmentDelegate: (db) => db.referralBalanceAdjustment,
-    debit: (amount, over = {}) => ({ referrerPractitionerId: 'R', sourceLedgerEntryId: 'rfl_old', amountUsdCents: amount, ...over }),
-  },
-];
-
-function makeDb(k: Kind, o: { practitioners?: Record<string, any>; entries?: Entry[]; adjustments?: Entry[] } = {}) {
-  return fakeLedgerDb({
-    practitioners: o.practitioners ?? wallets,
-    [k.name]: { entries: o.entries, adjustments: o.adjustments },
-  } as any);
-}
+installTransferTestEnv();
 
 describe('pure helpers', () => {
   it('toTransferDollars converts cents to DOLLARS and refuses anything that is not a whole positive amount', () => {
@@ -383,7 +275,7 @@ describe.each(KINDS)('$name ledger: a failed attempt never pays twice and never 
     enable();
     const db = makeDb(k, { entries: [k.entry({ id: 'led_1' })] });
     const transfer = vi.fn().mockRejectedValueOnce(err).mockResolvedValue({ transferId: 'tr_ok' });
-    const lookup = vi.fn<LookupFn>(async () => null);
+    const lookup = vi.fn<LookupFn>(async () => ({ kind: 'not-found' }));
 
     const first = await k.settle(db, { transfer, lookup });
     expect(first).toMatchObject({ failed: 1, retrying: 1 });
@@ -404,7 +296,7 @@ describe.each(KINDS)('$name ledger: a failed attempt never pays twice and never 
     enable();
     const db = makeDb(k, { entries: [k.entry({ id: 'led_1' })] });
     const transfer = vi.fn().mockRejectedValueOnce(new Error('The operation was aborted due to timeout'));
-    const lookup = vi.fn<LookupFn>(async () => ({ transferId: 'tr_found', amountUsdDollars: 3 }));
+    const lookup = vi.fn<LookupFn>(async () => ({ kind: 'found' as const, transferId: 'tr_found', amountUsdDollars: 3 }));
 
     await k.settle(db, { transfer, lookup });
     const second = await k.settle(db, { transfer, lookup, at: at(MIN) });
@@ -418,7 +310,7 @@ describe.each(KINDS)('$name ledger: a failed attempt never pays twice and never 
     enable();
     const db = makeDb(k, { entries: [k.entry()] });
     const transfer = vi.fn().mockRejectedValueOnce(new Error('fetch failed')).mockResolvedValue({ transferId: 'tr_ok' });
-    const lookup = vi.fn<LookupFn>().mockRejectedValueOnce(new Error('Whop /transfers lookup failed (503)')).mockResolvedValue(null);
+    const lookup = vi.fn<LookupFn>().mockRejectedValueOnce(new Error('Whop /transfers lookup failed (503)')).mockResolvedValue({ kind: 'not-found' });
 
     await k.settle(db, { transfer, lookup });
     const second = await k.settle(db, { transfer, lookup, at: at(MIN) });
@@ -506,7 +398,7 @@ describe.each(KINDS)('$name ledger: a failed attempt never pays twice and never 
     await k.settle(db, { transfer });
     delegate.updateMany = real;
 
-    const lookup = vi.fn<LookupFn>(async () => ({ transferId: 'tr_1', amountUsdDollars: 3 }));
+    const lookup = vi.fn<LookupFn>(async () => ({ kind: 'found' as const, transferId: 'tr_1', amountUsdDollars: 3 }));
     const summary = await k.settle(db, { transfer, lookup, at: at(STALE_SENDING_AFTER_MS) });
     expect(summary).toMatchObject({ settled: 1, recovered: 1 });
     expect(transfer).toHaveBeenCalledTimes(1);
@@ -530,7 +422,7 @@ describe.each(KINDS)('$name ledger: a failed attempt never pays twice and never 
     const db = makeDb(k, {
       entries: [k.entry({ id: 'led_1', state: 'SENDING', transferUsdCents: 300, transferAttempts: 1, lastAttemptAt: NOW })],
     });
-    const lookup = vi.fn<LookupFn>(async () => ({ transferId: 'tr_odd', amountUsdDollars: 2.5 }));
+    const lookup = vi.fn<LookupFn>(async () => ({ kind: 'found' as const, transferId: 'tr_odd', amountUsdDollars: 2.5 }));
     await k.settle(db, { transfer: okTransfer(), lookup, at: at(STALE_SENDING_AFTER_MS) });
     expect(k.rows(db)[0]).toMatchObject({ state: 'SETTLED', whopTransferId: 'tr_odd', netPaidUsdCents: 250 });
     expect(console.error).toHaveBeenCalledWith(expect.stringContaining('FOUND TRANSFER DIFFERS'), expect.stringContaining('tr_odd'));
@@ -809,17 +701,29 @@ describe.each(KINDS)('$name ledger: refunds that cross the claim', (k) => {
     expect(k.adjustments(db)).toHaveLength(1); // not booked a second time at the receipt
   });
 
-  it('SENDING then the transfer is REFUSED, then a refund: one debit, and the retry still sends the claimed amount (charged ONCE)', async () => {
+  it('a refund that lands while the attempt is in flight is a debit; if the attempt is then REFUSED the row keeps its fixed amount (the refund is charged once)', async () => {
     enable();
     const db = makeDb(k, { entries: [k.entry()] });
-    const transfer = vi
-      .fn()
-      .mockRejectedValueOnce(new Error('Whop /transfers failed (402): insufficient available balance'))
-      .mockResolvedValue({ transferId: 'tr_ok' });
-    await k.settle(db, { transfer });
-    await reverse(db, 120);
+    let reached!: () => void;
+    const onWire = new Promise<void>((r) => (reached = r));
+    let refuse!: () => void;
+    const gate = new Promise<void>((_, rej) => (refuse = () => rej(new Error('Whop /transfers failed (402): insufficient available balance'))));
+    const slow = vi.fn(async () => {
+      reached();
+      await gate;
+      return { transferId: 'never' };
+    });
+    const run = k.settle(db, { transfer: slow });
+    await onWire;
+    await reverse(db, 120); // booked as a debit: the row is SENDING
+    refuse();
+    await run;
+
+    expect(k.rows(db)[0]).toMatchObject({ state: k.waiting, transferUsdCents: 300, reversedUsdCents: 120 });
+    expect(k.adjustments(db)).toHaveLength(1);
+    const transfer = okTransfer();
     await k.settle(db, { transfer, at: at(MIN) });
-    expect(transfer.mock.calls[1][0].amountUsdDollars).toBe(3);
+    expect(transfer.mock.calls[0][0].amountUsdDollars).toBe(3); // the fixed amount; the refund is the single debit
     expect(k.adjustments(db)).toHaveLength(1);
     expect(k.adjustments(db)[0].amountUsdCents).toBe(120);
   });

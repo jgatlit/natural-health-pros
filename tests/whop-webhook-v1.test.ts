@@ -1213,8 +1213,8 @@ describe('payment.succeeded — the referral ledger (stage 3)', () => {
       process.env.WHOP_TRANSFERS_ENABLED = 'true';
       await deliver();
       await deliver();
-      // Each settle reads its due rows and its stale SENDING rows, always scoped to the one row.
-      await vi.waitFor(() => expect(mocks.affiliateFindMany).toHaveBeenCalledTimes(4));
+      // Each settle reads its due rows, its stale SENDING rows and its flagged rows, always scoped to the one row.
+      await vi.waitFor(() => expect(mocks.affiliateFindMany).toHaveBeenCalledTimes(6));
       for (const call of mocks.affiliateFindMany.mock.calls) {
         expect((call[0] as { where: Record<string, unknown> }).where).toMatchObject({
           bookingIntentId: 'int_1',

@@ -1073,6 +1073,17 @@ model ReferralLedgerEntry {
   lastAttemptAt             DateTime?
   /// Retry backoff: a waiting row is not re-claimed before this instant.
   nextAttemptAt             DateTime?
+  /// How the claim split its netting across the payee's refund debits, as JSON text: [{ "id": <debit id>, "amountUsdCents": n }].
+  /// A definitive refusal (nothing was created in Whop) restores exactly these amounts and clears the
+  /// fixed transfer amount, so the row is fresh again and a later refund reduces it.
+  adjustmentAllocations     String?   @db.Text
+  /// Set when an attempt ended with an UNKNOWN outcome (timeout, 5xx, network error after the request
+  /// was sent): a transfer may exist. Such a row is looked up in Whop before it is ever re-sent.
+  maybeSentAt               DateTime?
+  /// Set when a person must decide, e.g. `ambiguous-unverified`: the outcome is unknown and the
+  /// lookup has not been proven (`WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED`). The retry selection excludes
+  /// the row until an admin records whether the transfer went out.
+  attentionReason           String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -1166,6 +1177,17 @@ model AffiliateLedgerEntry {
   lastAttemptAt             DateTime?
   /// Retry backoff: a waiting row is not re-claimed before this instant.
   nextAttemptAt             DateTime?
+  /// How the claim split its netting across the payee's refund debits, as JSON text: [{ "id": <debit id>, "amountUsdCents": n }].
+  /// A definitive refusal (nothing was created in Whop) restores exactly these amounts and clears the
+  /// fixed transfer amount, so the row is fresh again and a later refund reduces it.
+  adjustmentAllocations     String?   @db.Text
+  /// Set when an attempt ended with an UNKNOWN outcome (timeout, 5xx, network error after the request
+  /// was sent): a transfer may exist. Such a row is looked up in Whop before it is ever re-sent.
+  maybeSentAt               DateTime?
+  /// Set when a person must decide, e.g. `ambiguous-unverified`: the outcome is unknown and the
+  /// lookup has not been proven (`WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED`). The retry selection excludes
+  /// the row until an admin records whether the transfer went out.
+  attentionReason           String?
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

@@ -19,8 +19,13 @@ import { UNCONFIRMED_AFTER_MS, findUnconfirmedTransfers, type LedgerTransferDb }
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
-// One run pays at most a batch of rows per ledger, each bounded by the transfer request timeout.
 export const maxDuration = 300;
+/**
+ * The wall-clock budget of one run, well inside `maxDuration`. The transfer sweeps process rows oldest
+ * first and, once it passes, stop cleanly (the rest are left for the next run) instead of being cut off
+ * mid-row; the response is a 207 that says so.
+ */
+const BUDGET_MS = 240_000;
 
 /**
  * Drift sweep for Whop payout state — the safety net behind the identity_profile.* webhook.
@@ -55,6 +60,7 @@ function authorized(request: NextRequest): boolean {
 }
 
 export async function GET(request: NextRequest) {
+  const startedAtMs = Date.now();
   if (!authorized(request)) {
     return NextResponse.json({ error: 'unauthorized' }, { status: 401 });
   }
@@ -168,7 +174,12 @@ export async function GET(request: NextRequest) {
   // pass that would have paid it.
   const now = new Date();
   const ledgerDb = prisma as unknown as LedgerTransferDb;
-  const deps = { transfer: createTransfer, lookup: findTransferForLedgerEntry, at: now };
+  const deps = {
+    transfer: createTransfer,
+    lookup: findTransferForLedgerEntry,
+    at: now,
+    deadlineMs: startedAtMs + BUDGET_MS,
+  };
   const promoted = await promoteHeldToPayable(prisma).catch((e) => {
     errors.push(`promote-held: ${e instanceof Error ? e.message : String(e)}`);
     return 0;
@@ -192,9 +203,19 @@ export async function GET(request: NextRequest) {
     console.warn('whop-reconcile: affiliate payouts BLOCKED:', affiliates.blocked);
   }
 
-  // A SHARE WITH NO RECEIPT IS AN ERROR, NOT A COUNTER. Any row still SENDING, or still waiting for
-  // a payee who can receive money, more than UNCONFIRMED_AFTER_MS after the payment was accrued is
-  // named here, after this run's own attempt had its chance. They go into `errors` with their ids,
+  const exhausted = [
+    settlement?.budgetExhausted ? `referrals (${settlement.deferred} left)` : null,
+    affiliates?.budgetExhausted ? `recruiters (${affiliates.deferred} left)` : null,
+  ].filter((x): x is string => x !== null);
+  if (exhausted.length > 0) {
+    errors.push(`budget exhausted: the transfer sweep stopped cleanly after ${BUDGET_MS / 1000}s; deferred to the next run: ${exhausted.join(', ')}`);
+    console.error('whop-reconcile: TRANSFER SWEEP BUDGET EXHAUSTED', exhausted.join(', '));
+  }
+
+  // A SHARE WITH NO RECEIPT IS AN ERROR, NOT A COUNTER. Any row waiting for a person, or still SENDING
+  // or waiting for a payee who can receive money more than UNCONFIRMED_AFTER_MS after the payment was
+  // accrued (see findUnconfirmedTransfers for the full list), is named here, after this run's own
+  // attempt had its chance. They go into `errors` with their ids,
   // which makes `ok` false (a 207 on the cron, red in Vercel monitoring) and logs one console.error
   // line naming every row. Empty while transfers are off.
   const unconfirmed = await findUnconfirmedTransfers(ledgerDb, { at: now }).catch((e) => {
@@ -203,10 +224,10 @@ export async function GET(request: NextRequest) {
   });
   if (unconfirmed.length > 0) {
     const detail = unconfirmed
-      .map((r) => `${r.ledger}:${r.id}(${r.state},${r.amountUsdCents}c,attempts=${r.attempts}${r.lastError ? `,${r.lastError.slice(0, 80)}` : ''})`)
+      .map((r) => `${r.ledger}:${r.id}(${r.reason},${r.state},${r.amountUsdCents}c,attempts=${r.attempts}${r.lastError ? `,${r.lastError.slice(0, 80)}` : ''})`)
       .join(' ');
     errors.push(
-      `transfers-unconfirmed: ${unconfirmed.length} share(s) have no confirmed receipt ${Math.round(UNCONFIRMED_AFTER_MS / 60000)}+ minutes after the payment: ${detail}`,
+      `transfers-unconfirmed: ${unconfirmed.length} share(s) have no confirmed receipt (waiting for a person, or ${Math.round(UNCONFIRMED_AFTER_MS / 60000)}+ minutes after the payment): ${detail}`,
     );
     console.error('whop-reconcile: SHARE TRANSFERS WITHOUT A CONFIRMED RECEIPT', JSON.stringify(unconfirmed));
   }
