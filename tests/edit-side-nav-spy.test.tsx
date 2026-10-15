@@ -152,16 +152,99 @@ describe('EditSideNav reading-line scroll-spy', () => {
     expect(currentIds()).toEqual([`#${id}`]);
   });
 
-  it('releases the hold after the timeout when no scrollend arrives', () => {
-    mount();
-    click(link('profile-extra-work'));
-    scrollTo(2500);
-    expect(currentIds()).toEqual(['#profile-extra-work']);
-    act(() => {
-      vi.advanceTimersByTime(800);
+  const MAX = DOC_HEIGHT - VIEWPORT;
+  const clickShareSignup = () => {
+    Element.prototype.scrollIntoView = vi.fn(function (this: Element) {
+      scrollY = Math.min(PAGE_TOPS[this.id]! - 96, MAX);
     });
-    scrollTo(2500);
+    click(link('share-signup'));
+  };
+  const wait = (ms: number) =>
+    act(() => {
+      vi.advanceTimersByTime(ms);
+    });
+
+  it('keeps an entry whose target cannot reach the line far past 700ms, until the user scrolls', () => {
+    mount();
+    clickShareSignup();
+    expect(scrollY).toBe(MAX);
+    expect(document.getElementById('share-signup')!.getBoundingClientRect().top).toBeGreaterThan(98);
+    scrollTo(scrollY);
+    wait(5000);
+    scrollTo(scrollY);
+    expect(currentIds()).toEqual(['#share-signup']);
+    act(() => {
+      window.dispatchEvent(new Event('scrollend'));
+    });
+    scrollTo(scrollY + 10);
+    expect(currentIds()).toEqual(['#share-signup']);
+    scrollTo(MAX - 300);
     expect(currentIds()).toEqual(['#sections']);
+    scrollTo(MAX);
+    expect(currentIds()).toEqual(['#account']);
+  });
+
+  it.each(['wheel', 'touchmove'])('releases the hold on %s', (type) => {
+    mount();
+    clickShareSignup();
+    wait(1000);
+    act(() => {
+      window.dispatchEvent(new Event(type));
+    });
+    wait(20);
+    expect(currentIds()).toEqual(['#account']);
+  });
+
+  it('releases the hold on a scroll key but not on typing in a field', () => {
+    mount();
+    clickShareSignup();
+    wait(1000);
+    const input = document.createElement('input');
+    document.body.appendChild(input);
+    act(() => {
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+    });
+    scrollTo(scrollY);
+    expect(currentIds()).toEqual(['#share-signup']);
+    act(() => {
+      document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageUp', bubbles: true }));
+    });
+    wait(20);
+    expect(currentIds()).toEqual(['#account']);
+  });
+
+  it.each(['share-signup', 'account'])('a hash load of #%s keeps its own entry at max scroll', (id) => {
+    window.history.replaceState(null, '', `/practitioners/x/edit#${id}`);
+    scrollY = MAX;
+    mount();
+    wait(2000);
+    scrollTo(MAX);
+    expect(currentIds()).toEqual([`#${id}`]);
+    scrollTo(MAX - 200);
+    expect(currentIds()).not.toEqual([`#${id}`]);
+  });
+
+  it('never keeps a stale highlight above the first anchor', () => {
+    mount();
+    scrollTo(MAX);
+    expect(currentIds()).toEqual(['#account']);
+    PAGE_TOPS.profile = 300;
+    try {
+      scrollTo(0);
+      expect(currentIds()).toEqual(['#profile']);
+      scrollTo(50);
+      expect(currentIds()).toEqual(['#profile']);
+    } finally {
+      PAGE_TOPS.profile = 0;
+    }
+  });
+
+  it('bounds the open mobile menu to the viewport and contains its scroll', () => {
+    mount();
+    const cls = document.querySelector('[data-edit-nav="mobile"] nav')!.className;
+    expect(cls).toContain('max-h-[calc(100dvh-5rem)]');
+    expect(cls).toContain('overflow-y-auto');
+    expect(cls).toContain('overscroll-contain');
   });
 
   it('re-reads the anchors when the entry list changes', () => {

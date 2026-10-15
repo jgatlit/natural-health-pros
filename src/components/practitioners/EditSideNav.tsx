@@ -13,7 +13,9 @@ export type EditSideNavEntry = {
 
 // Matches the scroll-mt-24 every anchor carries, so a clicked target sits exactly on the line.
 const READING_LINE = 96;
-const HOLD_MS = 700;
+const SETTLE_MS = 150;
+const USER_SCROLL_PX = 24;
+const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ']);
 
 function flatten(entries: readonly EditSideNavEntry[]): EditSideNavEntry[] {
   return entries.flatMap((e) => [e, ...(e.children ? flatten(e.children) : [])]);
@@ -58,14 +60,22 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
   const [active, setActive] = useState<string | null>(null);
   const desktopRef = useRef<HTMLElement>(null);
   const detailsRef = useRef<HTMLDetailsElement>(null);
-  const holdRef = useRef<() => void>(() => {});
+  const holdRef = useRef<(id: string) => void>(() => {});
+  const orderRef = useRef<string[]>([]);
+  const scheduleRef = useRef<() => void>(() => {});
+  const hashApplied = useRef(false);
+  const initialHold = useRef<string | null>(null);
 
   useEffect(() => {
     const found = new Set<string>();
     for (const e of flatten(entries)) if (document.getElementById(e.id)) found.add(e.id);
     setPresent(found);
     const fromHash = decodeURIComponent(window.location.hash.slice(1));
-    if (fromHash && found.has(fromHash)) setActive(fromHash);
+    if (fromHash && found.has(fromHash) && !hashApplied.current) {
+      hashApplied.current = true;
+      setActive(fromHash);
+      initialHold.current = fromHash;
+    }
   }, [entries]);
 
   const visible = useMemo(() => {
@@ -88,7 +98,7 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
       if (jumpToSection(id)) {
         e.preventDefault();
         setActive(id);
-        holdRef.current();
+        holdRef.current(id);
         if (detailsRef.current) detailsRef.current.open = false;
       }
     };
@@ -98,43 +108,90 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
 
   // A reading line, not an IntersectionObserver band: a band leaves short trailing cards and the
   // gaps between sub-sections with no owner. The active entry is the last anchor at or above the
-  // line, so a gap keeps the previous entry, and the page bottom always belongs to the last one.
-  // A click holds its entry until the programmatic scroll ends, so Profile stays Profile.
+  // line, so a gap keeps the previous entry, the page bottom belongs to the last one, and above the
+  // first anchor the first entry is active rather than a stale one.
+  //
+  // A clicked (or hash-loaded) entry is HELD until the user scrolls on their own: a target near the
+  // page bottom can never reach the line, so no timer can stand in for "the user moved on". The
+  // programmatic scroll is told apart from the user's by waiting for it to settle, then releasing
+  // on wheel, touch, scroll keys, or a drift past USER_SCROLL_PX from the settled position.
+  orderRef.current = order;
+  useEffect(() => scheduleRef.current(), [order]);
+
   useEffect(() => {
     let frame = 0;
-    let locked = false;
-    let timer = 0;
-    const release = () => {
-      locked = false;
-      window.clearTimeout(timer);
+    let settleTimer = 0;
+    let held: { id: string; settledY: number | null } | null = null;
+    const settle = () => {
+      if (held) held.settledY = window.scrollY;
     };
-    holdRef.current = () => {
-      locked = true;
-      window.clearTimeout(timer);
-      timer = window.setTimeout(release, HOLD_MS);
+    const release = () => {
+      held = null;
+      window.clearTimeout(settleTimer);
     };
     const compute = () => {
       frame = 0;
-      if (locked) return;
-      const next = readActive(order);
+      if (held) return;
+      const next = readActive(orderRef.current) ?? orderRef.current[0] ?? null;
       if (next) setActive(next);
     };
     const schedule = () => {
       if (!frame) frame = window.requestAnimationFrame(compute);
     };
-    window.addEventListener('scroll', schedule, { passive: true });
+    scheduleRef.current = schedule;
+    holdRef.current = (id) => {
+      held = { id, settledY: null };
+      window.clearTimeout(settleTimer);
+      settleTimer = window.setTimeout(settle, SETTLE_MS);
+    };
+    const onScroll = () => {
+      if (held) {
+        if (held.settledY === null) {
+          window.clearTimeout(settleTimer);
+          settleTimer = window.setTimeout(settle, SETTLE_MS);
+        } else if (Math.abs(window.scrollY - held.settledY) > USER_SCROLL_PX) {
+          release();
+        }
+      }
+      schedule();
+    };
+    const onUserInput = () => {
+      release();
+      schedule();
+    };
+    const onKeyScroll = (e: KeyboardEvent) => {
+      const t = e.target as HTMLElement | null;
+      if (!SCROLL_KEYS.has(e.key) || t?.closest?.('input, textarea, select, [contenteditable]')) return;
+      onUserInput();
+    };
+    const onScrollEnd = () => {
+      window.clearTimeout(settleTimer);
+      settle();
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
     window.addEventListener('resize', schedule);
-    window.addEventListener('scrollend', release);
+    window.addEventListener('scrollend', onScrollEnd);
+    window.addEventListener('wheel', onUserInput, { passive: true });
+    window.addEventListener('touchmove', onUserInput, { passive: true });
+    window.addEventListener('keydown', onKeyScroll);
+    if (initialHold.current) {
+      holdRef.current(initialHold.current);
+      initialHold.current = null;
+    }
     schedule();
     return () => {
-      window.removeEventListener('scroll', schedule);
+      window.removeEventListener('scroll', onScroll);
       window.removeEventListener('resize', schedule);
-      window.removeEventListener('scrollend', release);
+      window.removeEventListener('scrollend', onScrollEnd);
+      window.removeEventListener('wheel', onUserInput);
+      window.removeEventListener('touchmove', onUserInput);
+      window.removeEventListener('keydown', onKeyScroll);
       window.cancelAnimationFrame(frame);
-      window.clearTimeout(timer);
+      window.clearTimeout(settleTimer);
+      scheduleRef.current = () => {};
       holdRef.current = () => {};
     };
-  }, [order]);
+  }, []);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -205,7 +262,7 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
           </summary>
           <nav
             aria-label="Edit sections"
-            className="absolute inset-x-0 top-full mt-1 max-h-[60vh] overflow-y-auto rounded-md border bg-card p-2 shadow-lg"
+            className="absolute inset-x-0 top-full mt-1 max-h-[calc(100dvh-5rem)] overflow-y-auto overscroll-contain rounded-md border bg-card p-2 shadow-lg"
           >
             {list(visible)}
           </nav>
