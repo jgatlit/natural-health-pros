@@ -40,7 +40,7 @@ export function BookingsSection({ rows }: { rows: BookingRow[] }) {
 
   if (rows.length === 0) {
     return (
-      <Card className="space-y-1 p-6">
+      <Card id="bookings" className="scroll-mt-24 space-y-1 p-6">
         <h2 className="text-sm font-semibold">Bookings</h2>
         <p className="text-xs text-muted-foreground">
           Nobody has started booking with you yet. When they do, their details appear here — even
@@ -51,7 +51,7 @@ export function BookingsSection({ rows }: { rows: BookingRow[] }) {
   }
 
   return (
-    <Card className="space-y-5 p-6">
+    <Card id="bookings" className="scroll-mt-24 space-y-5 p-6">
       <div className="space-y-1">
         <h2 className="text-sm font-semibold">Bookings</h2>
         <p className="text-xs text-muted-foreground">

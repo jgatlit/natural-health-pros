@@ -91,6 +91,7 @@
     "@types/three": "^0.169.0",
     "eslint": "^8",
     "eslint-config-next": "14.2.21",
+    "jsdom": "^25.0.1",
     "pg": "^8.16.3",
     "postcss": "^8",
     "prisma": "^6.19.3",
