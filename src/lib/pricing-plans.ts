@@ -79,8 +79,8 @@ export const PLAN_A_DISCOUNT_NAME = 'Founding rate';
 /**
  * The regular ("list") Plan A prices beside a practitioner's lower ones: "$39" to strike through
  * next to "$29/mo", and "Founding rate: save $10/mo". The list schedule is the one the
- * `plan_a_list_rate_schedule_id` setting names. Null when there is no list schedule or the Plan A
- * monthly price is not below it, so nothing claims a discount that is not there. The annual pair is
+ * `plan_a_list_rate_schedule_id` setting names. Null when there is no list schedule, or the Plan A
+ * monthly price is free or not below it, so nothing claims a discount that is not there. The annual pair is
  * null when the yearly price is not below the list yearly price.
  */
 export type PlanADiscountView = {
@@ -94,10 +94,10 @@ export function planADiscount(schedule: CopySchedule, list: CopySchedule | null)
   if (!list) return null;
   const monthly = planMonthlyCents(schedule, 'PLAN_A');
   const listMonthly = planMonthlyCents(list, 'PLAN_A');
-  if (monthly >= listMonthly) return null;
+  if (monthly <= 0 || monthly >= listMonthly) return null;
   const annual = annualPlanAPriceCents(schedule);
   const listAnnual = annualPlanAPriceCents(list);
-  const annualDiscounted = monthly > 0 && annual < listAnnual;
+  const annualDiscounted = annual < listAnnual;
   return {
     monthlyListLabel: dollars(listMonthly),
     monthlySavingsLabel: `${PLAN_A_DISCOUNT_NAME}: save ${dollars(listMonthly - monthly)}/mo`,

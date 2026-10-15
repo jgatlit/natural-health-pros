@@ -48,6 +48,10 @@ describe('planADiscount: the regular Plan A price beside a lower one', () => {
     expect(planADiscount(V1, FOUNDING)).toBeNull();
   });
 
+  it('is null for a free Plan A, which has no price to strike a list price beside', () => {
+    expect(planADiscount({ ...V1_NUMBERS, planAMonthlyCents: 0 }, V1)).toBeNull();
+  });
+
   it('omits the annual pair when the yearly price is not below the list yearly price', () => {
     const shallow = { ...V1_NUMBERS, planAMonthlyCents: 3800, annualDiscountBps: 0 };
     const d = planADiscount(shallow, V1);
@@ -84,6 +88,7 @@ describe('getPlanAListSchedule reads the schedule the setting names', () => {
 
   it('the named schedule', async () => {
     expect((await getPlanAListSchedule(db(V1.id)))?.planAMonthlyCents).toBe(V1.planAMonthlyCents);
+    expect((await getPlanAListSchedule(db(` ${V1.id}\n`)))?.id).toBe(V1.id);
   });
 
   it('null with no setting, or a setting naming no schedule', async () => {
