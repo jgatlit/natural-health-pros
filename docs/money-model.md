@@ -69,6 +69,49 @@ Nothing is enabled before Whop business verification of the parent company and t
 
 Procedure, decision table and the admin resolution of ambiguous rows: [`docs/runbooks/transfers-canary.md`](runbooks/transfers-canary.md). A real-Postgres check of the transfer engine: `scripts/verify-transfers-postgres.ts`.
 
+## Practitioners without a rate schedule
+
+A practitioner with no schedule is refused at checkout (fail closed). This can happen to a practitioner created during a deploy window or by a script. The remedies are in the admin UI, both audited, admin-only, requiring a reason, and idempotent (each update is guarded on `rateScheduleId IS NULL`, so a practitioner who already has a schedule is never moved):
+
+- `/admin/commercial-settings` shows the count of unassigned practitioners and an "Assign current schedule to unassigned" action (`assignSchedulesToUnassigned` in `src/app/admin/commercial-settings/actions.ts`, backed by `assignCurrentToUnassigned` in `src/lib/rate-schedules.ts`). It also pins the practitioners' existing attributed clients to that schedule.
+- The practitioner's row on `/admin/invites` has a per-practitioner assign (`assignScheduleToPractitioner`, same function underneath).
+
+The equivalent SQL is the migration's own backfill, in `prisma/migrations/20261014150000_rate_schedules_fee_rule_v15/migration.sql` (step 4). It ran once at deploy and is quoted for reference only; it is not something to run by hand against production:
+
+```sql
+UPDATE "Practitioner"
+   SET "rateScheduleId" = (
+         SELECT rs."id" FROM "RateSchedule" rs
+          WHERE rs."contentHash" = 'a16f357fd12566c065c909037870542881bbbf34dae690200e908bd01a55c4b9'
+       )
+ WHERE "rateScheduleId" IS NULL;
+```
+
+Scripts that create practitioners without assigning a schedule (as of 2026-10-15): `scripts/import-pilot-practitioners.ts`, `scripts/seed-verify.ts` and `prisma/seed.ts` (each calls `practitioner.create` or `upsert` without `rateScheduleId`). A practitioner they create is unassigned until an admin assigns the current schedule. The only code path that assigns a schedule at creation is `/onboarding` (`signupScheduleData`).
+
+## Payout activation checklist
+
+Transfers stay off until every step below is done, in this order.
+
+1. Whop business verification of the parent company is complete.
+2. Run the real canary, [`docs/runbooks/transfers-canary.md`](runbooks/transfers-canary.md): Step 0 (one direct $1 transfer), then read the report.
+3. Set `WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED` and `WHOP_TRANSFERS_LOOKUP_VERIFIED` only from their own canary results (the report's `recommendedFlags`); set neither when the report says neither.
+4. Canary Step 1: `WHOP_TRANSFERS_ENABLED=true` with `WHOP_TRANSFERS_ALLOWLIST` naming one payee, one real cleared payment, then the refund test; read-only check of the ledger against Whop's transfer list.
+5. The operator's go: remove the allowlist to pay everyone.
+
+Not built (no code exists for either, as of 2026-10-15): a preview-only transfer harness, and an admin activation record. Neither is a precondition in code; the steps above are the control.
+
+## Not yet exercised end to end on production (as of 2026-10-15)
+
+Verified by tests, local runs and read-only production checks, not by a real production flow (vault run log `art_c7b87ee363044d26909d`):
+
+- A magic-link sign-up through `/join/hhe`, including a cross-device sign-up.
+- Onboarding with the outside-work question, and the `/edit` toggle.
+- The custom-sections editor, drag-reorder and media upload.
+- A booking at the schedule v1 rates producing a `BookingFeeSnapshot`.
+- A ledger row, a refund against it, and a transfer.
+- The edit-page navigation panel with a signed-in practitioner (checked in a local browser with a forged local session).
+
 ## Where each rule lives
 
 | Rule | File |
