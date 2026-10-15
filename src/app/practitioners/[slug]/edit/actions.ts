@@ -8,6 +8,7 @@ import { auth } from '@/auth';
 import { normalizeFraming } from '@/lib/photo-framing';
 import { prisma } from '@/lib/prisma';
 import { isPlanKey } from '@/lib/pricing-plans';
+import { isBillingInterval, loadPlanAPlanIds } from '@/lib/plan-a-billing';
 import { sendEmail, normalizeEmail, escapeHtml } from '@/lib/email';
 import { SITE_URL } from '@/lib/site';
 import { newToken } from '@/lib/tokens';
@@ -1199,26 +1200,37 @@ export async function choosePlan(slug: string, formData: FormData): Promise<void
     where: { id: target.id },
     data: { plan, planChosenAt: new Date() },
   });
-  redirect(`/practitioners/${slug}/edit?plan=saved#payments`);
+  // Plan A goes straight to its billing card; Plan B has none, so it goes on to client payments.
+  redirect(`/practitioners/${slug}/edit?plan=saved${plan === 'PLAN_A' ? '#billing' : '#payments'}`);
 }
 
-export async function startSubscriptionCheckout(slug: string): Promise<void> {
+/**
+ * Mints a fresh checkout configuration on every click rather than reusing one. A stored purchase URL
+ * is pinned to the plan it was minted for, so after an interval's plan id changes in PlatformSetting
+ * a cached URL would keep selling the old plan; a configuration costs one API call.
+ */
+export async function startSubscriptionCheckout(slug: string, interval: string): Promise<void> {
   const target = await authorizeForSlug(slug);
+  if (!isBillingInterval(interval)) {
+    redirect(`/practitioners/${slug}/edit?subscription=error#billing`);
+  }
 
   let redirectUrl: string | null = null;
   try {
-    // Mint-once-and-reuse: never mint a second checkout config for the same practitioner.
-    const practitioner = await prisma.practitioner.findUnique({
+    // An ACTIVE subscription is never sold a second one from this button.
+    const current = await prisma.practitioner.findUnique({
       where: { id: target.id },
-      select: { whopSubscriptionCheckoutUrl: true },
+      select: { subscriptionStatus: true },
     });
-    if (practitioner?.whopSubscriptionCheckoutUrl) {
-      redirectUrl = practitioner.whopSubscriptionCheckoutUrl;
+    if (current?.subscriptionStatus === 'ACTIVE') {
+      redirectUrl = `/practitioners/${slug}/edit#billing`;
     } else {
-      const { purchaseUrl } = await createSubscriptionCheckout({ practitionerId: target.id, slug });
-      await prisma.practitioner.update({
-        where: { id: target.id },
-        data: { whopSubscriptionCheckoutUrl: purchaseUrl },
+      const planIds = await loadPlanAPlanIds(prisma);
+      const { purchaseUrl } = await createSubscriptionCheckout({
+        practitionerId: target.id,
+        slug,
+        interval,
+        planId: planIds[interval],
       });
       redirectUrl = purchaseUrl;
     }
@@ -1226,7 +1238,7 @@ export async function startSubscriptionCheckout(slug: string): Promise<void> {
     console.error('Whop subscription checkout failed:', err);
   }
 
-  redirect(redirectUrl ?? `/practitioners/${slug}/edit?whop=error#payments`);
+  redirect(redirectUrl ?? `/practitioners/${slug}/edit?subscription=error#billing`);
 }
 
 export async function startWhopOnboarding(slug: string): Promise<void> {

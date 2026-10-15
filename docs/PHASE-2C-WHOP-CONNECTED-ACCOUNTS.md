@@ -167,7 +167,10 @@ Two mismatches were recorded here. Their status as of **2026-08-18**:
    `docs/LAYER-X-SUBSCRIPTION.md`. The last two stale `$59` strings — comments in
    `prisma/schema.prisma` — were corrected the same day. **$49 is canonical; treat any surviving
    `$59` in this repo as a dated artifact, not a price.**
-2. ⚠️ **`initial_price` is $0 — STILL OPEN.** The first 30-day period is free, then $49/mo. The
+2. **Superseded 2026-10-15:** the operator ruled no free first period. Both Plan A plans
+   (monthly `plan_5YdWsNzoCg3Z3`, annual `plan_iAotyGNZkG6VW`) are to charge their initial price equal
+   to their renewal price; the current setup is in `docs/LAYER-X-SUBSCRIPTION.md`. Historical note:
+   ⚠️ **`initial_price` is $0 — STILL OPEN.** The first 30-day period is free, then $49/mo. The
    UI says only `Subscribe · $49/mo`; nothing a practitioner reads mentions the free first period.
    `docs/LAYER-X-SUBSCRIPTION.md` records it, but that is an internal doc, not product copy.
    Under-charging relative to the advertised price is a benign direction to be wrong in, which is

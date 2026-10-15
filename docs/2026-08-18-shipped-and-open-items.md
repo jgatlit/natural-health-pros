@@ -102,6 +102,8 @@ to fix it now exists (resend + in-place email correction). The action has not be
 ⚠️ Re-validate each address BEFORE resending — see the duplicate mechanism below.
 
 ### 4. `initial_price: $0` is undisclosed
+> Superseded 2026-10-15: the operator ruled no free first period; see `docs/LAYER-X-SUBSCRIPTION.md`.
+
 The Whop plan's first 30-day period is free, then $49/mo. Nothing a practitioner reads says so.
 Under-charging generates no complaints, which is why it has survived. Still a billing-vs-copy
 gap on the primary revenue line. Recorded in `docs/PHASE-2C-WHOP-CONNECTED-ACCOUNTS.md`.

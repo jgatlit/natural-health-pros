@@ -1,4 +1,4 @@
-import { CheckCircle2, Clock, CreditCard, ShieldCheck } from 'lucide-react';
+import { CheckCircle2, Clock, CreditCard, ShieldCheck, Sparkles } from 'lucide-react';
 import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
@@ -7,12 +7,13 @@ import { PendingButton } from './PendingButton';
 type Props = {
   status: 'NONE' | 'ACTIVE' | 'PAST_DUE' | 'CANCELED';
   /**
-   * The pilot clock. Managed on the BACKEND and deliberately never named on this screen (operator
-   * ruling 2026-09-28: "we will manage the 90-day pilot on the backend; no need to author/publish").
-   * Only its state is read: null or a future date means billing has not started; a past date means
-   * a Plan A practitioner now needs to subscribe.
+   * Is this Plan A practitioner asked to pay now? `planABillingOpen()`: always for someone who joined
+   * through a cohort link, otherwise once the pilot clock has run out. The pilot clock itself is
+   * managed on the BACKEND and deliberately never named on this screen (operator ruling 2026-09-28).
    */
-  trialEndsAt: Date | null;
+  billingOpen: boolean;
+  /** Joined through a cohort link: the two prices are labelled as the founding rate. */
+  foundingRate: boolean;
   /** Admins are exempt from billing entirely — staff, not customers. */
   isAdmin: boolean;
   /**
@@ -26,25 +27,39 @@ type Props = {
    * card had while it still spoke only in terms of the pilot.
    */
   plan: 'PLAN_A' | 'PLAN_B';
+  /** Which interval the active subscription was bought at, when the webhook could tell. */
+  interval: 'monthly' | 'annual' | null;
   /**
-   * PRIMARY path. Mints a per-practitioner checkout carrying `metadata.practitioner_id`, so the
-   * webhook attributes the payment directly. Prefer this over `fallbackCheckoutUrl` always.
+   * PRIMARY path, one per interval. Each mints a per-practitioner checkout carrying
+   * `metadata.practitioner_id`, so the webhook attributes the payment directly. Prefer these over
+   * `fallbackCheckoutUrl` always.
    */
-  subscribeAction: ((formData: FormData) => void | Promise<void>) | null;
+  monthlyAction: ((formData: FormData) => void | Promise<void>) | null;
+  annualAction: ((formData: FormData) => void | Promise<void>) | null;
   /**
    * The generic hosted product page. LAST RESORT — it carries no practitioner metadata, so a
    * payment through it can only be matched back by EMAIL, which fails silently when someone pays
    * from a different address than their profile.
    */
   fallbackCheckoutUrl: string | null;
+  /** "$29/mo", from the practitioner's rate schedule. */
   priceLabel: string;
+  /** "$299/yr", derived from the same schedule. */
+  annualPriceLabel: string;
+  /** "Save $49 vs monthly", or null when the yearly price saves nothing. */
+  annualSavingsLabel: string | null;
+  /**
+   * `success`: back from Whop checkout, before the webhook has activated the subscription; the
+   * choices are hidden so the payer is not invited to buy twice. `error`: checkout could not open.
+   */
+  notice?: 'success' | 'error' | null;
 };
 
 /**
  * Plan billing status — Layer X: what the practitioner pays US to be listed. Distinct from
  * PaymentsSection, which is Layer Y (the practitioner accepting payments from their own clients).
  *
- * PLAN-AWARE. Plan A is a monthly subscription; Plan B has none. A card that always says
+ * PLAN-AWARE. Plan A is a monthly or annual subscription; Plan B has none. A card that always says
  * "Premium Accounts & Directory Listing … subscribe to return" tells a Plan B practitioner they owe
  * something they do not. An ACTIVE or PAST_DUE subscription is shown whatever the plan, because
  * money is moving and hiding that would be worse than a plan label that disagrees.
@@ -55,22 +70,26 @@ type Props = {
  */
 export function SubscriptionSection({
   status,
-  trialEndsAt,
+  billingOpen,
+  foundingRate,
   isAdmin,
   isComplete,
   plan,
-  subscribeAction,
+  interval,
+  monthlyAction,
+  annualAction,
   fallbackCheckoutUrl,
   priceLabel,
+  annualPriceLabel,
+  annualSavingsLabel,
+  notice = null,
 }: Props) {
-  const now = Date.now();
-
-  let title = plan === 'PLAN_A' ? 'Plan A · Monthly listing' : 'Plan B · No monthly fee';
+  let title = plan === 'PLAN_A' ? 'Plan A · Listing' : 'Plan B · No monthly fee';
   let badge: React.ReactNode;
   let description: React.ReactNode;
-  let showCta = false;
-  let ctaLabel = `Subscribe · ${priceLabel}`;
-  let disabledCtaLabel = 'Subscribe · Coming soon';
+  let cta: 'none' | 'choose' | 'update' = 'none';
+  const activeLabel = interval === 'annual' ? annualPriceLabel : priceLabel;
+  const activeTitle = interval === 'annual' ? 'Annual listing' : 'Monthly listing';
 
   // Billing entitles you to a listing; it doesn't produce one. When the profile is incomplete the
   // entitlement is real but unused, so this card states it and stays silent about visibility.
@@ -86,7 +105,7 @@ export function SubscriptionSection({
     );
     description = "You're exempt from the listing subscription as an admin — no billing.";
   } else if (status === 'ACTIVE') {
-    title = 'Monthly listing';
+    title = activeTitle;
     badge = (
       <Badge variant="default" className="gap-1 text-[10px] uppercase tracking-wider">
         <CheckCircle2 className="h-3 w-3" aria-hidden />
@@ -94,10 +113,10 @@ export function SubscriptionSection({
       </Badge>
     );
     description = visible
-      ? `Your ${priceLabel} listing subscription is active — you appear in directory search.`
-      : `Your ${priceLabel} listing subscription is active. Complete your profile above to appear in directory search.`;
+      ? `Your ${activeLabel} listing subscription is active — you appear in directory search.`
+      : `Your ${activeLabel} listing subscription is active. Complete your profile above to appear in directory search.`;
   } else if (status === 'PAST_DUE') {
-    title = 'Monthly listing';
+    title = activeTitle;
     badge = (
       <Badge variant="destructive" className="text-[10px] uppercase tracking-wider">
         Past due
@@ -106,9 +125,7 @@ export function SubscriptionSection({
     description = visible
       ? "Your payment is past due — you're still listed during Whop's grace period. Update your payment to keep your listing active."
       : 'Your payment is past due. Update your payment to keep your listing active.';
-    showCta = true;
-    ctaLabel = 'Update payment';
-    disabledCtaLabel = 'Update payment · Coming soon';
+    cta = 'update';
   } else if (plan === 'PLAN_B') {
     // No subscription on Plan B, so nothing to start, renew or restore — and no CTA.
     badge = (
@@ -118,7 +135,7 @@ export function SubscriptionSection({
     );
     description =
       "You pay no monthly fee on Plan B. Natural Health Pros' share applies only to clients we send you.";
-  } else if (trialEndsAt === null || trialEndsAt.getTime() > now) {
+  } else if (!billingOpen) {
     badge = (
       <Badge variant="outline" className="gap-1 text-[10px] uppercase tracking-wider">
         <Clock className="h-3 w-3" aria-hidden />
@@ -130,15 +147,62 @@ export function SubscriptionSection({
     // how the start date is arrived at is managed on the backend and is not authored here.
     description = `Billing hasn't started for Plan A (${priceLabel}). You'll be told before it does.`;
   } else {
-    badge = (
+    badge = foundingRate ? (
+      <Badge variant="secondary" className="gap-1 text-[10px] uppercase tracking-wider">
+        <Sparkles className="h-3 w-3" aria-hidden />
+        Founding rate
+      </Badge>
+    ) : (
       <Badge variant="destructive" className="text-[10px] uppercase tracking-wider">
         Subscribe
       </Badge>
     );
-    description =
-      "Your Plan A subscription isn't active. Subscribe to be listed in directory search. Your profile and everything you've built are safe: nothing is ever deleted.";
-    showCta = true;
+    description = foundingRate
+      ? 'Choose monthly or annual billing for your Plan A listing. Your founding rate is below.'
+      : "Your Plan A subscription isn't active. Subscribe to be listed in directory search. Your profile and everything you've built are safe: nothing is ever deleted.";
+    cta = 'choose';
+    if (notice === 'success') {
+      badge = (
+        <Badge variant="outline" className="gap-1 text-[10px] uppercase tracking-wider">
+          <Clock className="h-3 w-3" aria-hidden />
+          Confirming
+        </Badge>
+      );
+      description =
+        'Thank you. Your payment is being confirmed with Whop; this card shows your subscription as soon as it is active. Refresh in a minute.';
+      cta = 'none';
+    }
   }
+
+  const buttonClass =
+    'inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-md bg-primary text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-60';
+
+  const checkoutButton = (
+    action: Props['monthlyAction'],
+    label: string,
+    key: string,
+  ): React.ReactNode =>
+    action ? (
+      <form key={key} action={action}>
+        <PendingButton pendingLabel="Opening checkout…" className={buttonClass}>
+          {label}
+        </PendingButton>
+      </form>
+    ) : fallbackCheckoutUrl ? (
+      <a key={key} href={fallbackCheckoutUrl} target="_blank" rel="noopener noreferrer" className={buttonClass}>
+        {label}
+      </a>
+    ) : (
+      <button
+        key={key}
+        type="button"
+        disabled
+        className="inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-md border bg-muted/40 text-sm font-medium text-muted-foreground"
+      >
+        <Clock className="h-3.5 w-3.5" aria-hidden />
+        {label} · Coming soon
+      </button>
+    );
 
   return (
     <Card className="space-y-4 p-6 sm:p-8">
@@ -155,37 +219,39 @@ export function SubscriptionSection({
         </div>
       </div>
 
-      {showCta && (
+      {notice === 'error' && cta !== 'none' && (
+        <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          Checkout could not be opened. Please try again, or contact us if it keeps happening.
+        </p>
+      )}
+
+      {cta === 'choose' && (
         <>
           <Separator />
-          {subscribeAction ? (
-            <form action={subscribeAction}>
-              <PendingButton
-                pendingLabel="Opening checkout…"
-                className="inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-md bg-primary text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-60"
-              >
-                {ctaLabel}
-              </PendingButton>
-            </form>
-          ) : fallbackCheckoutUrl ? (
-            <a
-              href={fallbackCheckoutUrl}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex h-10 w-full items-center justify-center rounded-md bg-primary text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-            >
-              {ctaLabel}
-            </a>
-          ) : (
-            <button
-              type="button"
-              disabled
-              className="inline-flex h-10 w-full items-center justify-center gap-1.5 rounded-md border bg-muted/40 text-sm font-medium text-muted-foreground"
-            >
-              <Clock className="h-3.5 w-3.5" aria-hidden />
-              {disabledCtaLabel}
-            </button>
-          )}
+          <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-2 rounded-md border p-4">
+              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Monthly</p>
+              <p className="text-lg font-semibold">{priceLabel}</p>
+              {checkoutButton(monthlyAction, `Pay monthly · ${priceLabel}`, 'monthly')}
+            </div>
+            <div className="space-y-2 rounded-md border p-4">
+              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Annual</p>
+              <p className="text-lg font-semibold">
+                {annualPriceLabel}
+                {annualSavingsLabel && (
+                  <span className="ml-2 text-xs font-medium text-muted-foreground">{annualSavingsLabel}</span>
+                )}
+              </p>
+              {checkoutButton(annualAction, `Pay annually · ${annualPriceLabel}`, 'annual')}
+            </div>
+          </div>
+        </>
+      )}
+
+      {cta === 'update' && (
+        <>
+          <Separator />
+          {checkoutButton(interval === 'annual' ? annualAction : monthlyAction, 'Update payment', 'update')}
         </>
       )}
     </Card>

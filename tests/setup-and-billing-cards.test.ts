@@ -1,8 +1,13 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import { createElement as h } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { SetupChecklist, type SetupStep } from '@/components/practitioners/SetupChecklist';
 import { SubscriptionSection } from '@/components/practitioners/SubscriptionSection';
+
+// useFormStatus is client-only; the server renderer used here has no form context.
+vi.mock('@/components/practitioners/PendingButton', () => ({
+  PendingButton: ({ children }: { children: React.ReactNode }) => h('button', { type: 'submit' }, children),
+}));
 
 const step = (over: Partial<SetupStep> & { key: string }): SetupStep => ({
   label: over.key,
@@ -41,55 +46,109 @@ describe('SubscriptionSection is plan-aware', () => {
   const base = {
     isAdmin: false,
     isComplete: true,
-    subscribeAction: null,
+    foundingRate: false,
+    interval: null,
+    monthlyAction: null,
+    annualAction: null,
     fallbackCheckoutUrl: 'https://example.test/checkout',
     priceLabel: '$X/mo',
+    annualPriceLabel: '$Y/yr',
+    annualSavingsLabel: 'Save $Z vs monthly',
   } as const;
-  const past = new Date(Date.now() - 86_400_000);
-  const future = new Date(Date.now() + 86_400_000 * 10);
 
-  it('never asks a Plan B practitioner to subscribe, whatever the trial date says', () => {
-    for (const trialEndsAt of [null, future, past]) {
-      const html = renderToStaticMarkup(
-        h(SubscriptionSection, { ...base, plan: 'PLAN_B', status: 'NONE', trialEndsAt: trialEndsAt }),
-      );
-      expect(html).toContain('No monthly fee');
-      expect(html).not.toMatch(/Subscribe|Pilot|pilot|trial/);
-      expect(html).not.toContain('example.test/checkout');
+  it('never asks a Plan B practitioner to subscribe, whether or not billing is open', () => {
+    for (const billingOpen of [true, false]) {
+      for (const foundingRate of [true, false]) {
+        const html = renderToStaticMarkup(
+          h(SubscriptionSection, { ...base, plan: 'PLAN_B', status: 'NONE', billingOpen, foundingRate }),
+        );
+        expect(html).toContain('No monthly fee');
+        expect(html).not.toMatch(/Subscribe|Pay monthly|Pay annually|Pilot|pilot|trial/);
+        expect(html).not.toContain('example.test/checkout');
+      }
     }
   });
 
-  it('never mentions a pilot or trial to anyone', () => {
+  it('never mentions a pilot, a trial or a free first period to anyone', () => {
     for (const plan of ['PLAN_A', 'PLAN_B'] as const) {
       for (const status of ['NONE', 'ACTIVE', 'PAST_DUE', 'CANCELED'] as const) {
-        for (const trialEndsAt of [null, future, past]) {
-          const html = renderToStaticMarkup(
-            h(SubscriptionSection, { ...base, plan, status, trialEndsAt }),
-          );
-          expect(html).not.toMatch(/pilot|Pilot|90-day|trial/i);
+        for (const billingOpen of [true, false]) {
+          for (const foundingRate of [true, false]) {
+            const html = renderToStaticMarkup(
+              h(SubscriptionSection, { ...base, plan, status, billingOpen, foundingRate }),
+            );
+            expect(html).not.toMatch(/pilot|90-day|trial|free/i);
+          }
         }
       }
     }
   });
 
-  it('Plan A: quiet before billing, subscribe only once the date has passed', () => {
+  it('Plan A: quiet while billing has not started, both choices once it has', () => {
     const before = renderToStaticMarkup(
-      h(SubscriptionSection, { ...base, plan: 'PLAN_A', status: 'NONE', trialEndsAt: future }),
+      h(SubscriptionSection, { ...base, plan: 'PLAN_A', status: 'NONE', billingOpen: false }),
     );
     expect(before).toContain("Billing hasn&#x27;t started");
-    expect(before).not.toContain('Subscribe ·');
+    expect(before).not.toMatch(/Pay monthly|Pay annually/);
 
     const after = renderToStaticMarkup(
-      h(SubscriptionSection, { ...base, plan: 'PLAN_A', status: 'NONE', trialEndsAt: past }),
+      h(SubscriptionSection, { ...base, plan: 'PLAN_A', status: 'NONE', billingOpen: true }),
     );
-    expect(after).toContain('Subscribe ·');
+    expect(after).toContain('Pay monthly · $X/mo');
+    expect(after).toContain('Pay annually · $Y/yr');
+    expect(after).toContain('Save $Z vs monthly');
+    expect(after).not.toContain('Founding rate');
+  });
+
+  it('a cohort joiner sees the founding rate and one checkout form per interval', () => {
+    const monthlyAction = async () => {};
+    const annualAction = async () => {};
+    const html = renderToStaticMarkup(
+      h(SubscriptionSection, {
+        ...base,
+        plan: 'PLAN_A',
+        status: 'NONE',
+        billingOpen: true,
+        foundingRate: true,
+        monthlyAction,
+        annualAction,
+      }),
+    );
+    expect(html).toContain('Founding rate');
+    expect(html.match(/<form/g)).toHaveLength(2);
+    expect(html).not.toContain('example.test/checkout');
+  });
+
+  it('after checkout, hides both choices until the webhook activates the subscription', () => {
+    const html = renderToStaticMarkup(
+      h(SubscriptionSection, { ...base, plan: 'PLAN_A', status: 'NONE', billingOpen: true, notice: 'success' }),
+    );
+    expect(html).toContain('being confirmed');
+    expect(html).not.toMatch(/Pay monthly|Pay annually/);
+  });
+
+  it('shows a failed checkout on the billing card itself', () => {
+    const html = renderToStaticMarkup(
+      h(SubscriptionSection, { ...base, plan: 'PLAN_A', status: 'NONE', billingOpen: true, notice: 'error' }),
+    );
+    expect(html).toContain('Checkout could not be opened');
+    expect(html).toContain('Pay monthly');
   });
 
   it('an active subscription is shown whichever plan the practitioner is recorded on', () => {
     const html = renderToStaticMarkup(
-      h(SubscriptionSection, { ...base, plan: 'PLAN_B', status: 'ACTIVE', trialEndsAt: null }),
+      h(SubscriptionSection, { ...base, plan: 'PLAN_B', status: 'ACTIVE', billingOpen: false }),
     );
     expect(html).toContain('Active');
     expect(html).toContain('Monthly listing');
+  });
+
+  it('an active annual subscription names the annual price', () => {
+    const html = renderToStaticMarkup(
+      h(SubscriptionSection, { ...base, plan: 'PLAN_A', status: 'ACTIVE', billingOpen: true, interval: 'annual' }),
+    );
+    expect(html).toContain('Annual listing');
+    expect(html).toContain('$Y/yr');
+    expect(html).not.toMatch(/Pay monthly|Pay annually/);
   });
 });

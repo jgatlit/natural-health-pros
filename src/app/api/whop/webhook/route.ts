@@ -2,6 +2,7 @@ import { NextResponse, type NextRequest } from 'next/server';
 import { makeWebhookValidator } from '@whop/api';
 import { prisma } from '@/lib/prisma';
 import { indexPractitioner } from '@/lib/practitioner-indexer';
+import { intervalForPlanId, isBillingInterval, loadPlanAPlanIds } from '@/lib/plan-a-billing';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -18,8 +19,10 @@ type MembershipData = {
   id?: string;
   membership_id?: string;
   email?: string;
-  metadata?: { practitioner_id?: string } | null;
+  metadata?: { practitioner_id?: string; nhp_billing_interval?: string } | null;
   user?: { id?: string; email?: string } | null;
+  plan_id?: string;
+  plan?: { id?: string } | null;
 };
 
 function mapStatus(action: string): 'ACTIVE' | 'PAST_DUE' | 'CANCELED' | null {
@@ -84,11 +87,25 @@ export async function POST(request: NextRequest) {
 
     if (practitioner) {
       try {
+        // Either Plan A plan activates the listing alike; the plan id only tells us which interval
+        // was bought. The checkout's own metadata is the fallback for a payload without a plan id.
+        // A failed settings read must never cost the activation itself: the interval is a label.
+        let interval: string | null = null;
+        if (status === 'ACTIVE') {
+          const planIds = await loadPlanAPlanIds(prisma).catch((e) => {
+            console.error('plan-id settings read failed; activating without an interval:', e);
+            return { monthly: null, annual: null };
+          });
+          interval =
+            intervalForPlanId(planIds, data.plan?.id ?? data.plan_id) ??
+            (isBillingInterval(data.metadata?.nhp_billing_interval) ? data.metadata.nhp_billing_interval : null);
+        }
         await prisma.practitioner.update({
           where: { id: practitioner.id },
           data: {
             subscriptionStatus: status,
             whopMembershipId: membershipId ?? practitioner.whopMembershipId,
+            ...(interval ? { subscriptionInterval: interval } : {}),
           },
         });
         // Re-run the listing gate: subscribe → indexed; lapse → removed from discovery.

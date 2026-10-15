@@ -118,25 +118,29 @@ function baseUrl(): string {
 // ──────────────────────────────────────────────────────────────────────────────
 
 /**
- * Per-practitioner checkout for the existing monthly listing plan.
+ * Per-practitioner checkout for a Plan A listing plan, monthly or annual.
  *
- * Reuses WHOP_SUBSCRIPTION_PLAN_ID rather than creating pricing, so the price lives in exactly
- * one place (the Whop dashboard) and can never drift. The point of this over the generic hosted
- * product page is `metadata.practitioner_id`: it lets the webhook attribute the payment directly
- * instead of matching on email, which silently fails when someone pays from a different address.
+ * The caller resolves `planId` from the database (`loadPlanAPlanIds` in plan-a-billing.ts) rather
+ * than creating pricing, so the amount charged lives in exactly one place (the Whop dashboard). The
+ * point of this over the generic hosted product page is `metadata.practitioner_id`: it lets the
+ * webhook attribute the payment directly instead of matching on email, which silently fails when
+ * someone pays from a different address.
  */
 export async function createSubscriptionCheckout(params: {
   practitionerId: string;
   slug: string;
+  interval: 'monthly' | 'annual';
+  planId: string | null;
 }): Promise<{ checkoutConfigId: string; purchaseUrl: string }> {
-  const planId = process.env.WHOP_SUBSCRIPTION_PLAN_ID;
-  if (!planId) throw new WhopNotConfigured('create subscription checkout (WHOP_SUBSCRIPTION_PLAN_ID unset)');
+  if (!params.planId) {
+    throw new Error(`No ${params.interval} Plan A Whop plan id is configured (PlatformSetting)`);
+  }
 
   const cfg = await client('create subscription checkout').checkoutConfigurations.create({
     mode: 'payment',
-    plan_id: planId,
-    metadata: { practitioner_id: params.practitionerId },
-    redirect_url: `${baseUrl()}/practitioners/${params.slug}/edit?subscription=success`,
+    plan_id: params.planId,
+    metadata: { practitioner_id: params.practitionerId, nhp_billing_interval: params.interval },
+    redirect_url: `${baseUrl()}/practitioners/${params.slug}/edit?subscription=success#billing`,
   });
 
   const purchaseUrl = absoluteCheckoutUrl(cfg.purchase_url);

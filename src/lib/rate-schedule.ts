@@ -204,6 +204,11 @@ export function annualPlanAPriceCents(s: Pick<RateScheduleNumbers, 'planAMonthly
   return Math.round((s.planAMonthlyCents * 12 * (BPS_DENOMINATOR - s.annualDiscountBps)) / BPS_DENOMINATOR);
 }
 
+/** Twelve monthly Plan A fees less the yearly price: what paying yearly saves, in cents. */
+export function annualPlanASavingsCents(s: Pick<RateScheduleNumbers, 'planAMonthlyCents' | 'annualDiscountBps'>): number {
+  return s.planAMonthlyCents * 12 - annualPlanAPriceCents(s);
+}
+
 export type PlanKeyLike = 'PLAN_A' | 'PLAN_B';
 
 /** The plan's rate on an NHP-sourced session. */
