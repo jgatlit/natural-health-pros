@@ -43,7 +43,7 @@ export function AccountEmailSection({
   pendingEmail,
 }: Props) {
   return (
-    <Card id="account" className="space-y-3 p-5">
+    <Card id="account" className="scroll-mt-24 space-y-3 p-5">
       <div className="flex items-center gap-2">
         <AtSign className="h-4 w-4 text-muted-foreground" aria-hidden />
         <h2 className="text-sm font-semibold">Account email</h2>

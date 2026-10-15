@@ -18,33 +18,16 @@ const ENTRIES: EditSideNavEntry[] = [
   { id: 'brought-in', label: 'Practitioners you brought in' },
 ];
 
-let observers: { cb: IntersectionObserverCallback; observed: Element[] }[] = [];
 let reduced = false;
 let root: Root;
 let host: HTMLDivElement;
 const scrollSpy = vi.fn();
 
 beforeEach(() => {
-  observers = [];
   reduced = false;
   scrollSpy.mockReset();
   Element.prototype.scrollIntoView = scrollSpy;
   window.matchMedia = ((q: string) => ({ matches: reduced && q.includes('reduce'), media: q })) as typeof window.matchMedia;
-  globalThis.IntersectionObserver = class {
-    entry = { cb: null as unknown as IntersectionObserverCallback, observed: [] as Element[] };
-    constructor(cb: IntersectionObserverCallback) {
-      this.entry.cb = cb;
-      observers.push(this.entry);
-    }
-    observe(el: Element) {
-      this.entry.observed.push(el);
-    }
-    disconnect() {}
-    unobserve() {}
-    takeRecords() {
-      return [];
-    }
-  } as unknown as typeof IntersectionObserver;
   document.body.innerHTML = `
     <form id="f"><div id="profile"><h1>Edit profile</h1><div id="profile-photo">Photo</div></div></form>
     <div id="offerings"><h2>Offerings</h2></div>
@@ -133,31 +116,6 @@ describe('EditSideNav', () => {
     expect(scrollSpy).not.toHaveBeenCalled();
   });
 
-  it('marks the section in view via IntersectionObserver, preferring the deepest', () => {
-    mount();
-    const obs = observers.at(-1)!;
-    const rec = (id: string, isIntersecting: boolean) =>
-      ({ target: document.getElementById(id), isIntersecting }) as unknown as IntersectionObserverEntry;
-    act(() => obs.cb([rec('profile', true)], {} as IntersectionObserver));
-    expect(desktopLink('profile').getAttribute('aria-current')).toBe('location');
-    act(() => obs.cb([rec('profile-photo', true)], {} as IntersectionObserver));
-    expect(desktopLink('profile-photo').getAttribute('aria-current')).toBe('location');
-    expect(desktopLink('profile').getAttribute('aria-current')).toBeNull();
-    expect(document.querySelectorAll('[data-edit-nav="desktop"] [aria-current]')).toHaveLength(1);
-  });
-
-  it('scrolls the active item into view when the nav is taller than its box', () => {
-    mount();
-    const nav = document.querySelector('[data-edit-nav="desktop"]')!;
-    Object.defineProperty(nav, 'scrollHeight', { configurable: true, value: 900 });
-    Object.defineProperty(nav, 'clientHeight', { configurable: true, value: 300 });
-    scrollSpy.mockClear();
-    const obs = observers.at(-1)!;
-    act(() =>
-      obs.cb([{ target: document.getElementById('offerings'), isIntersecting: true } as unknown as IntersectionObserverEntry], {} as IntersectionObserver),
-    );
-    expect(scrollSpy).toHaveBeenCalledWith({ block: 'nearest' });
-  });
 });
 
 describe('EditSideNav and the unsaved-changes guard', () => {

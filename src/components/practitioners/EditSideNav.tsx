@@ -7,8 +7,13 @@ import { cn } from '@/lib/utils';
 export type EditSideNavEntry = {
   id: string;
   label: string;
+  deferred?: boolean;
   children?: readonly EditSideNavEntry[];
 };
+
+// Matches the scroll-mt-24 every anchor carries, so a clicked target sits exactly on the line.
+const READING_LINE = 96;
+const HOLD_MS = 700;
 
 function flatten(entries: readonly EditSideNavEntry[]): EditSideNavEntry[] {
   return entries.flatMap((e) => [e, ...(e.children ? flatten(e.children) : [])]);
@@ -18,6 +23,25 @@ function prefersReducedMotion() {
   return typeof window.matchMedia === 'function' && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 }
 
+function readActive(order: readonly string[]): string | null {
+  const els = order
+    .map((id) => document.getElementById(id))
+    .filter((el): el is HTMLElement => el !== null)
+    .sort((a, b) => (a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1));
+  if (els.length === 0) return null;
+  if (window.scrollY + window.innerHeight >= document.documentElement.scrollHeight - 2) {
+    return els[els.length - 1].id;
+  }
+  let current: string | null = null;
+  for (const el of els) {
+    if (el.getBoundingClientRect().top > READING_LINE + 2) break;
+    current = el.id;
+  }
+  return current;
+}
+
+// replaceState keeps history.state as-is: that is what keeps Next's router state intact. Next's
+// own refresh later rewrites the URL without the hash; the highlight does not depend on it.
 export function jumpToSection(id: string): boolean {
   const target = document.getElementById(id);
   if (!target) return false;
@@ -34,6 +58,7 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
   const [active, setActive] = useState<string | null>(null);
   const desktopRef = useRef<HTMLElement>(null);
   const detailsRef = useRef<HTMLDetailsElement>(null);
+  const holdRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     const found = new Set<string>();
@@ -44,7 +69,7 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
   }, [entries]);
 
   const visible = useMemo(() => {
-    if (!present) return entries;
+    if (!present) return entries.filter((e) => !e.deferred);
     return entries
       .filter((e) => present.has(e.id))
       .map((e) => (e.children ? { ...e, children: e.children.filter((c) => present.has(c.id)) } : e));
@@ -63,6 +88,7 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
       if (jumpToSection(id)) {
         e.preventDefault();
         setActive(id);
+        holdRef.current();
         if (detailsRef.current) detailsRef.current.open = false;
       }
     };
@@ -70,26 +96,64 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
     return () => window.removeEventListener('click', onClick, true);
   }, []);
 
+  // A reading line, not an IntersectionObserver band: a band leaves short trailing cards and the
+  // gaps between sub-sections with no owner. The active entry is the last anchor at or above the
+  // line, so a gap keeps the previous entry, and the page bottom always belongs to the last one.
+  // A click holds its entry until the programmatic scroll ends, so Profile stays Profile.
   useEffect(() => {
-    if (typeof IntersectionObserver === 'undefined') return;
-    const inView = new Set<string>();
-    const observer = new IntersectionObserver(
-      (records) => {
-        for (const r of records) {
-          if (r.isIntersecting) inView.add(r.target.id);
-          else inView.delete(r.target.id);
-        }
-        const current = [...order].reverse().find((id) => inView.has(id));
-        if (current) setActive(current);
-      },
-      { rootMargin: '-15% 0px -75% 0px' },
-    );
-    for (const id of order) {
-      const el = document.getElementById(id);
-      if (el) observer.observe(el);
-    }
-    return () => observer.disconnect();
+    let frame = 0;
+    let locked = false;
+    let timer = 0;
+    const release = () => {
+      locked = false;
+      window.clearTimeout(timer);
+    };
+    holdRef.current = () => {
+      locked = true;
+      window.clearTimeout(timer);
+      timer = window.setTimeout(release, HOLD_MS);
+    };
+    const compute = () => {
+      frame = 0;
+      if (locked) return;
+      const next = readActive(order);
+      if (next) setActive(next);
+    };
+    const schedule = () => {
+      if (!frame) frame = window.requestAnimationFrame(compute);
+    };
+    window.addEventListener('scroll', schedule, { passive: true });
+    window.addEventListener('resize', schedule);
+    window.addEventListener('scrollend', release);
+    schedule();
+    return () => {
+      window.removeEventListener('scroll', schedule);
+      window.removeEventListener('resize', schedule);
+      window.removeEventListener('scrollend', release);
+      window.cancelAnimationFrame(frame);
+      window.clearTimeout(timer);
+      holdRef.current = () => {};
+    };
   }, [order]);
+
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const d = detailsRef.current;
+      if (e.key !== 'Escape' || !d?.open) return;
+      d.open = false;
+      d.querySelector('summary')?.focus();
+    };
+    const onPointer = (e: MouseEvent) => {
+      const d = detailsRef.current;
+      if (d?.open && !d.contains(e.target as Node)) d.open = false;
+    };
+    document.addEventListener('keydown', onKey);
+    document.addEventListener('click', onPointer);
+    return () => {
+      document.removeEventListener('keydown', onKey);
+      document.removeEventListener('click', onPointer);
+    };
+  }, []);
 
   useEffect(() => {
     const nav = desktopRef.current;
@@ -98,6 +162,7 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
   }, [active]);
 
   const activeLabel = flatten(visible).find((e) => e.id === active)?.label ?? null;
+  const parentOfActive = visible.find((e) => e.children?.some((c) => c.id === active))?.id ?? null;
 
   const linkClass = (id: string, nested: boolean) =>
     cn(
@@ -106,7 +171,9 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
       nested ? 'pl-5 pr-2 text-xs' : 'pl-3 pr-2',
       active === id
         ? 'border-primary bg-primary/10 font-medium text-foreground'
-        : 'border-transparent text-muted-foreground',
+        : id === parentOfActive
+          ? 'border-transparent font-medium text-foreground'
+          : 'border-transparent text-muted-foreground',
     );
 
   const list = (items: readonly EditSideNavEntry[], nested = false) => (

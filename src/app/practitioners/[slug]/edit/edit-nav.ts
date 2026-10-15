@@ -1,6 +1,7 @@
 export type EditNavEntry = {
   id: string;
   label: string;
+  deferred?: boolean;
   children?: readonly EditNavEntry[];
 };
 
@@ -41,7 +42,7 @@ export function editNavEntries({ isSetUp, hasCaseStudies, showJoinLink }: EditNa
     { id: 'sections', label: 'Custom sections' },
     ...(isSetUp ? [] : bookingsAndClients),
     ...(showJoinLink ? [{ id: 'share-signup', label: 'Invite another practitioner' }] : []),
-    { id: 'brought-in', label: 'Practitioners you brought in' },
+    { id: 'brought-in', label: 'Practitioners you brought in', deferred: true },
     { id: 'account', label: 'Account email' },
   ];
 }
