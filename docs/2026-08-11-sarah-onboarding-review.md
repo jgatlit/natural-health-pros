@@ -1,5 +1,7 @@
 # Sarah Schindler onboarding session — design review
 
+> **Point-in-time record, 2026-08-11.** Figures and rules below are as of that date. Current rates, payouts and flags: `docs/money-model.md` and `CLAUDE.md`.
+
 **Call**: 2026-08-11, 17:00–18:08 UTC (68 min) · Jonathan Gudger ↔ Sarah Schindler
 **Source**: Zoom federated index, meeting `7e018911-653b-4bcc-8dcf-209e7731fb4f` (`zoom.chem.dev`)
 **Transcript**: VTT, 424 speaker turns, no AI summary row (`summary`/`action_items`/`discussions` all null in the federated store — this doc is the summary)

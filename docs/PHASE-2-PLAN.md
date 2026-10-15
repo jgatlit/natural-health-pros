@@ -1,5 +1,7 @@
 # Phase 2 Plan — Post-demo unlocks
 
+> Planning record from May 2026. Whop Connected Accounts is self-serve and shipped: see `docs/PHASE-2C-WHOP-CONNECTED-ACCOUNTS.md`. Current rates, payouts and flags: `docs/money-model.md` and `CLAUDE.md`.
+
 > ⚠️ **STALE BLOCKER — the "Whop Platforms API is invite-only" section below (§ 2C) is WRONG and must not be acted on.**
 > "Platforms" and "Connected Accounts" are the same **self-serve** product; `parent_company_id` is a documented optional field on the public `POST /api/v1/companies`. The original "proof" probed `/api/v2/connected_accounts` — **a path that does not exist** — and read the 401 as an entitlement gate. The real blocker was an API-key *class* problem (App key vs Company key), fixed in the dashboard in minutes.
 > **Do not email `sales@whop.com`. Do not send the templates in `docs/outbound/`.** Layer Y shipped 2026-07-29 (PRs #37/#38). Current truth: `docs/PHASE-2C-WHOP-CONNECTED-ACCOUNTS.md`.

@@ -11,6 +11,8 @@ related artifacts:
   - Client company entity (internal): Holistic Health Educators (HHE)
 ---
 
+> **Do not send.** Whop for Platforms / Connected Accounts is self-serve, so no access request is needed. Architecture: `docs/PHASE-2C-WHOP-CONNECTED-ACCOUNTS.md`.
+
 > ## ⚠️ DRAFTED 2026-05-25 — REFRESH BEFORE SENDING (reviewed 2026-07-16)
 >
 > URLs and the product name were corrected 2026-07-16 (`naturalhealthpros.com`; the HHE link

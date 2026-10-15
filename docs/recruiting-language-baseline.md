@@ -1,5 +1,7 @@
 # Natural Health Pros — recruiting language baseline
 
+> **Point-in-time record, 2026-08.** Figures and rules below are as of that date. Current rates, payouts and flags: `docs/money-model.md` and `CLAUDE.md`. The monthly fee shown to practitioners comes from their rate schedule.
+
 **Version**: v0.1 · 2026-08-12 · **living document**
 **Speaker**: Sarah Schindler (practitioner lead) — and anyone else recruiting graduates
 **Source**: language validated live on the 2026-08-11 onboarding call; see `docs/2026-08-11-sarah-onboarding-review.md` §D3

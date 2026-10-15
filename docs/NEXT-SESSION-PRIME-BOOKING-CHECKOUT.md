@@ -1,3 +1,6 @@
+
+> **Point-in-time record, 2026-08.** Figures and rules below are as of that date. Current rates, payouts and flags: `docs/money-model.md` and `CLAUDE.md`.
+
 > ⚠️ **SUPERSEDED 2026-08-13 — this brief's job is DONE.** The review + reconciliation it asks for
 > happened; the canonical design is now vault `art_c688ea69482744d19c89` (v2) and the task set lives
 > in vault project `prj_63362baf8f58464c904e`.

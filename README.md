@@ -32,6 +32,8 @@ Per the 2026-05-15 joint-call decision + 2026-05-18 reconciliation + 2026-05-24 
 
 ## Phase plan (53-feature adjudication, decisions-JSON 2026-05-15)
 
+> **Point-in-time plan, 2026-05-15.** `CLAUDE.md` is current; rates and payouts are in `docs/money-model.md`.
+
 - **Phase 0** (this commit) — foundation: schema (User + Practitioner + Specialty + City + NextAuth tables), withAuth wrapper, Prisma client, rate-limit env-gated stub, NextAuth v5 skeleton.
 - **Phase 1** — practitioner profile + linktree-style landing page + Typesense+InstantSearch faceted search (price/specialty/availability + haversine + pg_trgm + hierarchical tax) + practitioner invitation flow (net-new).
 - **Phase 2** — notifications (Resend + in-app + web push) + Cal.com scheduling + indexable city pages (HHE-student locations only).
@@ -41,12 +43,19 @@ Per the 2026-05-15 joint-call decision + 2026-05-18 reconciliation + 2026-05-24 
 
 ## Local dev
 
+Use a throwaway local Postgres. Never put the production database URL in any local env file, and never run `prisma migrate dev` against production.
+
 ```bash
-cp .env.example .env.local   # fill DATABASE_URL + AUTH_SECRET
+docker run -d --name nhp-pg -e POSTGRES_PASSWORD=pg -p 5433:5432 postgres:16
+export hhe_directory_DATABASE_URL=postgresql://postgres:pg@localhost:5433/postgres
+export hhe_directory_DATABASE_URL_UNPOOLED=postgresql://postgres:pg@localhost:5433/postgres
+cp .env.example .env.local   # fill AUTH_SECRET; leave DATABASE_URL pointing at localhost or empty
 npm install
-npm run db:migrate:dev
+npx prisma db push --skip-generate   # current schema; migration history cannot replay on an empty database
 npm run dev
 ```
+
+Writing a migration, and why `npm run build` is not run locally (use `npx next build`): see the Migrations section of `CLAUDE.md`. Rates and payouts: `docs/money-model.md`.
 
 ## Reference artifacts (outside repo, historical naming retained)
 

@@ -330,7 +330,7 @@ Branding is **locked** regardless of the CMS slug. We can apply white / forest-g
 
 - Stack: Next.js 14.2 App Router (`src/`, TS strict) · Tailwind v4 `@theme` (globals.css) · shadcn/ui new-york · Prisma 6 + Neon (env vars prefixed `hhe_directory_`) · NextAuth v5 + Resend magic-link · Typesense Cloud · Vercel Blob/KV · Sentry.
 - Schema already carries: multiple `BookingLink`s, full Whop `Connected Account` + `WhopProduct` + webhook scaffolding, `Invitation` flow, city/specialty taxonomy, `searchText` (pg_trgm) + Typesense indexer.
-- Prisma reads `.env` (not `.env.local`) — `cp .env.local .env` after `vercel env pull`. Migration flow in CLAUDE.md.
+- Prisma reads `.env` (not `.env.local`), and a Vercel-pulled `.env` is production: see CLAUDE.md "Migrations" for the migration flow.
 - **DO NOT touch** legacy artifacts (PracticeNear Vercel project/domain, the two forks, the search-arch donor) — see CLAUDE.md "DO NOT touch."
 
 ---

@@ -1,5 +1,7 @@
 # Whop payments configuration — findings and per-practitioner runbook
 
+> **Point-in-time record, 2026-09-08.** Figures and rules below are as of that date. Current rates, payouts and flags: `docs/money-model.md` and `CLAUDE.md`.
+
 **Date:** 2026-09-08
 **Trigger:** Sarah Schindler reported a Whop notification asking her to verify a domain for Apple Pay,
 and asked whether it was a platform-side or practitioner-side task.

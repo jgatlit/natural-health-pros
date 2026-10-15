@@ -15,7 +15,7 @@ npm run typesense:reindex     # one-shot: push all 18 seeded practitioners to Ty
 npm run dev                   # /search renders live against Typesense Cloud
 ```
 
-If `.env.local` is ever lost, restore from your password manager OR run `vercel env pull .env.local --yes` once Vercel envs are populated (see below).
+If `.env.local` is ever lost, restore from your password manager OR run `vercel env pull .env.local --yes` once Vercel envs are populated (see below). The pulled file includes the production database URL: keep it out of any worktree used for Prisma commands and never copy it to `.env` (see `CLAUDE.md`, "Migrations").
 
 ## Vercel envs — operator action required before deploy
 

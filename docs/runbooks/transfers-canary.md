@@ -2,7 +2,9 @@
 
 Referral and recruiter shares move to the payee's Whop balance by an internal transfer when the client's
 payment clears. This is the runbook for turning that on safely. Nothing here is automatic: every switch is
-set by the operator, in this order.
+set by the operator, in this order. Transfers are off in production (read-only check, 2026-10-14/15): no switch below is set until Whop
+business verification of the parent company is complete and Step 0 has been read. The rules these switches
+guard are summarised in [`docs/money-model.md`](../money-model.md).
 
 ## The switches
 

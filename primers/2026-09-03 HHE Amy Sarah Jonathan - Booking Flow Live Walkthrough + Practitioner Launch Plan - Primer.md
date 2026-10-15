@@ -1,5 +1,7 @@
 # Standalone primer — full resolution for vaultless sessions
 
+> **Point-in-time record, 2026-09-03.** Current rates, payouts and flags: `docs/money-model.md` and `CLAUDE.md`.
+
 > ⚠️ **STATUS RE-VERIFIED 2026-09-04 by `/process-inbox` (automated run) — three of this primer's blockers have since SHIPPED. Read this before acting on anything below.**
 > This primer was written 2026-09-03 20:07, *before* that evening's merges. Its "NOT YET MERGED" /
 > "Not yet built" claims are **stale**. Verified against `git branch --contains` and `git log` in

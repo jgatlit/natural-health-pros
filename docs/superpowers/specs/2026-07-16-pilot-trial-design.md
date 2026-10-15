@@ -1,5 +1,7 @@
 # Spec — "Pilot" becomes a 90-day trial
 
+> **Point-in-time record, 2026-07-16.** Prices quoted here are as of that date. The monthly fee a practitioner sees comes from their rate schedule: `docs/money-model.md`.
+
 **Date:** 2026-07-16 · **Status:** approved, pending implementation
 **Supersedes:** `Practitioner.comped` as the listing mechanism.
 

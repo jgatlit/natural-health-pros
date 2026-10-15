@@ -22,9 +22,9 @@ Prod: **https://naturalhealthpros.com** (LIVE over HTTPS since 2026-07-15) · al
 
 ## 3. Practitioner dashboard (ongoing) — `/practitioners/[slug]/edit`
 - **Profile**: name, headline, bio, who-I-help, **photo upload**, website, telehealth/in-person, city, years, specialties. "Regenerate with AI" re-drafts from a description.
-- **Offerings**: add / edit / remove — name · description · price · one-time vs monthly · category. Shown on your public page. *(Online checkout for these = Layer Y, coming with Whop Platforms.)*
+- **Offerings**: add / edit / remove — name · description · price · one-time vs monthly · category. Shown on your public page. *(Online checkout for these runs through your connected Whop account: Layer Y.)*
 - **Booking links**: your scheduling URLs (Cal.com / Calendly / SavvyCal / Acuity…).
-- **Directory listing**: **Subscribe · $49/mo** (first 30-day period is free, then $49/mo) → Whop checkout → once paid you're listed in search. Pilots show **"Complimentary"** and are listed free.
+- **Directory listing**: **Subscribe · the Plan A monthly fee from your rate schedule** (first 30-day period is free) → Whop checkout → once paid you're listed in search. Pilots show **"Complimentary"** and are listed free.
 
 ## 4. Public / patient flow
 - **`/`** — featured practitioners + search entry.
@@ -35,5 +35,5 @@ Prod: **https://naturalhealthpros.com** (LIVE over HTTPS since 2026-07-15) · al
 A practitioner shows in **search + featured** only when their profile is **complete** (name + city + bio ≥20 chars + ≥1 specialty) **AND** (`comped` **OR** subscription `ACTIVE`). Direct profile links always resolve, listed or not.
 
 ## Payments at a glance
-- **Layer X** (LIVE): practitioner pays **$49/mo** to be listed (first 30-day period free) → our Whop → `/api/whop/webhook` flips them to ACTIVE. Config: `docs/LAYER-X-SUBSCRIPTION.md`.
-- **Layer Y** (LIVE since 2026-07-29, PRs #37/#38): patients pay practitioners for their offerings via connected Whop accounts. ⚠️ The former "gated on the invite-only Whop Platforms grant" note was **wrong on both counts** — Platforms/Connected Accounts is **self-serve** (`parent_company_id` is a documented optional field on the public `POST /api/v1/companies`), and the work shipped. There is nothing to request from `sales@whop.com`.
+- **Layer X** (LIVE): practitioner pays the Plan A monthly fee (from their rate schedule) to be listed (first 30-day period free) → our Whop → `/api/whop/webhook` flips them to ACTIVE. Config: `docs/LAYER-X-SUBSCRIPTION.md`.
+- **Layer Y** (LIVE since 2026-07-29, PRs #37/#38): patients pay practitioners for their offerings via connected Whop accounts. Whop Platforms / Connected Accounts is self-serve (`parent_company_id` is a documented optional field on the public `POST /api/v1/companies`); nothing needs to be requested from `sales@whop.com`.

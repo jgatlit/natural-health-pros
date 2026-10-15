@@ -37,7 +37,7 @@ export const ROUTE_META: Record<string, RouteMeta> = {
   },
   '/practitioners/[slug]': {
     description:
-      '<strong>Practitioner profile.</strong> Linktree-style — avatar, name + city, specialty badges, "Book intro consult" (real if bookingUrl set), "Browse offerings" + "Request invoice" (placeholders pending Wedge 2C), bio.',
+      '<strong>Practitioner profile.</strong> Linktree-style — avatar, name + city, specialty badges, "Book intro consult" (real if bookingUrl set), offerings with Whop checkout through the practitioner\'s connected account, custom sections, bio.',
     audience: 'public',
     status: 'live',
     sampleHref: '/practitioners/maya-sullivan',
@@ -83,7 +83,7 @@ export const ROUTE_META: Record<string, RouteMeta> = {
   },
   '/practitioners/[slug]/edit': {
     description:
-      '<strong>Profile edit form.</strong> displayName, bio, city, yearsInPractice, specialties (multi-select), bookingUrl (Cal.com / Calendly / etc.). Plus a "Payments" section showing Whop sub-merchant status (currently "Pending access"). Reindexes Typesense on save.',
+      '<strong>Profile edit form.</strong> displayName, bio, city, yearsInPractice, specialties (multi-select), bookingUrl (Cal.com / Calendly / etc.). Plus the Plan A / Plan B choice, Whop payments setup, offerings, custom sections, the private &ldquo;open to outside work&rdquo; toggle, the practitioner&rsquo;s join link, and a left-hand section navigation with scroll-spy. Reindexes Typesense on save.',
     audience: 'auth',
     status: 'live',
     sampleHref: '/practitioners/maya-sullivan/edit',
@@ -109,7 +109,25 @@ export const ROUTE_META: Record<string, RouteMeta> = {
   },
   '/admin/commercial-settings': {
     description:
-      '<strong>The two operator-editable numbers that decide money.</strong> <em>Lead Attribution Term</em> (8 months, spec v1.4 &sect;1.1) governs BOTH plans &mdash; each charges its share on every platform-sourced session inside the term and 0% after it &mdash; and is snapshotted onto every attribution row at creation, so an edit here is forward-only and cannot reprice a claim already sold. <em>Referral Hold Period</em> (90 days) is how long an unpayable referrer&rsquo;s share is held while they claim their Whop account, clocked per held row. Also shows the held and <code>expired_unclaimed</code> totals; nothing acts on an expired share automatically, in either direction, because day-91 policy is deliberately unruled.',
+      '<strong>Rate schedules and payouts.</strong> Every price, percentage and term lives in an immutable, content-addressed <code>RateSchedule</code> row; this page shows the current schedule, the practitioners on each, and a form that saves a new schedule for NEW sign-ups only (existing practitioners move through the audited &ldquo;migrate cohort&rdquo; action; a practitioner with no schedule is refused at checkout until an admin assigns one). Also holds the <em>Referral Hold Period</em> (<code>referral_hold_days</code>, 90): only the unclaimed-share window for a referrer who cannot yet receive money. Below: held and <code>expired_unclaimed</code> referral totals, the <strong>transfers needing attention</strong> table (rows whose transfer outcome needs a person) and the recruiting-affiliate ledger. Transfers are off in production (read-only check, 2026-10-14/15); see <code>docs/money-model.md</code> and <code>docs/runbooks/transfers-canary.md</code>.',
+    audience: 'admin',
+    status: 'live',
+  },
+  '/admin/signups': {
+    description:
+      '<strong>Open sign-up cohorts.</strong> Lists sign-up cohorts (for example <code>hhe</code>) with an enable/disable switch, and the invitations each cohort has issued with their progress through onboarding. Disabling a cohort stops invitations already issued as well as new requests.',
+    audience: 'admin',
+    status: 'live',
+  },
+  '/admin/attributions': {
+    description:
+      '<strong>Attribution overrides.</strong> The one sanctioned way past the once-only attribution decision: each override needs a note and writes an adjustment to the fee ledger. Client emails are never shown; rows are identified by practitioner, referrer and date.',
+    audience: 'admin',
+    status: 'live',
+  },
+  '/admin/specialties': {
+    description:
+      '<strong>Specialty taxonomy moderation.</strong> Approve or reject pending aliases, promote proposed specialties and merge duplicates.',
     audience: 'admin',
     status: 'live',
   },
@@ -145,7 +163,7 @@ export const ROUTE_META: Record<string, RouteMeta> = {
   },
   '/api/cron/whop-reconcile': {
     description:
-      '<strong>Whop payout drift sweep.</strong> The safety net behind the <code>identity_profile.*</code> webhook, which Whop drops permanently after 3 retries (~70s). Reads <code>GET /identity_profiles/{idpf_…}</code> — the only endpoint exposing <code>status</code>, <code>payout_status</code> and <code>payouts_enabled</code> together — and keys completion on <code>status: approved</code>. ONE-WAY: it may OPEN the payout gate, never close it, because a parent-company API key is known to under-report (<code>linked_companies</code> reads empty here but arrives populated on the webhook). Revocation stays with <code>identity_profile.rejected</code>/<code>needs_action</code>. Reports connected accounts that have NO stored Whop ids — the signature of a webhook that never resolved. Bearer <code>CRON_SECRET</code> when set.',
+      '<strong>Whop payout drift sweep.</strong> The safety net behind the <code>identity_profile.*</code> webhook, which Whop drops permanently after 3 retries (~70s). Reads <code>GET /identity_profiles/{idpf_…}</code> — the only endpoint exposing <code>status</code>, <code>payout_status</code> and <code>payouts_enabled</code> together — and keys completion on <code>status: approved</code>. ONE-WAY: it may OPEN the payout gate, never close it, because a parent-company API key is known to under-report (<code>linked_companies</code> reads empty here but arrives populated on the webhook). Revocation stays with <code>identity_profile.rejected</code>/<code>needs_action</code>. Reports connected accounts that have NO stored Whop ids — the signature of a webhook that never resolved. Bearer <code>CRON_SECRET</code> when set. Hourly (<code>vercel.json</code>); it is also the retry backstop for referral and recruiter share transfers, which do nothing while <code>WHOP_TRANSFERS_ENABLED</code> is not exactly <code>true</code> (off in production per a read-only check on 2026-10-14/15).',
     audience: 'api',
     status: 'live',
   },
@@ -153,6 +171,91 @@ export const ROUTE_META: Record<string, RouteMeta> = {
     description:
       '<strong>Public KYC return landing.</strong> Where <code>/api/whop/onboarding/return</code> sends anyone it cannot positively identify as the owner. Deliberately generic — no name, slug or status — so it renders identically for the practitioner who just finished, a stale link, and a stranger, which is what lets the return route stay unauthenticated without leaking whether a practitioner exists. ⚠️ The path is load-bearing: middleware gates on <code>startsWith(&apos;/onboarding&apos;)</code>, a PREFIX match, so naming this <code>/onboarding-complete</code> would auth-gate it and reintroduce the dead end it exists to remove.',
     audience: 'public',
+    status: 'live',
+  },
+  '/join/[cohort]': {
+    description:
+      '<strong>Open sign-up.</strong> Public page for a sign-up cohort (<code>/join/hhe</code>); enter an email to receive a magic link that leads to <code>/onboarding</code>. <code>?nhpa=&lt;recruiterToken&gt;</code> identifies the practitioner who brought the visitor in: middleware stamps it into a signed cookie, and onboarding reads it from the browser that redeems the sign-in link. Unknown or disabled cohorts return 404. Not indexed.',
+    audience: 'public',
+    status: 'live',
+    sampleHref: '/join/hhe',
+  },
+  '/r/[token]': {
+    description:
+      '<strong>Client-referral landing.</strong> Records a referral touch, sets a signed fallback cookie, then redirects to the practitioner profile carrying <code>?nhpr=&lt;touchToken&gt;</code>. Public, always dynamic.',
+    audience: 'public',
+    status: 'live',
+  },
+  '/practitioners/[slug]/book': {
+    description:
+      '<strong>Booking capture.</strong> One page for client capture and the practitioner&rsquo;s calendar; accepts <code>link</code>, <code>offering</code> and <code>nhpr</code>. Not indexed.',
+    audience: 'public',
+    status: 'live',
+  },
+  '/practitioners/[slug]/book/[token]': {
+    description:
+      '<strong>Booking flow.</strong> Addressed by the booking intent&rsquo;s random public token, so returning to it is idempotent: capture, schedule, then embedded Whop checkout priced from the practitioner&rsquo;s rate schedule. Not indexed.',
+    audience: 'public',
+    status: 'live',
+  },
+  '/auth/confirm-email-change/[token]': {
+    description:
+      '<strong>Email-change confirmation.</strong> Confirms a pending account-email change from the link sent to the new address; shows an error card for an expired token or an address that is no longer available.',
+    audience: 'public',
+    status: 'live',
+  },
+  '/api/cities': {
+    description:
+      '<strong>City typeahead.</strong> Public, dynamic, capped results from the US Census place catalog, which stays on the server.',
+    audience: 'api',
+    status: 'live',
+  },
+  '/api/practitioners/[slug]/photo': {
+    description:
+      '<strong>Profile photo upload authorisation.</strong> Confirms the signed-in user owns the slug (or is an admin) and returns a short-lived Vercel Blob client token scoped to image types.',
+    audience: 'api',
+    status: 'live',
+  },
+  '/api/practitioners/[slug]/section-media': {
+    description:
+      '<strong>Custom-section media upload authorisation.</strong> Same ownership check as the photo route; pins the destination path, content types and size ceiling server-side. Uploaded video is served under a CSP <code>media-src</code> pinned to the Blob store host.',
+    audience: 'api',
+    status: 'live',
+  },
+  '/api/survey/notify': {
+    description:
+      '<strong>Practitioner-survey notification.</strong> Called by a database trigger on each survey submission; fail-closed authentication, then emails the team.',
+    audience: 'api',
+    status: 'live',
+  },
+  '/api/health/search': {
+    description:
+      '<strong>Search uptime probe.</strong> Vercel Cron every 15 minutes; 200 when the Typesense cluster and a real search both pass, 503 otherwise.',
+    audience: 'api',
+    status: 'live',
+  },
+  '/api/cron/booking-sweep': {
+    description:
+      '<strong>Booking recovery and notices.</strong> Vercel Cron every 15 minutes; recovers stalled booking intents (resume, scheduled and paid notices) and sends referral booked and claim notices.',
+    audience: 'api',
+    status: 'live',
+  },
+  '/api/cron/trial-sweep': {
+    description:
+      '<strong>Pilot-trial sweep.</strong> Vercel Cron daily; warns before <code>trialEndsAt</code> and delists lapsed trials. Warning emails state the Plan A monthly fee from the practitioner&rsquo;s rate schedule.',
+    audience: 'api',
+    status: 'live',
+  },
+  '/api/cron/db-backup': {
+    description:
+      '<strong>Daily database backup.</strong> Vercel Cron; validates database health, writes a dated export to the private Blob store, then prunes beyond 30 days.',
+    audience: 'api',
+    status: 'live',
+  },
+  '/api/cron/db-snapshot': {
+    description:
+      '<strong>Weekly Neon snapshot.</strong> Vercel Cron; validates database health first and touches nothing if it fails.',
+    audience: 'api',
     status: 'live',
   },
   '/api/auth/[...nextauth]': {

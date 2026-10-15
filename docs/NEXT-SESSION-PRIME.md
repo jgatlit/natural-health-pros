@@ -1,5 +1,7 @@
 # Next Session Prime — Natural Health Pros
 
+> **Point-in-time record, 2026-07-16.** Figures and rules below are as of that date. Current rates, payouts and flags: `docs/money-model.md` and `CLAUDE.md`.
+
 > **Written 2026-07-16**, immediately post-launch. Read this first. Everything below was verified live, not assumed.
 
 ## 0a. PARKED 2026-07-16 evening — read this first

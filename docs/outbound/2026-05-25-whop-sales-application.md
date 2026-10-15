@@ -9,6 +9,8 @@ purpose: Request invite-only access to Whop for Platforms / Connected Accounts A
 related: docs/PHASE-2-PLAN.md §2C, docs/SEARCH-SETUP.md
 ---
 
+> **Do not send.** Whop for Platforms / Connected Accounts is self-serve, so no access request is needed. Architecture: `docs/PHASE-2C-WHOP-CONNECTED-ACCOUNTS.md`.
+
 # Email draft — Whop for Platforms application
 
 ---
