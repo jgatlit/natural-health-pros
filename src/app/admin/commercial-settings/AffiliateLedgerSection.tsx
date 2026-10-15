@@ -9,7 +9,6 @@ import {
   type LedgerAmounts,
   type LedgerTotals,
 } from '@/lib/affiliate-earnings';
-import { STUCK_SENDING_AFTER_MS } from '@/lib/affiliate-payouts';
 
 const usd = (cents: number) => `$${(cents / 100).toFixed(2)}`;
 
@@ -31,10 +30,11 @@ type Row = {
  * lane only makes the numbers visible. Amounts are the ledger's own, net of refunds.
  *
  * "Refund balance" is the OPEN total of refund debits: client payments refunded after the recruiter's
- * share was paid, which are netted off that recruiter's next payouts. It is money NHP is out of
- * pocket for until the recruiter's next share arrives, so it is shown as a total as well.
+ * transfer was claimed, which are netted off that recruiter's next transfer. It is money NHP is out
+ * of pocket for until the recruiter's next share arrives, so it is shown as a total as well.
+ * Shares without a confirmed receipt are listed by `TransfersNeedingAttention`.
  */
-export async function AffiliateLedgerSection({ now = new Date() }: { now?: Date }) {
+export async function AffiliateLedgerSection() {
   const [recruited, entries, adjustmentRows] = await Promise.all([
     prisma.practitioner.findMany({
       where: whereAnyRecruiter,
@@ -42,15 +42,11 @@ export async function AffiliateLedgerSection({ now = new Date() }: { now?: Date 
     }),
     prisma.affiliateLedgerEntry.findMany({
       select: {
-        id: true,
-        lastError: true,
-        updatedAt: true,
         recruiterPractitionerId: true,
         state: true,
         shareUsdCents: true,
         reversedUsdCents: true,
         transferUsdCents: true,
-        holdUntil: true,
         adjustmentAppliedUsdCents: true,
       },
       take: 50_000,
@@ -65,13 +61,6 @@ export async function AffiliateLedgerSection({ now = new Date() }: { now?: Date 
   for (const p of recruited) {
     if (p.recruitedById) recruitCount.set(p.recruitedById, (recruitCount.get(p.recruitedById) ?? 0) + 1);
   }
-  // Rows the sweep will never touch again: a transfer claimed and possibly sent with no receipt
-  // (SENDING for over an hour), or parked after a failure that could not be proven harmless (HELD).
-  const stuck = entries.filter(
-    (e) =>
-      e.state === 'HELD' ||
-      (e.state === 'SENDING' && e.updatedAt.getTime() <= now.getTime() - STUCK_SENDING_AFTER_MS),
-  );
   const byRecruiter = new Map<string, LedgerAmounts[]>();
   for (const e of entries) {
     const list = byRecruiter.get(e.recruiterPractitionerId) ?? [];
@@ -108,7 +97,7 @@ export async function AffiliateLedgerSection({ now = new Date() }: { now?: Date 
       name: person.get(id)?.displayName || person.get(id)?.slug || id,
       slug: person.get(id)?.slug ?? '',
       recruits: recruitCount.get(id) ?? 0,
-      totals: summarizeEntries(byRecruiter.get(id) ?? [], now),
+      totals: summarizeEntries(byRecruiter.get(id) ?? []),
       adjustments: summarizeAdjustments(adjustmentsByRecruiter.get(id) ?? []),
     }))
     .sort((a, b) => b.recruits - a.recruits || a.name.localeCompare(b.name));
@@ -122,57 +111,16 @@ export async function AffiliateLedgerSection({ now = new Date() }: { now?: Date 
       </h2>
       <p className="mt-1 max-w-2xl text-sm leading-relaxed text-slate-600">
         Read-only. Recruiter links are written once at sign-up and never change. Amounts are the affiliate
-        ledger&apos;s, net of refunds. Recruiters are paid as client payments come in once payouts are live; payouts
-        are net of Whop&apos;s transfer fee. A refund after a share was paid becomes a balance netted off that
-        recruiter&apos;s next payouts.{' '}
+        ledger&apos;s, net of refunds. Each share is credited to the recruiter&apos;s Whop balance as the client
+        payment clears. A refund after a share was claimed for transfer becomes a balance netted off that
+        recruiter&apos;s next transfer.{' '}
         {!transfersOn && <strong>Payouts are off (WHOP_TRANSFERS_ENABLED is not true): nothing has been paid.</strong>}
       </p>
 
       <p className="mt-3 text-sm text-slate-700" data-testid="affiliate-refund-balance-total">
-        Open refund balance across all recruiters (to be netted off their next payouts):{' '}
+        Open refund balance across all recruiters (to be netted off their next transfers):{' '}
         <strong>{usd(openRefundBalanceUsdCents)}</strong>
       </p>
-
-      {stuck.length > 0 && (
-        <div className="mt-4 rounded-lg border border-red-300 bg-red-50 p-4" role="alert">
-          <h3 className="text-sm font-semibold text-red-900">
-            {stuck.length} payout row{stuck.length === 1 ? '' : 's'} need a person
-          </h3>
-          <p className="mt-1 text-sm leading-relaxed text-red-900">
-            The sweep will not touch these again. Before ANY manual release or re-send, look the transfer up in
-            Whop (<code>GET /transfers?origin_id=&lt;parent&gt;</code>, match <code>metadata.affiliate_ledger_entry_id</code>
-            to the row id below): if it exists, record it; only if it does not exist is it safe to pay.
-          </p>
-          <table className="mt-3 w-full text-left text-sm">
-            <thead className="text-xs uppercase tracking-wide text-red-900">
-              <tr>
-                <th className="py-1 pr-3">Row</th>
-                <th className="py-1 pr-3">Recruiter</th>
-                <th className="py-1 pr-3">State</th>
-                <th className="py-1 pr-3">Amount</th>
-                <th className="py-1 pr-3">Since</th>
-                <th className="py-1 pr-3">Last error</th>
-              </tr>
-            </thead>
-            <tbody>
-              {stuck.map((e) => (
-                <tr key={e.id} className="border-t border-red-200">
-                  <td className="py-1 pr-3 font-mono text-xs">{e.id}</td>
-                  <td className="py-1 pr-3">
-                    {person.get(e.recruiterPractitionerId)?.displayName || e.recruiterPractitionerId}
-                  </td>
-                  <td className="py-1 pr-3">{e.state}</td>
-                  <td className="py-1 pr-3">
-                    {usd(e.transferUsdCents ?? Math.max(0, e.shareUsdCents - e.reversedUsdCents))}
-                  </td>
-                  <td className="py-1 pr-3">{e.updatedAt.toISOString().slice(0, 16).replace('T', ' ')}</td>
-                  <td className="py-1 pr-3 text-xs">{e.lastError ?? ''}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
 
       {rows.length === 0 ? (
         <p className="mt-4 text-sm text-slate-600">Nobody has been recruited yet.</p>
@@ -183,9 +131,7 @@ export async function AffiliateLedgerSection({ now = new Date() }: { now?: Date 
               <tr>
                 <th className="py-2 pr-3">Recruiter</th>
                 <th className="py-2 pr-3">Brought in</th>
-                <th className="py-2 pr-3">Pending</th>
                 <th className="py-2 pr-3">Accrued</th>
-                <th className="py-2 pr-3">Held</th>
                 <th className="py-2 pr-3">Paid</th>
                 <th className="py-2 pr-3">Refund balance (open)</th>
               </tr>
@@ -203,9 +149,7 @@ export async function AffiliateLedgerSection({ now = new Date() }: { now?: Date 
                     )}
                   </td>
                   <td className="py-2 pr-3">{r.recruits}</td>
-                  <td className="py-2 pr-3">{usd(r.totals.pendingUsdCents)}</td>
                   <td className="py-2 pr-3">{usd(r.totals.accruedUsdCents)}</td>
-                  <td className="py-2 pr-3">{usd(r.totals.heldUsdCents)}</td>
                   <td className="py-2 pr-3">{usd(r.totals.settledUsdCents)}</td>
                   <td className="py-2 pr-3">{usd(r.adjustments.openBalanceUsdCents)}</td>
                 </tr>

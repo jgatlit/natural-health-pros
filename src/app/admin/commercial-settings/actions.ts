@@ -30,15 +30,14 @@ async function authorizeAdmin() {
 
 export type SettingFormState = { ok: boolean; message: string } | null;
 
-const SAVEABLE = ['referralHoldDays', 'affiliateHoldDays'] as const;
+const SAVEABLE = ['referralHoldDays'] as const;
 
 /**
- * Save one commercial setting (the referral hold period and the recruiter payout hold — rates and
- * terms live in the rate schedule below).
+ * Save one commercial setting (the referral hold period — rates and terms live in the rate
+ * schedule below).
  *
  * ⚠️ FORWARD-ONLY, AND THAT IS NOT ENFORCED HERE. Every ledger row snapshots its hold at creation,
- * so a change made on this screen governs NEW rows only. The recruiter hold requires a reason,
- * which `saveSetting` records on the audit row.
+ * so a change made on this screen governs NEW rows only.
  */
 export async function saveCommercialSetting(
   _prev: SettingFormState,

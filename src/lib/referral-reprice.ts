@@ -19,10 +19,12 @@
  *      It NEVER rises: a share already reduced in place by a refund stays reduced, and a row whose
  *      old rate was above the schedule's is clamped down to it.
  *   2. Only rows still owed can change: PAYABLE, HELD, EXPIRED_UNCLAIMED. A SETTLED row has already
- *      been paid: it is reported (FLAG_SETTLED, with the overpaid amount) and never touched.
+ *      been paid: it is reported (FLAG_SETTLED, with the overpaid amount) and never touched, and
+ *      its referrer share stays with the referrer in the money totals (NHP retains collected minus
+ *      what was paid, not collected minus the re-priced share).
  *   3. No anchor or no schedule: SKIP with the reason. A guess would move money.
- *   4. Rows with a REFERRER_TRANSFER fee-ledger entry that is not PENDING/BLOCKED (SENDING, FAILED,
- *      SETTLED: a transfer may have left) are SKIPPED with IN_FLIGHT_TRANSFER.
+ *   4. A row in SENDING, or whose fee-ledger transfer entry is SENDING or FAILED (a transfer may be
+ *      in flight), is SKIPPED with IN_FLIGHT_TRANSFER.
  *   5. THE MONEY IS REPORTED, NEVER REPAIRED. Zeroing a past-term share leaves the old rule's NHP
  *      take AND the former referrer share with NHP, and the practitioner stays charged what the
  *      old rule took (up to 40%, above the 30% cap). Per row: what was collected, what v1.5 would
@@ -106,11 +108,14 @@ export function repriceReferralRow(input: RepriceInput): RepriceDecision {
     return { action: 'SKIP', id, reason: 'MALFORMED: non-integer cents' };
   }
 
-  if (input.transferStatus && input.transferStatus !== 'PENDING' && input.transferStatus !== 'BLOCKED') {
+  if (
+    input.state === 'SENDING' ||
+    (input.transferStatus && input.transferStatus !== 'PENDING' && input.transferStatus !== 'BLOCKED' && input.transferStatus !== 'SETTLED')
+  ) {
     return {
       action: 'SKIP',
       id,
-      reason: `IN_FLIGHT_TRANSFER: fee-ledger transfer entry is ${input.transferStatus}; a transfer may have left, a human must look`,
+      reason: `IN_FLIGHT_TRANSFER: ${input.state === 'SENDING' ? 'the ledger row is SENDING' : `fee-ledger transfer entry is ${input.transferStatus}`}; a transfer may have left, a human must look`,
     };
   }
 
@@ -137,7 +142,9 @@ export function repriceReferralRow(input: RepriceInput): RepriceDecision {
   else if (input.plan === 'PLAN_A') v15Charge = Math.floor((input.grossUsdCents * s.planASourcedBps) / BPS);
   else if (input.plan === 'PLAN_B') v15Charge = Math.floor((input.grossUsdCents * s.planBSourcedBps) / BPS);
   else v15Charge = null;
-  const nhpRetains = input.collectedFeeUsdCents - target;
+  // A SETTLED row's referrer was already paid `current`: that money is not NHP's whatever the
+  // re-priced share would be, so NHP retains collected minus what was paid, never collected minus 0.
+  const nhpRetains = input.collectedFeeUsdCents - (input.state === 'SETTLED' ? current : target);
   const v15NhpWouldKeep =
     v15Charge === null ? null : Math.max(0, v15Charge - (inReferrerTerm ? Math.floor((input.grossUsdCents * s.referrerBps) / BPS) : 0));
 

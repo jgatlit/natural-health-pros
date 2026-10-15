@@ -28,26 +28,23 @@ const joined = (d: Date | null) =>
  * Amounts are the ledger's, as recorded; payouts are not active yet while
  * `WHOP_TRANSFERS_ENABLED` is not 'true', and the card says so.
  *
- * TIMING: a recruiter is paid as client payments come in once payouts are live; there is no
- * standing hold. A refund that arrives AFTER a share was paid is shown here as an "adjusted for a
- * refund" line: an open balance netted off the next payouts, and what has already been netted.
+ * TIMING: each share is credited to the recruiter's Whop balance as the client payment clears.
+ * A refund that arrives AFTER a share was claimed for transfer is shown here as an "adjusted for a
+ * refund" line: an open balance netted off the next transfer, and what has already been netted.
  */
 export async function RecruitedPractitionersSection({
   practitionerId,
   isOwner,
   db = prisma as unknown as EarningsDb,
-  now = new Date(),
 }: {
   practitionerId: string;
   isOwner: boolean;
   db?: EarningsDb;
-  now?: Date;
 }) {
   if (!isOwner) return null;
 
-  const earnings = await loadRecruiterEarnings(db, practitionerId, now, listedWhere());
-  const total =
-    earnings.pendingUsdCents + earnings.accruedUsdCents + earnings.settledUsdCents + earnings.refundBalanceOpenUsdCents;
+  const earnings = await loadRecruiterEarnings(db, practitionerId, listedWhere());
+  const total = earnings.accruedUsdCents + earnings.settledUsdCents + earnings.refundBalanceOpenUsdCents;
   if (earnings.recruits.length === 0 && total === 0) return null;
 
   const payoutsActive = process.env.WHOP_TRANSFERS_ENABLED === 'true';
@@ -60,13 +57,7 @@ export async function RecruitedPractitionersSection({
         practitioner who joined with your link.
       </p>
 
-      <dl className="grid grid-cols-3 gap-2 text-center">
-        <div className="rounded-md border p-2">
-          <dt className="text-[11px] text-muted-foreground">Pending</dt>
-          <dd className="text-sm font-semibold" data-testid="affiliate-pending">
-            {usd(earnings.pendingUsdCents)}
-          </dd>
-        </div>
+      <dl className="grid grid-cols-2 gap-2 text-center">
         <div className="rounded-md border p-2">
           <dt className="text-[11px] text-muted-foreground">Accrued</dt>
           <dd className="text-sm font-semibold" data-testid="affiliate-accrued">
@@ -81,16 +72,17 @@ export async function RecruitedPractitionersSection({
         </div>
       </dl>
       <p className="text-[11px] leading-relaxed text-muted-foreground" data-testid="affiliate-timing-note">
-        You are paid as client payments come in once payouts are live. Accrued is owed to you and is paid out once
-        payouts are live and your Whop account is verified.
+        Your share is credited to your Whop balance as each client payment clears. Accrued is owed to you and is
+        credited once payouts are live and your Whop account is verified. Withdrawing from your Whop balance is
+        subject to Whop&apos;s own terms.
         {!payoutsActive && ' (payouts are not active yet)'}
       </p>
       {(earnings.refundBalanceOpenUsdCents > 0 || earnings.refundAdjustments.length > 0) && (
         <div className="space-y-2 rounded-md border p-3" data-testid="affiliate-refund-adjustments">
           <h3 className="text-xs font-semibold">Adjusted for a refund</h3>
           <p className="text-[11px] leading-relaxed text-muted-foreground">
-            When a client payment is refunded after your share of it was paid, that amount is taken off your next
-            payouts rather than collected from you.
+            When a client payment is refunded after your share of it was credited, that amount is taken off your next
+            transfer rather than collected from you.
           </p>
           <dl className="grid grid-cols-2 gap-2 text-center">
             <div className="rounded-md border p-2">
@@ -118,13 +110,10 @@ export async function RecruitedPractitionersSection({
           </ul>
         </div>
       )}
-      <p className="text-[11px] leading-relaxed text-muted-foreground" data-testid="affiliate-fee-note">
-        Payouts are net of Whop&apos;s transfer fee.
-      </p>
-      {earnings.paidWithFeeRecordCount > 0 && (
-        <dl className="grid grid-cols-2 gap-2 text-center sm:grid-cols-4" data-testid="affiliate-paid-breakdown">
+      {earnings.paidBreakdownCount > 0 && (
+        <dl className="grid grid-cols-3 gap-2 text-center" data-testid="affiliate-paid-breakdown">
           <div className="rounded-md border p-2">
-            <dt className="text-[11px] text-muted-foreground">Gross</dt>
+            <dt className="text-[11px] text-muted-foreground">Share</dt>
             <dd className="text-sm font-semibold" data-testid="affiliate-paid-gross">
               {usd(earnings.paidGrossUsdCents)}
             </dd>
@@ -136,13 +125,7 @@ export async function RecruitedPractitionersSection({
             </dd>
           </div>
           <div className="rounded-md border p-2">
-            <dt className="text-[11px] text-muted-foreground">Transfer fee</dt>
-            <dd className="text-sm font-semibold" data-testid="affiliate-paid-fee">
-              {usd(earnings.paidFeeUsdCents)}
-            </dd>
-          </div>
-          <div className="rounded-md border p-2">
-            <dt className="text-[11px] text-muted-foreground">Net paid</dt>
+            <dt className="text-[11px] text-muted-foreground">Credited to your balance</dt>
             <dd className="text-sm font-semibold" data-testid="affiliate-paid-net">
               {usd(earnings.paidNetUsdCents)}
             </dd>

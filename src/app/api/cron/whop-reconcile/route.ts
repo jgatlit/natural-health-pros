@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { prisma } from '@/lib/prisma';
 import {
   createTransfer,
+  findTransferForLedgerEntry,
   getIdentityProfile,
   getPaymentFees,
   getPayoutStatus,
@@ -13,14 +14,13 @@ import {
   promoteHeldToPayable,
   settlePayableShares,
 } from '@/lib/referral-payouts';
-import {
-  TRANSFERS_DISABLED_REASON,
-  findStuckAffiliateShares,
-  settleAffiliateShares,
-} from '@/lib/affiliate-payouts';
+import { TRANSFERS_DISABLED_REASON, settleAffiliateShares } from '@/lib/affiliate-payouts';
+import { UNCONFIRMED_AFTER_MS, findUnconfirmedTransfers, type LedgerTransferDb } from '@/lib/ledger-transfer';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+// One run pays at most a batch of rows per ledger, each bounded by the transfer request timeout.
+export const maxDuration = 300;
 
 /**
  * Drift sweep for Whop payout state — the safety net behind the identity_profile.* webhook.
@@ -153,26 +153,28 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  // ── Referrer settlement (spec v1.4 §6.2, operator rulings 6 and 7) ─────────────────────────
+  // ── Share transfers (spec v1.4 §6.2, v1.5 §5; operator rulings 6 and 7) ───────────────────
+  //
+  // The payment webhook transfers each share the moment it accrues. This sweep is the RETRY
+  // BACKSTOP: rows with no confirmed receipt (a failed or ambiguous attempt, a run that died, a
+  // payee who became payable later) are claimed again here, looked up in Whop before any re-send.
+  // With WHOP_TRANSFERS_ENABLED off both settles do nothing and report `skipped: transfers disabled`.
   //
   // Here rather than in a new cron: this route already runs hourly and already owns "reconcile
-  // our Whop state", and every cron route has to appear in vercel.json or it never runs at all —
-  // a route that shipped written, documented and unregistered is exactly how /api/cron/whop-
-  // reconcile itself spent its first weeks.
+  // our Whop state", and every cron route has to appear in vercel.json or it never runs at all.
   //
   // Order matters. Promote first so a referrer who became payable since the last run is settled
   // on THIS run rather than waiting another hour; expire last so a hold cannot lapse in the same
   // pass that would have paid it.
   const now = new Date();
+  const ledgerDb = prisma as unknown as LedgerTransferDb;
+  const deps = { transfer: createTransfer, lookup: findTransferForLedgerEntry, at: now };
   const promoted = await promoteHeldToPayable(prisma).catch((e) => {
     errors.push(`promote-held: ${e instanceof Error ? e.message : String(e)}`);
     return 0;
   });
 
-  const settlement = await settlePayableShares(prisma, {
-    transfer: createTransfer,
-    at: now,
-  }).catch((e) => {
+  const settlement = await settlePayableShares(ledgerDb, deps).catch((e) => {
     errors.push(`settle-referrals: ${e instanceof Error ? e.message : String(e)}`);
     return null;
   });
@@ -182,12 +184,7 @@ export async function GET(request: NextRequest) {
     return 0;
   });
 
-  // Recruiting-affiliate settlement (spec v1.5 section 5). Same flag, same transfer path, same
-  // cron: with WHOP_TRANSFERS_ENABLED off it does nothing and reports `skipped: transfers disabled`.
-  const affiliates = await settleAffiliateShares(prisma, {
-    transfer: createTransfer,
-    at: now,
-  }).catch((e) => {
+  const affiliates = await settleAffiliateShares(ledgerDb, deps).catch((e) => {
     errors.push(`settle-affiliates: ${e instanceof Error ? e.message : String(e)}`);
     return null;
   });
@@ -195,21 +192,23 @@ export async function GET(request: NextRequest) {
     console.warn('whop-reconcile: affiliate payouts BLOCKED:', affiliates.blocked);
   }
 
-  // STUCK MONEY IS AN ERROR, NOT A COUNTER. A SENDING row (a transfer was claimed and may have
-  // left, with no receipt) and a HELD row (a failure that could not be proven harmless) are never
-  // touched by the sweep again, so nothing will ever fix them unless a person is told. They go into
-  // `errors` with their ids, which makes `ok` false (a 207 on the cron, red in Vercel monitoring)
-  // and logs one console.error line naming every row. Independent of the payout flag.
-  const stuck = await findStuckAffiliateShares(prisma, { at: now }).catch((e) => {
-    errors.push(`affiliate-stuck-check: ${e instanceof Error ? e.message : String(e)}`);
+  // A SHARE WITH NO RECEIPT IS AN ERROR, NOT A COUNTER. Any row still SENDING, or still waiting for
+  // a payee who can receive money, more than UNCONFIRMED_AFTER_MS after the payment was accrued is
+  // named here, after this run's own attempt had its chance. They go into `errors` with their ids,
+  // which makes `ok` false (a 207 on the cron, red in Vercel monitoring) and logs one console.error
+  // line naming every row. Empty while transfers are off.
+  const unconfirmed = await findUnconfirmedTransfers(ledgerDb, { at: now }).catch((e) => {
+    errors.push(`transfers-unconfirmed-check: ${e instanceof Error ? e.message : String(e)}`);
     return [];
   });
-  if (stuck.length > 0) {
-    const detail = stuck
-      .map((r) => `${r.id}(${r.state},${r.amountUsdCents}c${r.lastError ? `,${r.lastError.slice(0, 80)}` : ''})`)
+  if (unconfirmed.length > 0) {
+    const detail = unconfirmed
+      .map((r) => `${r.ledger}:${r.id}(${r.state},${r.amountUsdCents}c,attempts=${r.attempts}${r.lastError ? `,${r.lastError.slice(0, 80)}` : ''})`)
       .join(' ');
-    errors.push(`affiliate-stuck: ${stuck.length} recruiter payout row(s) need a human: ${detail}`);
-    console.error('whop-reconcile: AFFILIATE PAYOUTS STUCK', JSON.stringify(stuck));
+    errors.push(
+      `transfers-unconfirmed: ${unconfirmed.length} share(s) have no confirmed receipt ${Math.round(UNCONFIRMED_AFTER_MS / 60000)}+ minutes after the payment: ${detail}`,
+    );
+    console.error('whop-reconcile: SHARE TRANSFERS WITHOUT A CONFIRMED RECEIPT', JSON.stringify(unconfirmed));
   }
 
   // ── Fee reconciliation (spec §7) ───────────────────────────────────────────────────────────
@@ -260,9 +259,8 @@ export async function GET(request: NextRequest) {
 
   // A BLOCKED payout is not an error — it is the expected state until the parent company is
   // business-verified — but it must be visible in the response rather than inferred from
-  // `settled: 0`. "We owe referrers money and here is exactly why it has not moved" should be
-  // answerable from one cron response.
-  if (settlement?.blocked) {
+  // `settled: 0`.
+  if (settlement?.blocked && settlement.blocked !== TRANSFERS_DISABLED_REASON) {
     console.warn('whop-reconcile: referrer payouts BLOCKED:', settlement.blocked);
   }
 
@@ -292,7 +290,7 @@ export async function GET(request: NextRequest) {
       unpollable,
       referrals: { promoted, expired, ...(settlement ?? {}) },
       affiliates: affiliates ?? null,
-      affiliatesStuck: stuck.map((r) => r.id),
+      transfersUnconfirmed: unconfirmed.map((r) => ({ ledger: r.ledger, id: r.id })),
       feeMismatches: mismatches,
       errors,
     },

@@ -1,131 +1,80 @@
 /**
  * PAYING REFERRERS (spec v1.4 §6.2, operator rulings 6 and 7).
  *
- * 🚧 BUILT AND DELIBERATELY NOT ACTIVE. The parent company is not business-verified, and Whop
- * refuses every transfer originating from it:
+ * A referrer who can receive money is paid when the client's payment clears: the payment webhook
+ * records the share and settles that one row in the same run, and the hourly whop-reconcile cron
+ * retries any row with no receipt. The share is transferred in full to the referrer's Whop balance.
+ * The state machine, the claim, the refund-debit netting, the retry classification and the alerts are
+ * shared with the recruiter path and live in `ledger-transfer.ts`; this file binds them to the
+ * referral ledger and owns the unclaimed-share window.
  *
- *     origin=<parent> → any sibling, any amount
- *     → "Please verify your business before transferring funds."
+ * THE UNCLAIMED-SHARE WINDOW (rulings 6 and 7). A share owed to a referrer who cannot receive money
+ * yet is HELD, not lost: the referrer is told to claim their Whop account, the share settles
+ * retroactively the moment they become payable (`promoteHeldToPayable`), and a hold that runs out
+ * becomes EXPIRED_UNCLAIMED with no money action (`expireLapsedHolds`).
  *
- * Probed 2026-09-19 by incremental rejection; no transfer was created. That is an operator action
- * in the Whop dashboard, not a code fix, so this ships behind a guard that FAILS CLOSED and names
- * the reason. When verification clears, `WHOP_TRANSFERS_ENABLED=true` is the whole change.
- *
- * ⚠️ THE 100× TRAP, STATED ONCE AND ENFORCED IN ONE PLACE. Whop takes DOLLARS on every money
- * field. What differs is where OUR code converts: `createBookingCheckoutConfig` accepts CENTS and
- * divides at the boundary, while `createTransfer` accepts DOLLARS and divides nowhere. Both
- * parameters are plain `number`, so reading one signature and assuming the other is off by 100×
- * with no type error. The conversion is therefore `toTransferDollars()` — a named, validated,
- * separately tested boundary rather than an inline `/ 100` that reviews as obviously correct in
- * either direction.
- *
- * ⚠️ `POST /transfers` HAS NO OBSERVED IDEMPOTENCY KEY. The claim-then-call ordering below is the
- * ONLY guard against paying twice, and a crash between the call and the confirmation must be
- * reconciled against `GET /transfers?origin_id=` — never retried blind.
- *
- * ⚠️ WHAT REMAINS UNMEASURED. Transfers to a NON-parent destination carry a 3% surcharge (measured
- * across three amounts and two destinations); child → parent carries none. Whether parent →
- * sibling carries it is UNKNOWN and unmeasurable until the parent is verified. Nothing here
- * assumes either way; the requested amount is recorded so the net can be reconciled against Whop's
- * own fee itemisation once a real transfer exists.
+ * 🚧 `WHOP_TRANSFERS_ENABLED` does not exist in production; while it is not exactly 'true' nothing
+ * here moves money. Whop also refuses every transfer from the unverified parent company ("Please
+ * verify your business before transferring funds"), which is an operator action in the Whop
+ * dashboard, not a code fix.
  */
 
-import { isWhopPlatformsReady } from './whop';
+import { REFERRAL_LEDGER } from './ledger-config';
 import {
-  BELOW_FEE_REASON,
-  loadTransferFeeConfig,
-  minimumSendableShareCents,
-  planTransfer,
-  type TransferFeeConfig,
-} from './transfer-fee';
+  settleLedger,
+  settleLedgerEntryBestEffort,
+  type LedgerSettlementSummary,
+  type LedgerTransferDb,
+  type LookupFn,
+  type TransferFn,
+} from './ledger-transfer';
 
-/** Whop validates this BEFORE direction, ownership or balance — measured 2026-09-19. */
-export const MAX_TRANSFER_USD_CENTS = 2_500_000;
+export {
+  MAX_TRANSFER_USD_CENTS,
+  payoutsGuard,
+  toTransferDollars,
+  type PayoutsGuard,
+  type TransferFn,
+} from './ledger-transfer';
 
-/**
- * Convert an internal cent amount to the DOLLARS the transfers endpoint expects.
- *
- * The validation is the point. A fractional cent means an upstream rounding bug reached the payout
- * boundary, and silently rounding it here would hand somebody a different share than the ledger
- * says they are owed — on the one call that cannot be undone.
- */
-export function toTransferDollars(amountUsdCents: number): number {
-  if (!Number.isInteger(amountUsdCents)) {
-    throw new Error(
-      `transfer amount must be a whole number of cents (got ${amountUsdCents}) — a fractional ` +
-        'cent here means a rounding bug upstream, not something to round away',
-    );
-  }
-  if (amountUsdCents <= 0) {
-    throw new Error(`transfer amount must be positive (got ${amountUsdCents})`);
-  }
-  if (amountUsdCents > MAX_TRANSFER_USD_CENTS) {
-    throw new Error(
-      `transfer amount exceeds Whop's $25,000 per-transfer ceiling (got ${amountUsdCents} cents)`,
-    );
-  }
-  return amountUsdCents / 100;
+export type SettlementSummary = LedgerSettlementSummary;
+
+export function settlePayableShares(
+  db: LedgerTransferDb,
+  opts: {
+    transfer: TransferFn;
+    lookup: LookupFn;
+    at: Date;
+    /** Restrict the run to ONE ledger row (the post-payment trigger). Same rules, same guards. */
+    only?: { bookingIntentId: string; referrerPractitionerId: string };
+  },
+): Promise<SettlementSummary> {
+  return settleLedger(db, REFERRAL_LEDGER, {
+    transfer: opts.transfer,
+    lookup: opts.lookup,
+    at: opts.at,
+    only: opts.only && { bookingIntentId: opts.only.bookingIntentId, payeeId: opts.only.referrerPractitionerId },
+  });
 }
 
-export type PayoutsGuard = { allowed: true } | { allowed: false; reason: string };
-
-/**
- * May we move money to referrers right now?
- *
- * FAILS CLOSED and returns a REASON rather than a boolean, because the two ways this can be off
- * need different actions: one is a dashboard verification and the other is a missing API key. A
- * bare `false` would send someone to look in the wrong place.
- */
-export function payoutsGuard(): PayoutsGuard {
-  if (!isWhopPlatformsReady()) {
-    return {
-      allowed: false,
-      reason:
-        'Whop is not configured (WHOP_COMPANY_API_KEY / WHOP_PARENT_COMPANY_ID), so no transfer ' +
-        'can be made.',
-    };
-  }
-  // The literal string, not a truthy check: an env var accidentally set to "false" or "0" must
-  // not open a money path.
-  if (process.env.WHOP_TRANSFERS_ENABLED !== 'true') {
-    return {
-      allowed: false,
-      reason:
-        'Referrer payouts are switched off. The parent company is not business-verified, and Whop ' +
-        'refuses every transfer from it ("Please verify your business before transferring funds"). ' +
-        'Complete verification in the Whop dashboard, then set WHOP_TRANSFERS_ENABLED=true.',
-    };
-  }
-  return { allowed: true };
+/** The post-payment trigger for one referrer row. Never throws; see `settleLedgerEntryBestEffort`. */
+export function settleReferralEntryBestEffort(
+  db: LedgerTransferDb,
+  input: { bookingIntentId: string; referrerPractitionerId: string },
+  deps: { transfer: TransferFn; lookup: LookupFn; at?: Date },
+): Promise<SettlementSummary | null> {
+  return settleLedgerEntryBestEffort(
+    db,
+    REFERRAL_LEDGER,
+    { bookingIntentId: input.bookingIntentId, payeeId: input.referrerPractitionerId },
+    deps,
+  );
 }
-
-/** The transfer call itself, injected so nothing in the test suite can reach the live API. */
-export type TransferFn = (args: {
-  originId: string;
-  destinationId: string;
-  /** DOLLARS. See `toTransferDollars`. */
-  amountUsdDollars: number;
-  /**
-   * Optional. Attached to the transfer so a stuck payment can be found again with
-   * `GET /transfers?origin_id=` and matched to its ledger row. The referral path passes none.
-   */
-  metadata?: Record<string, string>;
-  /** Optional. Whop's documented "unique key to prevent duplicate transfers" (ledger transfers). */
-  idempotenceKey?: string;
-}) => Promise<{ transferId: string }>;
 
 export type PayoutsDb = {
   referralLedgerEntry: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     findMany(args: any): Promise<any>;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    updateMany(args: any): Promise<{ count: number }>;
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    update(args: any): Promise<any>;
-  };
-  feeLedgerEntry: {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    upsert(args: any): Promise<any>;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     updateMany(args: any): Promise<{ count: number }>;
   };
@@ -134,213 +83,6 @@ export type PayoutsDb = {
     findMany(args: any): Promise<any>;
   };
 };
-
-export type SettlementSummary = {
-  matched: number;
-  settled: number;
-  skipped: number;
-  failed: number;
-  /** Set when the guard refused. Null when payouts ran (whether or not any succeeded). */
-  blocked: string | null;
-};
-
-const TRANSFER_BATCH = 50;
-
-/**
- * Record "not sent, and why" as a BLOCKED fee-ledger row WITHOUT ever downgrading a row that means
- * something stronger. BLOCKED is claimable (payouts were merely off, or the share was too small
- * then), whereas FAILED and SENDING mean "a transfer may have left: a human must look" and SETTLED
- * means paid. An unconditional overwrite would turn the first group into the second and let the
- * next sweep pay twice, so: create if missing, then change status ONLY from PENDING or BLOCKED.
- */
-async function parkBlocked(
-  db: PayoutsDb,
-  dedupeKey: string,
-  v: { practitionerId: string; amountUsdCents: number; note: string },
-): Promise<void> {
-  await db.feeLedgerEntry.upsert({
-    where: { dedupeKey },
-    create: {
-      dedupeKey,
-      kind: 'REFERRER_TRANSFER',
-      status: 'BLOCKED',
-      practitionerId: v.practitionerId,
-      amountUsdCents: v.amountUsdCents,
-      note: v.note,
-    },
-    update: {},
-  });
-  await db.feeLedgerEntry.updateMany({
-    where: { dedupeKey, status: { in: ['PENDING', 'BLOCKED'] } },
-    data: { status: 'BLOCKED', note: v.note },
-  });
-}
-
-export async function settlePayableShares(
-  db: PayoutsDb,
-  opts: { transfer: TransferFn; at: Date },
-): Promise<SettlementSummary> {
-  const summary: SettlementSummary = { matched: 0, settled: 0, skipped: 0, failed: 0, blocked: null };
-
-  // PAYEE ABSORBS WHOP'S TRANSFER FEE (spec v1.5 s4). Read only when payouts are allowed, so a
-  // disabled run touches nothing and a bad fee env cannot break the BLOCKED bookkeeping.
-  const guardNow = payoutsGuard();
-  let feeConfig: TransferFeeConfig | null = null;
-  let minShare = 1;
-  if (guardNow.allowed) {
-    try {
-      feeConfig = loadTransferFeeConfig();
-      minShare = Math.max(1, minimumSendableShareCents(feeConfig));
-    } catch (err) {
-      summary.blocked = `transfer fee configuration invalid: ${err instanceof Error ? err.message : String(err)}`;
-      return summary;
-    }
-  }
-
-  if (feeConfig && minShare > 1) {
-    // Shares that can never cover the fee: recorded with their reason, never sent, and kept out of
-    // the main batch so they cannot crowd it.
-    const tiny = (await db.referralLedgerEntry.findMany({
-      where: { state: 'PAYABLE', settledAt: null, referrerShareUsdCents: { gt: 0, lt: minShare } },
-      select: { id: true, referrerShareUsdCents: true, referrerPractitionerId: true },
-      take: TRANSFER_BATCH,
-    })) as Array<{ id: string; referrerShareUsdCents: number; referrerPractitionerId: string }>;
-    for (const t of tiny) {
-      const note = `${BELOW_FEE_REASON}: share ${t.referrerShareUsdCents}c is below the ${minShare}c minimum that covers the transfer fee`;
-      await parkBlocked(db, `REFERRER_TRANSFER:${t.id}`, {
-        practitionerId: t.referrerPractitionerId,
-        amountUsdCents: t.referrerShareUsdCents,
-        note,
-      });
-    }
-  }
-
-  const rows = (await db.referralLedgerEntry.findMany({
-    // `gt: 0` is load-bearing, not defensive. A refund REDUCES an unpaid share in place, and a
-    // fully refunded one lands at exactly zero — which `toTransferDollars` rejects, so without
-    // this filter one refunded booking would throw on every sweep forever and take the rest of
-    // the batch's error budget with it.
-    where: { state: 'PAYABLE', settledAt: null, referrerShareUsdCents: { gte: minShare } },
-    select: {
-      id: true,
-      referrerShareUsdCents: true,
-      referrerPractitionerId: true,
-      referrerPractitioner: { select: { id: true, whopCompanyId: true, whopPayoutsEnabled: true } },
-    },
-    take: TRANSFER_BATCH,
-  })) as Array<{
-    id: string;
-    referrerShareUsdCents: number;
-    referrerPractitionerId: string;
-    referrerPractitioner: { whopCompanyId: string | null; whopPayoutsEnabled: boolean } | null;
-  }>;
-  summary.matched = rows.length;
-
-  const guard = guardNow;
-
-  for (const row of rows) {
-    const dedupeKey = `REFERRER_TRANSFER:${row.id}`;
-    const destination = row.referrerPractitioner?.whopCompanyId ?? null;
-
-    if (!guard.allowed) {
-      // RECORDED, NOT MERELY UNPAID. A debt that exists only as the ABSENCE of a transfer is
-      // invisible; this row is what makes "we owe N referrers M dollars and here is why it has
-      // not moved" answerable from the database rather than from somebody's memory.
-      summary.blocked = guard.reason;
-      await parkBlocked(db, dedupeKey, {
-        practitionerId: row.referrerPractitionerId,
-        amountUsdCents: row.referrerShareUsdCents,
-        note: guard.reason,
-      });
-      continue;
-    }
-
-    if (!destination) {
-      // Should not happen — an unpayable referrer's share is HELD, not PAYABLE — but a row can be
-      // promoted and then have its account disconnected. Skipped rather than transferred into the
-      // void, and left PAYABLE so the next run retries.
-      summary.skipped += 1;
-      continue;
-    }
-
-    const plan = planTransfer(row.referrerShareUsdCents, feeConfig!);
-    if (!plan.sendable) {
-      summary.skipped += 1;
-      continue;
-    }
-
-    // CLAIM, THEN CALL. `POST /transfers` has no idempotency key, so this conditional write is the
-    // only thing standing between a concurrent run and a double payout: the filter names the
-    // CURRENT status, so an already-claimed row matches nothing.
-    await db.feeLedgerEntry.upsert({
-      where: { dedupeKey },
-      create: {
-        dedupeKey,
-        kind: 'REFERRER_TRANSFER',
-        status: 'PENDING',
-        practitionerId: row.referrerPractitionerId,
-        amountUsdCents: row.referrerShareUsdCents,
-      },
-      update: {},
-    });
-    // PENDING or BLOCKED: while payouts are off the sweep parks every row as BLOCKED, and the claim
-    // used to match PENDING only, so flipping the flag on would have left all of them unclaimed
-    // forever. FAILED and SENDING are deliberately NOT claimable: those need a human.
-    const claimed = await db.feeLedgerEntry.updateMany({
-      where: { dedupeKey, status: { in: ['PENDING', 'BLOCKED'] } },
-      data: { status: 'SENDING' },
-    });
-    if (claimed.count === 0) {
-      summary.skipped += 1;
-      continue;
-    }
-
-    try {
-      const { transferId } = await opts.transfer({
-        originId: process.env.WHOP_PARENT_COMPANY_ID!,
-        destinationId: destination,
-        amountUsdDollars: toTransferDollars(plan.sendCents),
-      });
-
-      await db.referralLedgerEntry.update({
-        where: { id: row.id },
-        data: {
-          state: 'SETTLED',
-          settledAt: opts.at,
-          whopTransferId: transferId,
-          grossShareUsdCents: plan.grossCents,
-          transferFeeUsdCents: plan.feeCents,
-          netPaidUsdCents: plan.netCents,
-        },
-      });
-      await db.feeLedgerEntry.updateMany({
-        where: { dedupeKey },
-        data: {
-          status: 'SETTLED',
-          whopTransferId: transferId,
-          // The REQUESTED amount is already on the row. Whether parent → sibling carries the 3%
-          // surcharge measured on child → sibling is unknown until a real transfer exists, so the
-          // net is reconciled against Whop rather than predicted here.
-          note: `Gross ${plan.grossCents}c, sent ${plan.sendCents}c, payee-borne transfer fee ${plan.feeCents}c, net ${plan.netCents}c (estimate; reconcile against the transfer record).`,
-        },
-      });
-      summary.settled += 1;
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      // NEVER OPTIMISTICALLY SETTLED. The row stays PAYABLE so the next run retries, and the
-      // failure is recorded rather than swallowed — a transfer that failed for insufficient
-      // parent balance looks identical to one that never ran.
-      await db.feeLedgerEntry.updateMany({
-        where: { dedupeKey },
-        data: { status: 'FAILED', note: message.slice(0, 500) },
-      });
-      summary.failed += 1;
-      console.error('[referral-payouts] TRANSFER FAILED', JSON.stringify({ entryId: row.id, error: message }));
-    }
-  }
-
-  return summary;
-}
 
 /**
  * Ruling 6 — a held share settles RETROACTIVELY once its referrer becomes payable.

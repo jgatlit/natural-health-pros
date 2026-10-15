@@ -37,7 +37,7 @@ export default async function AdminIndex() {
     prisma.specialtyAlias.count({ where: { status: 'PENDING' } }),
     prisma.referralLedgerEntry.aggregate({
       where: { state: 'HELD' },
-      _sum: { referrerShareUsdCents: true },
+      _sum: { referrerShareUsdCents: true, reversedUsdCents: true },
       _count: true,
     }),
     prisma.attributedClient.count(),
@@ -45,7 +45,7 @@ export default async function AdminIndex() {
   ]);
 
   const heldShares = held._count;
-  const heldDollars = `$${((held._sum.referrerShareUsdCents ?? 0) / 100).toFixed(2)}`;
+  const heldDollars = `$${(((held._sum.referrerShareUsdCents ?? 0) - (held._sum.reversedUsdCents ?? 0)) / 100).toFixed(2)}`;
   const whopReady = isWhopPlatformsReady();
 
   // The four things that can be waiting on the operator. Shown first, and each links to where it

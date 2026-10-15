@@ -5,13 +5,17 @@ import { commitPaymentAttribution } from '@/lib/referral-settlement';
 import { reverseReferralOnRefund } from '@/lib/referral-refunds';
 import { loadSettings } from '@/lib/platform-settings';
 import { resolvePaymentTerms } from '@/lib/rate-schedules';
-import { createTransfer, unwrapWebhook } from '@/lib/whop';
+import { createTransfer, findTransferForLedgerEntry, unwrapWebhook } from '@/lib/whop';
 import { settleAffiliateEntryBestEffort } from '@/lib/affiliate-payouts';
+import { settleReferralEntryBestEffort } from '@/lib/referral-payouts';
 import { waitUntil } from '@vercel/functions';
 import { indexPractitioner } from '@/lib/practitioner-indexer';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+// The transfers started at payment clearing run under `waitUntil` after the ack, and the platform
+// keeps the function alive for them only up to this limit. A transfer request times out well inside it.
+export const maxDuration = 60;
 
 // Whop API v1 webhook receiver (Standard Webhooks spec) — runs alongside the legacy handler at
 // src/app/api/whop/webhook/route.ts, which stays on the old {action,data} shape and drives live
@@ -331,7 +335,7 @@ async function handleEvent(
         // come from the rate schedule that PRICED this booking (spec v1.5 §2) and the hold from the
         // admin settings. Reading them later would let a schedule change or an operator edit
         // reprice a claim already sold or move a hold clock that is already running.
-        const { referralHoldDays, affiliateHoldDays } = await loadSettings(prisma);
+        const { referralHoldDays } = await loadSettings(prisma);
         const terms = await resolvePaymentTerms(prisma, {
           bookingIntentId: intent.id,
           practitionerId: intent.practitionerId,
@@ -347,9 +351,6 @@ async function handleEvent(
           referrerTermMonths: terms.referrerTermMonths,
           rateScheduleId: terms.rateScheduleId,
           holdDays: referralHoldDays,
-          // The recruiter's share has its OWN hold (default 0: paid as client payments come in).
-          // The client-referral hold above is deliberately not applied to it.
-          affiliateHoldDays,
           // ANCHOR ON THE DAY OF TRANSACTION (operator correction, 2026-09-19). `effectivePaidAt`
           // is both the payment instant and the term's anchor — there is no second date here any
           // more, and `intent.scheduledAt` is deliberately not even selected above.
@@ -363,7 +364,7 @@ async function handleEvent(
           paidAt: effectivePaidAt,
           whopPaymentId: asString(data.id),
         });
-        triggerAffiliateSettle(intent.id, committed.affiliateRecruiterPractitionerId);
+        triggerShareTransfers(intent.id, committed);
       } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
         attributionFailure = `payment.succeeded marked booking intent ${intentId} PAID but the attribution/referral/affiliate ledger write FAILED (${detail}) — the lead attribution term never started for this client, and any referrer or recruiter share on this payment may be unrecorded`;
@@ -403,20 +404,18 @@ async function handleEvent(
         at: new Date(),
       });
 
-      // A share that was ALREADY PAID OUT is money owed back by a third party. Nothing is clawed
-      // back automatically, so this must reach /admin/whop-webhooks rather than only a log line.
-      if (outcome.recoveryOwedUsdCents > 0) {
-        const message = `refund on payment ${paymentId} reverses a referrer share of ${outcome.recoveryOwedUsdCents} cents that was ALREADY PAID OUT — recovery needs an explicit action`;
-        console.error(`v1 webhook: ${message}`);
-        return message;
-      }
-      // The recruiter's (affiliate) share that was ALREADY PAID OUT is handled by policy, not by a
-      // human: it is recorded as a debit against the recruiter and netted off their next payouts
-      // (lane R2). Not a failure, so it does not stamp the event red; it is logged so it is findable,
-      // and the open balance is on the admin commercial-settings page.
+      // A share whose transfer was already claimed is recorded as a debit against its payee and netted
+      // off their next transfer (the recruiter's half and the referrer's half alike). Not a failure,
+      // so it does not stamp the event red; it is logged so it is findable, and the open balances are
+      // on the admin commercial-settings page.
       if (outcome.affiliateDebitRecordedUsdCents > 0) {
         console.warn(
-          `v1 webhook: refund on payment ${paymentId} was after the recruiter's share was paid; ${outcome.affiliateDebitRecordedUsdCents} cents recorded as a debit to net off their next payouts`,
+          `v1 webhook: refund on payment ${paymentId} was after the recruiter's transfer was claimed; ${outcome.affiliateDebitRecordedUsdCents} cents recorded as a debit to net off their next transfer`,
+        );
+      }
+      if (outcome.referrerDebitRecordedUsdCents > 0) {
+        console.warn(
+          `v1 webhook: refund on payment ${paymentId} was after the referrer's transfer was claimed; ${outcome.referrerDebitRecordedUsdCents} cents recorded as a debit to net off their next transfer`,
         );
       }
       return null;
@@ -427,25 +426,48 @@ async function handleEvent(
 }
 
 /**
- * Best-effort, post-ack payout of the recruiter share this payment just accrued (lane R2: recruiters
- * are paid as client payments come in).
+ * Best-effort transfers of the shares this payment just accrued: the recruiter's and the referrer's
+ * (each only when its payee can receive money; a referrer who cannot is HELD and settles later).
  *
- * NEVER blocks or fails the webhook: the settle is started, not awaited, and handed to the platform's
- * `waitUntil` so it can finish after the response is sent. The flag is checked FIRST inside
- * `settleAffiliateEntryBestEffort` (not exactly 'true' = zero reads, zero writes, zero Whop calls),
- * the helper itself never rejects, and the hourly whop-reconcile cron settles anything this misses.
+ * NEVER blocks or fails the webhook: each settle is started, not awaited, and handed to the
+ * platform's `waitUntil` so it can finish after the response is sent. The flag is checked FIRST
+ * inside the helpers (not exactly 'true' = zero reads, zero writes, zero Whop calls), the helpers
+ * never reject, and the hourly whop-reconcile cron retries anything this misses.
  */
-function triggerAffiliateSettle(bookingIntentId: string, recruiterPractitionerId: string | null): void {
-  if (!recruiterPractitionerId) return;
-  try {
-    const run = settleAffiliateEntryBestEffort(
-      prisma as unknown as Parameters<typeof settleAffiliateEntryBestEffort>[0],
-      { bookingIntentId, recruiterPractitionerId },
-      { transfer: createTransfer },
-    );
-    waitUntil(run);
-  } catch (err) {
-    console.error('v1 webhook: could not start the immediate affiliate settle (cron will retry)', err);
+function triggerShareTransfers(
+  bookingIntentId: string,
+  committed: {
+    affiliateRecruiterPractitionerId: string | null;
+    referralPayablePractitionerId: string | null;
+  },
+): void {
+  const deps = { transfer: createTransfer, lookup: findTransferForLedgerEntry };
+  type Db = Parameters<typeof settleAffiliateEntryBestEffort>[0];
+  if (committed.affiliateRecruiterPractitionerId) {
+    try {
+      waitUntil(
+        settleAffiliateEntryBestEffort(
+          prisma as unknown as Db,
+          { bookingIntentId, recruiterPractitionerId: committed.affiliateRecruiterPractitionerId },
+          deps,
+        ),
+      );
+    } catch (err) {
+      console.error('v1 webhook: could not start the immediate recruiter transfer (cron will retry)', err);
+    }
+  }
+  if (committed.referralPayablePractitionerId) {
+    try {
+      waitUntil(
+        settleReferralEntryBestEffort(
+          prisma as unknown as Db,
+          { bookingIntentId, referrerPractitionerId: committed.referralPayablePractitionerId },
+          deps,
+        ),
+      );
+    } catch (err) {
+      console.error('v1 webhook: could not start the immediate referrer transfer (cron will retry)', err);
+    }
   }
 }
 

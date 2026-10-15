@@ -73,7 +73,12 @@ function client(action: string): Whop {
  * be set for connected accounts") on a company that plainly has a parent. Without a fee present it
  * would fail silently and bill the wrong company.
  */
-async function whopPost<T>(path: string, body: unknown, action: string): Promise<T> {
+async function whopPost<T>(
+  path: string,
+  body: unknown,
+  action: string,
+  opts: { timeoutMs?: number; headers?: Record<string, string> } = {},
+): Promise<T> {
   if (!isWhopPlatformsReady()) throw new WhopNotConfigured(action);
   const base = process.env.WHOP_API_BASE ?? 'https://api.whop.com/api/v1';
   const res = await fetch(`${base}${path}`, {
@@ -81,8 +86,10 @@ async function whopPost<T>(path: string, body: unknown, action: string): Promise
     headers: {
       Authorization: `Bearer ${process.env.WHOP_COMPANY_API_KEY}`,
       'Content-Type': 'application/json',
+      ...opts.headers,
     },
     body: JSON.stringify(body),
+    ...(opts.timeoutMs ? { signal: AbortSignal.timeout(opts.timeoutMs) } : {}),
   });
   if (!res.ok) {
     throw new Error(`Whop ${path} failed (${res.status}): ${await res.text().catch(() => '')}`);
@@ -495,8 +502,11 @@ export async function getPaymentFees(
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Transfers — settling a referrer's share (spec v1.4 §6.2)
+// Transfers — moving a referral or recruiting share to the payee's Whop balance
 // ──────────────────────────────────────────────────────────────────────────────
+
+/** A transfer request that has not answered by now is treated as an ambiguous outcome. */
+export const TRANSFER_TIMEOUT_MS = 25_000;
 
 /**
  * Move money from the parent company to a connected account.
@@ -511,9 +521,11 @@ export async function getPaymentFees(
  * an inline `/ 100` that reviews as obviously correct in either direction. `amount: 24999`
  * produced "-$24,999.00" in a live rejection probe, which is the evidence this is dollars.
  *
- * ⚠️ NO IDEMPOTENCY KEY IS AVAILABLE. Whop exposes none on this endpoint, so a retry is a second
- * payout. The caller claims the ledger row BEFORE calling and reconciles a crash-in-flight against
- * `GET /transfers?origin_id=` — never by retrying blind.
+ * DUPLICATE PROTECTION. The request carries `idempotence_key` (the SDK's documented "unique key to
+ * prevent duplicate transfers") in the body and the same value as an `Idempotency-Key` header, and
+ * `metadata` so the transfer can be found again with `findTransferForLedgerEntry`. Whether Whop
+ * honours any of the three on a parent -> sibling transfer is confirmed by the canary
+ * (scripts/whop-canary-transfer.ts); until then the caller looks a transfer up before it re-sends.
  *
  * 🚧 The parent company is not business-verified, so every call currently fails with "Please
  * verify your business before transferring funds". `payoutsGuard()` is what stops us reaching here
@@ -524,7 +536,7 @@ export async function createTransfer(params: {
   destinationId: string;
   /** DOLLARS. See the warning above. */
   amountUsdDollars: number;
-  /** Attached so the transfer can be found again by `GET /transfers` (affiliate payouts pass it). */
+  /** Attached so the transfer can be found again by `GET /transfers`. */
   metadata?: Record<string, string>;
   /** Whop's documented duplicate-transfer key for ledger transfers (SDK `TransferCreateParams`). */
   idempotenceKey?: string;
@@ -536,13 +548,127 @@ export async function createTransfer(params: {
       destination_id: params.destinationId,
       amount: params.amountUsdDollars,
       currency: 'usd',
-      // Only when supplied, so the referral path's request body is byte-for-byte what it was.
       ...(params.metadata ? { metadata: params.metadata } : {}),
       ...(params.idempotenceKey ? { idempotence_key: params.idempotenceKey } : {}),
     },
-    'transfer a referrer share',
+    'transfer a share',
+    {
+      timeoutMs: TRANSFER_TIMEOUT_MS,
+      ...(params.idempotenceKey ? { headers: { 'Idempotency-Key': params.idempotenceKey } } : {}),
+    },
   );
   return { transferId: res.id };
+}
+
+const TRANSFER_LOOKUP_PAGE = 100;
+const TRANSFER_LOOKUP_MAX_PAGES = 10;
+
+export type WhopTransferRecord = {
+  id: string;
+  /** DOLLARS. */
+  amount: number;
+  feeAmount: number | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: string | null;
+};
+
+/**
+ * Find the first transfer from `originId` to `destinationId` that satisfies `match`: `GET /transfers`
+ * (the list endpoint has no metadata filter, so the match runs here), newest first, following the
+ * cursor up to `TRANSFER_LOOKUP_MAX_PAGES` pages. `createdAfter` bounds the scan.
+ *
+ * THROWS on any failure to read: a lookup that could not run proves nothing, and the caller must not
+ * treat it as "no transfer exists". Returns null only after reaching the end of the list.
+ */
+export async function findTransfer(params: {
+  originId: string;
+  destinationId: string;
+  createdAfter?: Date;
+  match: (t: WhopTransferRecord) => boolean;
+}): Promise<WhopTransferRecord | null> {
+  if (!isWhopPlatformsReady()) throw new WhopNotConfigured('look up a transfer');
+  const base = process.env.WHOP_API_BASE ?? 'https://api.whop.com/api/v1';
+  let after: string | undefined;
+  for (let page = 0; page < TRANSFER_LOOKUP_MAX_PAGES; page += 1) {
+    const qs = new URLSearchParams({
+      origin_id: params.originId,
+      destination_id: params.destinationId,
+      first: String(TRANSFER_LOOKUP_PAGE),
+      direction: 'desc',
+    });
+    if (params.createdAfter) qs.set('created_after', params.createdAfter.toISOString());
+    if (after) qs.set('after', after);
+    const res = await fetch(`${base}/transfers?${qs.toString()}`, {
+      headers: { Authorization: `Bearer ${process.env.WHOP_COMPANY_API_KEY}` },
+      signal: AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      throw new Error(`Whop /transfers lookup failed (${res.status}): ${await res.text().catch(() => '')}`);
+    }
+    const body = (await res.json()) as {
+      data?: Array<{
+        id?: string;
+        amount?: number;
+        fee_amount?: number | null;
+        created_at?: string;
+        metadata?: Record<string, unknown> | null;
+      }>;
+      page_info?: { end_cursor?: string | null };
+    };
+    const rows = body.data ?? [];
+    for (const t of rows) {
+      if (!t.id) continue;
+      const record: WhopTransferRecord = {
+        id: t.id,
+        amount: typeof t.amount === 'number' ? t.amount : NaN,
+        feeAmount: typeof t.fee_amount === 'number' ? t.fee_amount : null,
+        metadata: t.metadata ?? null,
+        createdAt: t.created_at ?? null,
+      };
+      if (params.match(record)) return record;
+    }
+    after = body.page_info?.end_cursor ?? undefined;
+    if (rows.length < TRANSFER_LOOKUP_PAGE || !after) return null;
+  }
+  throw new Error('Whop /transfers lookup did not reach the end of the transfer list');
+}
+
+/** Find the transfer made for one ledger row (`metadata.ledger_entry_id`), if any. See `findTransfer`. */
+export async function findTransferForLedgerEntry(params: {
+  originId: string;
+  destinationId: string;
+  ledgerEntryId: string;
+  createdAfter?: Date;
+}): Promise<{ transferId: string; amountUsdDollars: number } | null> {
+  const hit = await findTransfer({
+    originId: params.originId,
+    destinationId: params.destinationId,
+    createdAfter: params.createdAfter,
+    match: (t) => t.metadata?.ledger_entry_id === params.ledgerEntryId,
+  });
+  return hit ? { transferId: hit.id, amountUsdDollars: hit.amount } : null;
+}
+
+/**
+ * The USD balance of an account (`GET /ledger_accounts/{id}`): `balance` and `pending_balance`, in
+ * DOLLARS. Used by the canary transfer script. THROWS when the read fails, including when Whop does
+ * not accept a company id (`biz_...`) here and wants the ledger account id (`ldgr_...`) instead.
+ */
+export async function getAccountBalanceUsd(accountId: string): Promise<{ balanceUsd: number; pendingUsd: number }> {
+  if (!isWhopPlatformsReady()) throw new WhopNotConfigured('read an account balance');
+  const base = process.env.WHOP_API_BASE ?? 'https://api.whop.com/api/v1';
+  const res = await fetch(`${base}/ledger_accounts/${encodeURIComponent(accountId)}`, {
+    headers: { Authorization: `Bearer ${process.env.WHOP_COMPANY_API_KEY}` },
+    signal: AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    throw new Error(`Whop /ledger_accounts/${accountId} failed (${res.status}): ${await res.text().catch(() => '')}`);
+  }
+  const body = (await res.json()) as {
+    balances?: Array<{ currency?: string; balance?: number; pending_balance?: number }>;
+  };
+  const usd = (body.balances ?? []).find((b) => String(b.currency).toLowerCase() === 'usd');
+  return { balanceUsd: usd?.balance ?? 0, pendingUsd: usd?.pending_balance ?? 0 };
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

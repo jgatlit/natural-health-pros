@@ -12,6 +12,7 @@ import { scheduleNumbers } from '@/lib/rate-schedule';
 import { AssignUnassignedForm, MigrateCohortForm, RateScheduleForm } from './RateScheduleForm';
 import { SettingForm } from './SettingForm';
 import { AffiliateLedgerSection } from './AffiliateLedgerSection';
+import { TransfersNeedingAttention } from './TransfersNeedingAttention';
 
 export const dynamic = 'force-dynamic';
 
@@ -49,12 +50,12 @@ export default async function CommercialSettingsPage() {
   const [held, expired, changes] = await Promise.all([
     prisma.referralLedgerEntry.aggregate({
       where: { state: 'HELD' },
-      _sum: { referrerShareUsdCents: true },
+      _sum: { referrerShareUsdCents: true, reversedUsdCents: true },
       _count: true,
     }),
     prisma.referralLedgerEntry.aggregate({
       where: { state: 'EXPIRED_UNCLAIMED' },
-      _sum: { referrerShareUsdCents: true },
+      _sum: { referrerShareUsdCents: true, reversedUsdCents: true },
       _count: true,
     }),
     // Spec §1.1: "Every change is logged with the admin, the time, and the old and new values."
@@ -68,6 +69,9 @@ export default async function CommercialSettingsPage() {
 
   const dollars = (cents: number | null | undefined) =>
     `$${((cents ?? 0) / 100).toFixed(2)}`;
+  // What is still owed: the share less refunds.
+  const owed = (sum: { referrerShareUsdCents: number | null; reversedUsdCents: number | null }) =>
+    (sum.referrerShareUsdCents ?? 0) - (sum.reversedUsdCents ?? 0);
 
   return (
     <main className="mx-auto max-w-4xl px-6 py-10">
@@ -138,17 +142,6 @@ export default async function CommercialSettingsPage() {
           min={SETTING_DEFS.referralHoldDays.min}
           max={SETTING_DEFS.referralHoldDays.max}
         />
-
-        <SettingForm
-          name="affiliateHoldDays"
-          label={SETTING_DEFS.affiliateHoldDays.label}
-          help={SETTING_DEFS.affiliateHoldDays.help}
-          unit="days"
-          current={settings.affiliateHoldDays}
-          min={SETTING_DEFS.affiliateHoldDays.min}
-          max={SETTING_DEFS.affiliateHoldDays.max}
-          requiresReason
-        />
       </div>
 
       <section className="mt-10 rounded-lg border border-slate-200 p-5">
@@ -157,14 +150,14 @@ export default async function CommercialSettingsPage() {
           <div>
             <dt className="text-slate-600">Held — referrer notified, within the hold period</dt>
             <dd className="mt-1 text-lg font-semibold text-slate-900">
-              {dollars(held._sum.referrerShareUsdCents)}{' '}
+              {dollars(owed(held._sum))}{' '}
               <span className="text-sm font-normal text-slate-600">({held._count} shares)</span>
             </dd>
           </div>
           <div>
             <dt className="text-slate-600">Expired unclaimed — hold ran out</dt>
             <dd className="mt-1 text-lg font-semibold text-slate-900">
-              {dollars(expired._sum.referrerShareUsdCents)}{' '}
+              {dollars(owed(expired._sum))}{' '}
               <span className="text-sm font-normal text-slate-600">({expired._count} shares)</span>
             </dd>
           </div>
@@ -175,6 +168,8 @@ export default async function CommercialSettingsPage() {
           about what day 91 means. That decision is still open.
         </p>
       </section>
+
+      <TransfersNeedingAttention />
 
       <AffiliateLedgerSection />
 
