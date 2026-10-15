@@ -46,7 +46,7 @@ export function SettingForm({
   max,
   requiresReason = false,
 }: {
-  name: 'referralHoldDays' | 'affiliateHoldDays';
+  name: 'referralHoldDays';
   label: string;
   help: string;
   unit: string;

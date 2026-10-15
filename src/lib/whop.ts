@@ -73,7 +73,12 @@ function client(action: string): Whop {
  * be set for connected accounts") on a company that plainly has a parent. Without a fee present it
  * would fail silently and bill the wrong company.
  */
-async function whopPost<T>(path: string, body: unknown, action: string): Promise<T> {
+async function whopPost<T>(
+  path: string,
+  body: unknown,
+  action: string,
+  opts: { timeoutMs?: number } = {},
+): Promise<T> {
   if (!isWhopPlatformsReady()) throw new WhopNotConfigured(action);
   const base = process.env.WHOP_API_BASE ?? 'https://api.whop.com/api/v1';
   const res = await fetch(`${base}${path}`, {
@@ -83,6 +88,7 @@ async function whopPost<T>(path: string, body: unknown, action: string): Promise
       'Content-Type': 'application/json',
     },
     body: JSON.stringify(body),
+    ...(opts.timeoutMs ? { signal: AbortSignal.timeout(opts.timeoutMs) } : {}),
   });
   if (!res.ok) {
     throw new Error(`Whop ${path} failed (${res.status}): ${await res.text().catch(() => '')}`);
@@ -495,8 +501,11 @@ export async function getPaymentFees(
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Transfers — settling a referrer's share (spec v1.4 §6.2)
+// Transfers — moving a referral or recruiting share to the payee's Whop balance
 // ──────────────────────────────────────────────────────────────────────────────
+
+/** A transfer request that has not answered by now is treated as an ambiguous outcome. */
+export const TRANSFER_TIMEOUT_MS = 25_000;
 
 /**
  * Move money from the parent company to a connected account.
@@ -511,9 +520,12 @@ export async function getPaymentFees(
  * an inline `/ 100` that reviews as obviously correct in either direction. `amount: 24999`
  * produced "-$24,999.00" in a live rejection probe, which is the evidence this is dollars.
  *
- * ⚠️ NO IDEMPOTENCY KEY IS AVAILABLE. Whop exposes none on this endpoint, so a retry is a second
- * payout. The caller claims the ledger row BEFORE calling and reconciles a crash-in-flight against
- * `GET /transfers?origin_id=` — never by retrying blind.
+ * DUPLICATE PROTECTION. The request carries `idempotence_key` (the SDK's documented "unique key to
+ * prevent duplicate transfers") in the body and `metadata` so the transfer can be found again with
+ * `findTransferForLedgerEntry`. Whether Whop honours the key on a parent -> sibling transfer, and
+ * whether the list returns the metadata, is what the canary measures
+ * (scripts/whop-canary-transfer.ts); until the operator records that result
+ * (`WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED`) an attempt with an unknown outcome is never re-sent.
  *
  * 🚧 The parent company is not business-verified, so every call currently fails with "Please
  * verify your business before transferring funds". `payoutsGuard()` is what stops us reaching here
@@ -524,7 +536,7 @@ export async function createTransfer(params: {
   destinationId: string;
   /** DOLLARS. See the warning above. */
   amountUsdDollars: number;
-  /** Attached so the transfer can be found again by `GET /transfers` (affiliate payouts pass it). */
+  /** Attached so the transfer can be found again by `GET /transfers`. */
   metadata?: Record<string, string>;
   /** Whop's documented duplicate-transfer key for ledger transfers (SDK `TransferCreateParams`). */
   idempotenceKey?: string;
@@ -536,13 +548,223 @@ export async function createTransfer(params: {
       destination_id: params.destinationId,
       amount: params.amountUsdDollars,
       currency: 'usd',
-      // Only when supplied, so the referral path's request body is byte-for-byte what it was.
       ...(params.metadata ? { metadata: params.metadata } : {}),
       ...(params.idempotenceKey ? { idempotence_key: params.idempotenceKey } : {}),
     },
-    'transfer a referrer share',
+    'transfer a share',
+    { timeoutMs: TRANSFER_TIMEOUT_MS },
   );
+  // A 2xx that carries no transfer id says nothing about whether a transfer exists. The message has no
+  // HTTP status in it, so the caller classifies it as an unknown outcome and never records a receipt.
+  if (typeof res?.id !== 'string' || res.id === '') {
+    throw new Error('Whop /transfers answered with a success status but no transfer id');
+  }
   return { transferId: res.id };
+}
+
+const TRANSFER_LOOKUP_PAGE = 100;
+const TRANSFER_LOOKUP_MAX_PAGES = 10;
+
+export type WhopTransferRecord = {
+  id: string;
+  /** DOLLARS. */
+  amount: number;
+  feeAmount: number | null;
+  metadata: Record<string, unknown> | null;
+  createdAt: string | null;
+};
+
+/**
+ * The outcome of looking for a transfer.
+ *
+ *   found      a transfer matched.
+ *   not-found  POSITIVE evidence of absence: the list answered with the expected envelope, its rows
+ *              expose a `metadata` field (or it is empty), and the scan reached the end. Even this is
+ *              only as good as the lookup mechanism; the caller trusts it only after the operator has
+ *              recorded the canary result (`WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED`).
+ *   unknown    the list cannot answer the question: an unexpected envelope, rows that carry no
+ *              `metadata` field at all (metadata is not returned), or a list too long to scan.
+ *
+ * A request that fails outright THROWS; that is also "unknown" to every caller.
+ */
+export type TransferLookup =
+  | { kind: 'found'; transfer: WhopTransferRecord }
+  | { kind: 'not-found' }
+  | { kind: 'unknown'; reason: string };
+
+/**
+ * Look for the first transfer from `originId` to `destinationId` that satisfies `match`:
+ * `GET /transfers` (the list endpoint has no metadata filter, so the match runs here), newest first,
+ * following the cursor up to `TRANSFER_LOOKUP_MAX_PAGES` pages. `createdAfter` bounds the scan.
+ *
+ * "No row matched" is NOT "no transfer exists" unless the list could have shown it, hence the
+ * three-way result (`TransferLookup`).
+ */
+export async function findTransfer(params: {
+  originId: string;
+  destinationId: string;
+  createdAfter?: Date;
+  match: (t: WhopTransferRecord) => boolean;
+  /** Epoch ms. The scan gives up (unknown) rather than run past it; each request is also bounded by it. */
+  deadlineMs?: number;
+}): Promise<TransferLookup> {
+  if (!isWhopPlatformsReady()) throw new WhopNotConfigured('look up a transfer');
+  const base = process.env.WHOP_API_BASE ?? 'https://api.whop.com/api/v1';
+  let after: string | undefined;
+  for (let page = 0; page < TRANSFER_LOOKUP_MAX_PAGES; page += 1) {
+    const remainingMs = params.deadlineMs === undefined ? Infinity : params.deadlineMs - Date.now();
+    if (remainingMs <= 0) return { kind: 'unknown', reason: 'the lookup ran out of its time budget' };
+    const qs = new URLSearchParams({
+      origin_id: params.originId,
+      destination_id: params.destinationId,
+      first: String(TRANSFER_LOOKUP_PAGE),
+      direction: 'desc',
+    });
+    if (params.createdAfter) qs.set('created_after', params.createdAfter.toISOString());
+    if (after) qs.set('after', after);
+    const res = await fetch(`${base}/transfers?${qs.toString()}`, {
+      headers: { Authorization: `Bearer ${process.env.WHOP_COMPANY_API_KEY}` },
+      signal: AbortSignal.timeout(Math.min(TRANSFER_TIMEOUT_MS, Math.max(1, remainingMs))),
+    });
+    if (!res.ok) {
+      throw new Error(`Whop /transfers lookup failed (${res.status}): ${await res.text().catch(() => '')}`);
+    }
+    const body = (await res.json().catch(() => null)) as {
+      data?: unknown;
+      has_more?: boolean;
+      page_info?: { end_cursor?: string | null; has_next_page?: boolean };
+    } | null;
+    if (!body || !Array.isArray(body.data)) {
+      return { kind: 'unknown', reason: 'the transfer list did not have the expected { data: [...] } envelope' };
+    }
+    const rows = body.data as Array<{
+      id?: string;
+      amount?: number;
+      fee_amount?: number | null;
+      created_at?: string;
+      metadata?: Record<string, unknown> | null;
+    }>;
+    if (rows.length > 0 && rows.every((t) => !t || typeof t !== 'object' || !('metadata' in t))) {
+      return {
+        kind: 'unknown',
+        reason: 'the transfer list rows carry no metadata field, so a transfer cannot be matched by metadata',
+      };
+    }
+    for (const t of rows) {
+      if (!t?.id) continue;
+      const record: WhopTransferRecord = {
+        id: t.id,
+        amount: typeof t.amount === 'number' ? t.amount : NaN,
+        feeAmount: typeof t.fee_amount === 'number' ? t.fee_amount : null,
+        metadata: t.metadata ?? null,
+        createdAt: t.created_at ?? null,
+      };
+      if (params.match(record)) return { kind: 'found', transfer: record };
+    }
+    // The scan has reached the end of the list only on POSITIVE evidence: a page shorter than the page
+    // size, or an explicit end marker. A full page we cannot page past is not the end of the list.
+    const endMarked = body.has_more === false || body.page_info?.has_next_page === false;
+    if (rows.length < TRANSFER_LOOKUP_PAGE || endMarked) return { kind: 'not-found' };
+    after = body.page_info?.end_cursor ?? undefined;
+    if (!after) {
+      return { kind: 'unknown', reason: 'the transfer list returned a full page with no cursor or end marker to continue from' };
+    }
+  }
+  return { kind: 'unknown', reason: 'the transfer list did not end within the page budget' };
+}
+
+/** The result of looking for the transfer made for one ledger row. See `TransferLookup`. */
+export type LedgerTransferLookup =
+  | { kind: 'found'; transferId: string; amountUsdDollars: number }
+  | { kind: 'not-found' }
+  | { kind: 'unknown'; reason: string };
+
+/** Find the transfer made for one ledger row (`metadata.ledger_entry_id`). See `findTransfer`. */
+export async function findTransferForLedgerEntry(params: {
+  originId: string;
+  destinationId: string;
+  ledgerEntryId: string;
+  createdAfter?: Date;
+  deadlineMs?: number;
+}): Promise<LedgerTransferLookup> {
+  const hit = await findTransfer({
+    originId: params.originId,
+    destinationId: params.destinationId,
+    createdAfter: params.createdAfter,
+    deadlineMs: params.deadlineMs,
+    match: (t) => t.metadata?.ledger_entry_id === params.ledgerEntryId,
+  });
+  if (hit.kind === 'found') return { kind: 'found', transferId: hit.transfer.id, amountUsdDollars: hit.transfer.amount };
+  return hit;
+}
+
+/**
+ * Is `companyId` a connected account (sibling) of the configured parent company? Read-only.
+ * `GET /companies/{id}` is read first and its `parent_company_id` compared when present; when the
+ * company object does not expose it, membership in the parent's connected-account list
+ * (`GET /companies?parent_company_id=<parent>`) decides. THROWS when neither can be read.
+ */
+export async function isConnectedAccountOfParent(companyId: string): Promise<boolean> {
+  if (!isWhopPlatformsReady()) throw new WhopNotConfigured('read a company');
+  const base = process.env.WHOP_API_BASE ?? 'https://api.whop.com/api/v1';
+  const parent = process.env.WHOP_PARENT_COMPANY_ID!;
+  const headers = { Authorization: `Bearer ${process.env.WHOP_COMPANY_API_KEY}` };
+
+  const one = await fetch(`${base}/companies/${encodeURIComponent(companyId)}`, {
+    headers,
+    signal: AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
+  });
+  if (!one.ok) {
+    throw new Error(`Whop /companies/${companyId} failed (${one.status}): ${await one.text().catch(() => '')}`);
+  }
+  const company = (await one.json().catch(() => null)) as { parent_company_id?: string | null } | null;
+  if (company && typeof company.parent_company_id === 'string') return company.parent_company_id === parent;
+
+  let after: string | undefined;
+  for (let page = 0; page < TRANSFER_LOOKUP_MAX_PAGES; page += 1) {
+    const qs = new URLSearchParams({ parent_company_id: parent, first: String(TRANSFER_LOOKUP_PAGE) });
+    if (after) qs.set('after', after);
+    const res = await fetch(`${base}/companies?${qs.toString()}`, {
+      headers,
+      signal: AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
+    });
+    if (!res.ok) throw new Error(`Whop /companies list failed (${res.status}): ${await res.text().catch(() => '')}`);
+    const body = (await res.json().catch(() => null)) as {
+      data?: unknown;
+      page_info?: { end_cursor?: string | null };
+    } | null;
+    if (!body || !Array.isArray(body.data)) {
+      throw new Error('Whop /companies list did not have the expected { data: [...] } envelope');
+    }
+    const rows = body.data as Array<{ id?: string }>;
+    if (rows.some((c) => c?.id === companyId)) return true;
+    if (rows.length < TRANSFER_LOOKUP_PAGE) return false;
+    after = body.page_info?.end_cursor ?? undefined;
+    if (!after) throw new Error('Whop /companies list returned a full page with no cursor to continue from');
+  }
+  throw new Error('Whop /companies list did not end within the page budget');
+}
+
+/**
+ * The USD balance of an account (`GET /ledger_accounts/{id}`): `balance` and `pending_balance`, in
+ * DOLLARS. Used by the canary transfer script. THROWS when the read fails, including when Whop does
+ * not accept a company id (`biz_...`) here and wants the ledger account id (`ldgr_...`) instead.
+ */
+export async function getAccountBalanceUsd(accountId: string): Promise<{ balanceUsd: number; pendingUsd: number }> {
+  if (!isWhopPlatformsReady()) throw new WhopNotConfigured('read an account balance');
+  const base = process.env.WHOP_API_BASE ?? 'https://api.whop.com/api/v1';
+  const res = await fetch(`${base}/ledger_accounts/${encodeURIComponent(accountId)}`, {
+    headers: { Authorization: `Bearer ${process.env.WHOP_COMPANY_API_KEY}` },
+    signal: AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
+  });
+  if (!res.ok) {
+    throw new Error(`Whop /ledger_accounts/${accountId} failed (${res.status}): ${await res.text().catch(() => '')}`);
+  }
+  const body = (await res.json()) as {
+    balances?: Array<{ currency?: string; balance?: number; pending_balance?: number }>;
+  };
+  const usd = (body.balances ?? []).find((b) => String(b.currency).toLowerCase() === 'usd');
+  return { balanceUsd: usd?.balance ?? 0, pendingUsd: usd?.pending_balance ?? 0 };
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

@@ -5,16 +5,14 @@
  * referrer's share does: it is a separate object settled onto a separate account by a separate
  * transfer, and it does not auto-reverse.
  *
- * The behaviour splits on one question — has it been paid out yet?
+ * The behaviour splits on one question — has a transfer been CLAIMED for the share yet?
  *
- *   NOT YET PAID (PAYABLE / HELD) — the debt is still a proposal. Reduce it; nothing has moved.
- *   ALREADY PAID (SETTLED)        — the money is in the referrer's own Whop account. Recovering it
- *                                   means pulling funds back OUT of a third party's account, and
- *                                   that is NEVER done automatically here. It is recorded as a
- *                                   recovery owed, for a human. Whop's child → parent direction is
- *                                   structurally permitted (probed) but needs that child to be
- *                                   holding a balance at the time, so even the mechanism is not
- *                                   guaranteed — let alone the judgement.
+ *   NOT CLAIMED  The debt is still a proposal. Reduce it (`reversedUsdCents` rises); the transfer,
+ *                when it is made, is smaller or is never sent.
+ *   CLAIMED      The amount to transfer is fixed and may already be in the payee's Whop balance.
+ *                Nothing is pulled back out of a third party's account: the refund is booked, in the
+ *                same transaction as the reduction, as a debit against the payee that the NEXT
+ *                transfer to them nets off (`ledger-reversal.ts`).
  *
  * SPEC v1.5 §1: A REFUND ALSO REVERSES THE AFFILIATE SHARE. The recruiter's 3% (O7) is carried on the
  * booking's `BookingFeeSnapshot` (`affiliateShareUsdCents`, `recruiterPractitionerId`) and recorded
@@ -31,13 +29,11 @@
  * The snapshot and the ledger's `shareUsdCents` are never edited: they are the record of what was
  * decided at mint.
  *
- * A REFUND AFTER THE RECRUITER WAS PAID (lane R2, operator ruling 2026-10-14) is NOT a flag for a
- * human any more: the row is already SETTLED, so the reversal is recorded in the same
- * transaction as an `AffiliateBalanceAdjustment` DEBIT against the recruiter (for a transfer still
- * in flight, the debit is booked when it is confirmed), which the payout
- * sweep nets off their next payable shares (NHP is never out of pocket, nothing is clawed back by
- * transfer, and the recruiter sees an "adjusted for a refund" line). The referrer path below is
- * unchanged: it still only records and flags.
+ * A REFUND AFTER THE RECRUITER'S TRANSFER WAS CLAIMED is not a flag for a human: the reversal is
+ * recorded in the same transaction as an `AffiliateBalanceAdjustment` DEBIT against the recruiter,
+ * which the next transfer nets off (nothing is clawed back by transfer, and the recruiter sees an
+ * "adjusted for a refund" line). The referrer's half works the same way with a
+ * `ReferralBalanceAdjustment`.
  *
  * ⚠️ WHOP SENDS REFUND AMOUNTS IN DOLLARS. The SDK's own type says so in as many words: "The
  * refunded amount as a decimal in the specified currency, such as 10.43 for $10.43 USD"
@@ -47,8 +43,16 @@
 
 import { proRataShare } from './referral-fees';
 import { syncAffiliateReversalFromMarkers, type AffiliateReversalDb } from './affiliate-ledger';
+import { REFERRAL_LEDGER } from './ledger-config';
+import { applyLedgerReversal, type ReversalDb } from './ledger-reversal';
 
 export type RefundDb = AffiliateReversalDb & {
+  referralBalanceAdjustment: {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    createMany(args: any): Promise<{ count: number }>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    findMany(args: any): Promise<any[]>;
+  };
   /** Resolves a payment to its booking, for the affiliate half (the snapshot is keyed on booking). */
   bookingFeeSnapshot: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -58,7 +62,9 @@ export type RefundDb = AffiliateReversalDb & {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     findFirst(args: any): Promise<any>;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    update(args: any): Promise<any>;
+    findUnique(args: any): Promise<any>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    updateMany(args: any): Promise<{ count: number }>;
   };
   feeLedgerEntry: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -71,10 +77,14 @@ export type RefundDb = AffiliateReversalDb & {
 };
 
 export type RefundOutcome = {
-  /** Reduced from an unpaid debt. No money moved. */
+  /** The referrer's share reversed by this refund. 0 when none was owed. */
   reversedUsdCents: number;
-  /** Already transferred to the referrer and now owed back. Surfaced, never auto-clawed. */
-  recoveryOwedUsdCents: number;
+  /**
+   * Of the referrer's share, what had ALREADY been claimed for transfer: the total debit now
+   * recorded against the referrer for this payment. Netted off their next transfer, never clawed
+   * back. Stable across redeliveries.
+   */
+  referrerDebitRecordedUsdCents: number;
   matched: boolean;
   /** The recruiter's share reversed by this refund (spec v1.5). 0 when none was owed. */
   affiliateReversedUsdCents: number;
@@ -209,14 +219,14 @@ async function reverseReferrerShare(
     at: Date;
   },
 ): Promise<Omit<RefundOutcome, 'affiliateReversedUsdCents' | 'affiliateDebitRecordedUsdCents'>> {
-  const none = { reversedUsdCents: 0, recoveryOwedUsdCents: 0, matched: false };
+  const none = { reversedUsdCents: 0, referrerDebitRecordedUsdCents: 0, matched: false };
   if (!(input.refundAmountUsdDollars > 0)) return none;
 
   const row = (await db.referralLedgerEntry.findFirst({
     where: { whopPaymentId: input.whopPaymentId },
     select: {
       id: true,
-      state: true,
+      bookingIntentId: true,
       grossUsdCents: true,
       referrerShareUsdCents: true,
       referrerPractitionerId: true,
@@ -224,7 +234,7 @@ async function reverseReferrerShare(
     },
   })) as {
     id: string;
-    state: string;
+    bookingIntentId: string;
     grossUsdCents: number;
     referrerShareUsdCents: number;
     referrerPractitionerId: string;
@@ -235,7 +245,6 @@ async function reverseReferrerShare(
   if (!row || row.referrerShareUsdCents <= 0) return none;
 
   const refundUsdCents = Math.round(input.refundAmountUsdDollars * 100);
-  const alreadyPaid = row.state === 'SETTLED';
   const dedupeKey = `REFUND_REVERSAL:${input.refundId}:${row.id}`;
 
   // THE ARITHMETIC RULE (also stated on `proRataShare`):
@@ -245,64 +254,73 @@ async function reverseReferrerShare(
   //     the total can never exceed the share (never an over-reversal), and the shortfall against exact
   //     pro-rata is under one cent per refund event (floor), always in the payee's favour.
   //   - a refund of the whole payment (>= gross) reverses everything that remains.
-  // The original is rebuilt from the append-only ledger: for an unpaid row the stored share was
-  // decremented by earlier reversals, for a paid row it was not.
+  // The share on the row is never edited, so the original is always `referrerShareUsdCents`.
   const prior = (await db.feeLedgerEntry.findMany({
     where: { kind: 'REFUND_REVERSAL', whopPaymentId: input.whopPaymentId },
-    select: { dedupeKey: true, amountUsdCents: true, status: true },
+    select: { dedupeKey: true, amountUsdCents: true },
   })) as Array<{ dedupeKey: string; amountUsdCents: number }>;
 
-  // REDELIVERY: Whop sends the same refund 3x. The decrement below is not idempotent by itself, so
-  // a refund whose ledger entry already exists is answered from that entry and mutates NOTHING.
+  // REDELIVERY: Whop sends the same refund 3x. A refund whose marker already exists is answered from
+  // that marker and writes no second one.
   const mine = prior.find((e) => e.dedupeKey === dedupeKey);
+  let reversal: number;
   if (mine) {
-    const done = -mine.amountUsdCents;
-    return {
-      reversedUsdCents: alreadyPaid ? 0 : done,
-      recoveryOwedUsdCents: alreadyPaid ? done : 0,
-      matched: true,
-    };
-  }
+    reversal = -mine.amountUsdCents;
+  } else {
+    const alreadyReversed = prior.reduce((sum, e) => sum - e.amountUsdCents, 0);
+    const remaining = row.referrerShareUsdCents - alreadyReversed;
+    reversal = Math.min(remaining, proRataShare(row.referrerShareUsdCents, refundUsdCents, row.grossUsdCents));
+    if (reversal <= 0) return none;
 
-  const reversedBefore = prior.reduce((sum, e) => sum - e.amountUsdCents, 0);
-  const original = alreadyPaid ? row.referrerShareUsdCents : row.referrerShareUsdCents + reversedBefore;
-  const remaining = original - reversedBefore;
-  const reversal = Math.min(remaining, proRataShare(original, refundUsdCents, row.grossUsdCents));
-  if (reversal <= 0) return none;
-
-  if (!alreadyPaid) {
-    await db.referralLedgerEntry.update({
-      where: { id: row.id },
-      data: { referrerShareUsdCents: row.referrerShareUsdCents - reversal },
+    await db.feeLedgerEntry.upsert({
+      where: { dedupeKey },
+      create: {
+        dedupeKey,
+        kind: 'REFUND_REVERSAL',
+        status: 'SETTLED',
+        bookingIntentId: null,
+        practitionerId: row.servingPractitionerId,
+        counterpartyPractitionerId: row.referrerPractitionerId,
+        // NEGATIVE. The ledger is append-only, so a reversal is an entry with the opposite sign
+        // rather than an edit to the entry it reverses.
+        amountUsdCents: -reversal,
+        whopPaymentId: input.whopPaymentId,
+        note:
+          'Referrer share reduced by a refund. Applied to the ReferralLedgerEntry as an absolute ' +
+          'reversedUsdCents; if a transfer had already been claimed for the share, the amount is ' +
+          'recorded as a debit against the referrer and netted off their next transfer.',
+      },
+      update: {},
     });
   }
 
-  await db.feeLedgerEntry.upsert({
-    where: { dedupeKey },
-    create: {
-      dedupeKey,
-      kind: 'REFUND_REVERSAL',
-      // SETTLED when nothing had moved — the reduction IS the whole action. PENDING when it had,
-      // because something a human must do is still outstanding.
-      status: alreadyPaid ? 'PENDING' : 'SETTLED',
-      bookingIntentId: null,
-      practitionerId: row.servingPractitionerId,
-      counterpartyPractitionerId: row.referrerPractitionerId,
-      // NEGATIVE. The ledger is append-only, so a reversal is an entry with the opposite sign
-      // rather than an edit to the entry it reverses.
-      amountUsdCents: -reversal,
-      whopPaymentId: input.whopPaymentId,
-      note: alreadyPaid
-        ? 'Referrer share was ALREADY PAID OUT when this refund arrived. Nothing was clawed back ' +
-          'automatically — recover it by an explicit action, or offset it against a future share.'
-        : 'Referrer share reduced before payout; no money moved.',
-    },
-    update: {},
+  // Applied on EVERY delivery, redeliveries included, from the marker SUM re-read AFTER this
+  // delivery's own marker is in: two refunds arriving together each see both markers, and the write
+  // is monotone, so the earlier one cannot overwrite the later one downwards. It also repairs a
+  // crash between the marker and the row.
+  const applied = await syncReferralReversalFromMarkers(db as unknown as Pick<RefundDb, 'feeLedgerEntry'> & ReversalDb, {
+    whopPaymentId: input.whopPaymentId,
+    bookingIntentId: row.bookingIntentId,
+    referrerPractitionerId: row.referrerPractitionerId,
   });
+  return { reversedUsdCents: reversal, referrerDebitRecordedUsdCents: applied.debitRecordedUsdCents, matched: true };
+}
 
-  return {
-    reversedUsdCents: alreadyPaid ? 0 : reversal,
-    recoveryOwedUsdCents: alreadyPaid ? reversal : 0,
-    matched: true,
-  };
+/** Bring the referral ledger row up to the SUM of every `REFUND_REVERSAL` marker for the payment. */
+export async function syncReferralReversalFromMarkers(
+  db: Pick<RefundDb, 'feeLedgerEntry'> & ReversalDb,
+  input: { whopPaymentId: string; bookingIntentId: string; referrerPractitionerId: string },
+): Promise<{ found: boolean; debitRecordedUsdCents: number }> {
+  const markers = (await db.feeLedgerEntry.findMany({
+    where: { kind: 'REFUND_REVERSAL', whopPaymentId: input.whopPaymentId },
+    select: { amountUsdCents: true },
+  })) as Array<{ amountUsdCents: number }>;
+  // Entries are NEGATIVE.
+  const total = markers.reduce((sum, m) => sum - m.amountUsdCents, 0);
+  if (total <= 0) return { found: true, debitRecordedUsdCents: 0 };
+  return applyLedgerReversal(db, REFERRAL_LEDGER, {
+    bookingIntentId: input.bookingIntentId,
+    payeeId: input.referrerPractitionerId,
+    totalReversedUsdCents: total,
+  });
 }

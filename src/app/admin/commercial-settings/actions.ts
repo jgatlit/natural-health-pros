@@ -19,6 +19,8 @@ import {
   saveCurrentSchedule,
 } from '@/lib/rate-schedules';
 import { NoRateScheduleError } from '@/lib/rate-schedule';
+import { resolveTransferAttention } from '@/lib/transfer-attention';
+import type { LedgerTransferDb } from '@/lib/ledger-transfer';
 
 async function authorizeAdmin() {
   const session = await auth();
@@ -30,15 +32,14 @@ async function authorizeAdmin() {
 
 export type SettingFormState = { ok: boolean; message: string } | null;
 
-const SAVEABLE = ['referralHoldDays', 'affiliateHoldDays'] as const;
+const SAVEABLE = ['referralHoldDays'] as const;
 
 /**
- * Save one commercial setting (the referral hold period and the recruiter payout hold — rates and
- * terms live in the rate schedule below).
+ * Save one commercial setting (the referral hold period — rates and terms live in the rate
+ * schedule below).
  *
  * ⚠️ FORWARD-ONLY, AND THAT IS NOT ENFORCED HERE. Every ledger row snapshots its hold at creation,
- * so a change made on this screen governs NEW rows only. The recruiter hold requires a reason,
- * which `saveSetting` records on the audit row.
+ * so a change made on this screen governs NEW rows only.
  */
 export async function saveCommercialSetting(
   _prev: SettingFormState,
@@ -216,4 +217,30 @@ export async function assignScheduleToPractitioner(formData: FormData): Promise<
   );
   revalidatePath('/admin/commercial-settings');
   revalidatePath('/admin/invites');
+}
+
+/**
+ * Record what an admin found in Whop for a share whose transfer outcome was unknown
+ * (`attentionReason`): "it went out" (with the Whop transfer id) or "it did not go out". ADMIN only,
+ * a reason is required, and every resolution is audited on the fee ledger in the same transaction.
+ * It sends nothing; a row returned to retry is picked up by the next settle.
+ */
+export async function resolveTransferAttentionAction(formData: FormData): Promise<void> {
+  const session = await authorizeAdmin();
+  const ledger = String(formData.get('ledger') ?? '');
+  const outcome = String(formData.get('outcome') ?? '');
+  if ((ledger !== 'affiliate' && ledger !== 'referral') || (outcome !== 'went-out' && outcome !== 'did-not-go-out')) {
+    throw new Error('Unknown ledger or outcome.');
+  }
+  const result = await resolveTransferAttention(prisma as unknown as LedgerTransferDb, {
+    ledger,
+    outcome,
+    rowId: String(formData.get('rowId') ?? ''),
+    transferId: String(formData.get('transferId') ?? ''),
+    reason: String(formData.get('reason') ?? ''),
+    adminUserId: session.user.id ?? null,
+    at: new Date(),
+  });
+  if (!result.ok) throw new Error(result.message);
+  revalidatePath('/admin/commercial-settings');
 }

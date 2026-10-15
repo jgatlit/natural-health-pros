@@ -1,15 +1,12 @@
 /**
  * ADMIN-EDITABLE COMMERCIAL SETTINGS (spec v1.4 §1.1, as amended by v1.5 §2).
  *
- * Two numbers are left here, and both are operational rather than rates:
+ * One number is left here, and it is operational rather than a rate:
  *
  *  - REFERRAL HOLD PERIOD — 90 days (operator ruling 7, 2026-09-18: "Standard hold will be
- *    90 days"). Per HELD LEDGER ROW, not per referrer. Applies to CLIENT-REFERRAL (referrer)
- *    shares only.
- *  - AFFILIATE (RECRUITER) HOLD PERIOD — 0 days (operator ruling 2026-10-14: recruiters are paid
- *    as each client payment comes in, 3% of every transaction, indefinitely). A knob rather than
- *    a constant so a hold can be introduced without a deploy; it is snapshotted per ledger row and
- *    forward-only, and every change requires a stated reason in the audit log.
+ *    90 days"). Per HELD LEDGER ROW, not per referrer. It is the unclaimed-share window of a
+ *    referrer who cannot receive money yet; a referrer who can receive money is paid when the
+ *    client's payment clears and no hold applies.
  *
  * ⚠️ THE LEAD ATTRIBUTION TERM IS NO LONGER A SETTING. Spec v1.5 §2 moved both attribution terms
  * (and every rate) into the immutable `RateSchedule` a practitioner is priced under; the
@@ -25,7 +22,6 @@
 
 export const SETTING_KEYS = {
   referralHoldDays: 'referral_hold_days',
-  affiliateHoldDays: 'affiliate_hold_days',
 } as const;
 
 export type SettingKey = (typeof SETTING_KEYS)[keyof typeof SETTING_KEYS];
@@ -57,22 +53,6 @@ export const SETTING_DEFS: Record<keyof typeof SETTING_KEYS, SettingDef> = {
     min: 1,
     max: 3650,
     unit: 'days',
-  },
-  affiliateHoldDays: {
-    key: SETTING_KEYS.affiliateHoldDays,
-    label: 'Recruiter Payout Hold',
-    help:
-      'How many days a recruiter’s share of a client payment waits after the payment before it can ' +
-      'be paid out. 0 (the ruled default) means it is payable at once: recruiters are paid as ' +
-      'client payments come in once payouts are live. Forward-only: each ledger row snapshots the ' +
-      'value at the time of the payment, so changing it never moves an existing row. This does NOT ' +
-      'affect client-referral (referrer) payouts, which use the referral hold above.',
-    envVar: 'AFFILIATE_HOLD_DAYS',
-    fallback: 0,
-    min: 0,
-    max: 365,
-    unit: 'days',
-    requiresReason: true,
   },
 };
 
@@ -115,7 +95,7 @@ export function settingFromEnv(name: keyof typeof SETTING_KEYS): number {
 /** Resolve every setting, database first. A malformed stored value falls back rather than throwing. */
 export async function loadSettings(
   db: SettingsDb,
-): Promise<{ referralHoldDays: number; affiliateHoldDays: number }> {
+): Promise<{ referralHoldDays: number }> {
   const rows = await db.platformSetting.findMany({
     where: { key: { in: Object.values(SETTING_KEYS) } },
     select: { key: true, value: true },
@@ -127,7 +107,6 @@ export async function loadSettings(
   };
   return {
     referralHoldDays: resolve('referralHoldDays'),
-    affiliateHoldDays: resolve('affiliateHoldDays'),
   };
 }
 

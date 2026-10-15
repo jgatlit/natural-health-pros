@@ -71,19 +71,16 @@ export type RecruitedPractitionerRow = {
 
 export type RecruiterEarnings = {
   recruits: RecruitedPractitionerRow[];
-  /** Earned but inside a hold period (none by default: recruiters are paid as payments come in). */
-  pendingUsdCents: number;
-  /** Payable and owed: waiting on a payout run, or on a verified Whop account. */
+  /** Owed and not yet credited: waiting on the transfer, or on a verified Whop account. */
   accruedUsdCents: number;
-  /** Actually paid out. */
+  /** Actually credited to the recruiter's Whop balance. */
   settledUsdCents: number;
-  /** Paid-out rows that recorded the transfer fee: gross share, refund adjustment, the fee the payee bore, net paid. */
+  /** Credited rows with their breakdown: the share, what refund debits took off it, what was credited. */
   paidGrossUsdCents: number;
   paidAdjustedUsdCents: number;
-  paidFeeUsdCents: number;
   paidNetUsdCents: number;
-  /** How many settled rows carry that record (older rows predate it). */
-  paidWithFeeRecordCount: number;
+  /** How many credited rows carry that breakdown. */
+  paidBreakdownCount: number;
   /** Refunds that came in AFTER a share was paid: the open balance and what was already netted. */
   refundBalanceOpenUsdCents: number;
   refundAdjustedUsdCents: number;
@@ -97,7 +94,6 @@ const LEDGER_ROW_CAP = 20_000;
 export async function loadRecruiterEarnings(
   db: EarningsDb,
   recruiterPractitionerId: string,
-  now: Date,
   listedFilter: Record<string, unknown>,
 ): Promise<RecruiterEarnings> {
   const [recruits, listed, entries, adjustments] = await Promise.all([
@@ -117,9 +113,7 @@ export async function loadRecruiterEarnings(
         shareUsdCents: true,
         reversedUsdCents: true,
         transferUsdCents: true,
-        holdUntil: true,
         grossShareUsdCents: true,
-        transferFeeUsdCents: true,
         netPaidUsdCents: true,
         adjustmentAppliedUsdCents: true,
       },
@@ -130,9 +124,7 @@ export async function loadRecruiterEarnings(
         shareUsdCents: number;
         reversedUsdCents: number;
         transferUsdCents: number | null;
-        holdUntil: Date;
         grossShareUsdCents?: number | null;
-        transferFeeUsdCents?: number | null;
         netPaidUsdCents?: number | null;
         adjustmentAppliedUsdCents?: number | null;
       }>
@@ -148,19 +140,17 @@ export async function loadRecruiterEarnings(
   ]);
 
   const listedIds = new Set(listed.map((p) => p.id));
-  const totals = summarizeEntries(entries, now);
+  const totals = summarizeEntries(entries);
   const adjusted = summarizeAdjustments(adjustments);
 
   return {
     recruits: recruits.map((p) => ({ ...p, published: listedIds.has(p.id) })),
-    pendingUsdCents: totals.pendingUsdCents,
     accruedUsdCents: totals.accruedUsdCents,
     settledUsdCents: totals.settledUsdCents,
     paidGrossUsdCents: totals.paidGrossUsdCents,
     paidAdjustedUsdCents: totals.paidAdjustedUsdCents,
-    paidFeeUsdCents: totals.paidFeeUsdCents,
     paidNetUsdCents: totals.paidNetUsdCents,
-    paidWithFeeRecordCount: totals.paidWithFeeRecordCount,
+    paidBreakdownCount: totals.paidBreakdownCount,
     refundBalanceOpenUsdCents: adjusted.openBalanceUsdCents,
     refundAdjustedUsdCents: adjusted.appliedUsdCents,
     refundAdjustments: adjustments.slice(0, 10),
@@ -172,45 +162,37 @@ export type LedgerAmounts = {
   shareUsdCents: number;
   reversedUsdCents: number;
   transferUsdCents: number | null;
-  holdUntil: Date;
   grossShareUsdCents?: number | null;
-  transferFeeUsdCents?: number | null;
   netPaidUsdCents?: number | null;
   /** Refund debit already netted against THIS row's share (null/absent = none). */
   adjustmentAppliedUsdCents?: number | null;
 };
 
 export type LedgerTotals = {
-  pendingUsdCents: number;
   accruedUsdCents: number;
   settledUsdCents: number;
-  /** Rows parked by a failure that needs a human (`HELD`). Part of `accrued`, broken out. */
-  heldUsdCents: number;
   paidGrossUsdCents: number;
   /** Of the paid gross, what refund debits absorbed instead of being sent. */
   paidAdjustedUsdCents: number;
-  paidFeeUsdCents: number;
   paidNetUsdCents: number;
-  paidWithFeeRecordCount: number;
+  paidBreakdownCount: number;
 };
 
 /**
- * The one place ledger rows become the three numbers a person reads. Amounts are NET of refunds
+ * The one place ledger rows become the numbers a person reads. Amounts are NET of refunds
  * (share - reversed) and of any refund debit already netted against the row. REVERSED rows owe
- * nothing; SETTLED rows count what was actually transferred. A refund that arrives AFTER a share was
- * paid is not a row here: it is an `AffiliateBalanceAdjustment`, summarised by `summarizeAdjustments`.
+ * nothing; SETTLED rows count what was actually transferred. A refund that arrives AFTER a transfer
+ * was claimed is not a row here: it is an `AffiliateBalanceAdjustment`, summarised by
+ * `summarizeAdjustments`.
  */
-export function summarizeEntries(entries: LedgerAmounts[], now: Date): LedgerTotals {
+export function summarizeEntries(entries: LedgerAmounts[]): LedgerTotals {
   const t: LedgerTotals = {
-    pendingUsdCents: 0,
     accruedUsdCents: 0,
     settledUsdCents: 0,
-    heldUsdCents: 0,
     paidGrossUsdCents: 0,
     paidAdjustedUsdCents: 0,
-    paidFeeUsdCents: 0,
     paidNetUsdCents: 0,
-    paidWithFeeRecordCount: 0,
+    paidBreakdownCount: 0,
   };
   for (const e of entries) {
     const adjusted = e.adjustmentAppliedUsdCents ?? 0;
@@ -220,21 +202,14 @@ export function summarizeEntries(entries: LedgerAmounts[], now: Date): LedgerTot
     if (e.state === 'SETTLED') {
       const paid = e.transferUsdCents ?? net;
       t.settledUsdCents += paid;
-      if (e.grossShareUsdCents != null && e.transferFeeUsdCents != null && e.netPaidUsdCents != null) {
+      if (e.grossShareUsdCents != null && e.netPaidUsdCents != null) {
         t.paidGrossUsdCents += e.grossShareUsdCents;
         t.paidAdjustedUsdCents += adjusted;
-        t.paidFeeUsdCents += e.transferFeeUsdCents;
         t.paidNetUsdCents += e.netPaidUsdCents;
-        t.paidWithFeeRecordCount += 1;
+        t.paidBreakdownCount += 1;
       }
-    } else if (e.state === 'ACCRUED') {
-      if (e.holdUntil.getTime() > now.getTime()) t.pendingUsdCents += net;
-      else t.accruedUsdCents += net;
-    } else if (e.state === 'HELD') {
-      t.accruedUsdCents += net;
-      t.heldUsdCents += net;
-    } else if (e.state === 'SENDING') {
-      t.accruedUsdCents += net;
+    } else if (e.state === 'ACCRUED' || e.state === 'SENDING' || e.state === 'HELD') {
+      t.accruedUsdCents += e.transferUsdCents ?? net;
     }
     // REVERSED: nothing is owed.
   }

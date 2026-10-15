@@ -1,26 +1,26 @@
 import { describe, expect, it } from 'vitest';
 
 import { reverseReferralOnRefund } from '@/lib/referral-refunds';
-import { fakeAffiliateDb } from './helpers/fake-affiliate-db';
+import { fakeLedgerDb } from './helpers/fake-ledger-db';
 
 /**
  * REFUNDS (spec v1.4 §6.2, §9 test 17).
  *
  * Whop reverses the APPLICATION FEE itself, proportionally — that half needs no code. What does
  * need code is the referrer's share, which is a separate object on a separate account and does
- * not auto-reverse, and which behaves completely differently depending on whether we have paid it
- * out yet:
+ * not auto-reverse, and which behaves differently depending on whether a transfer has been CLAIMED
+ * for it yet:
  *
- *   NOT YET PAID (PAYABLE / HELD) — the debt is still a proposal. Reduce it. Nothing has moved.
- *   ALREADY PAID (SETTLED)        — the money is in the referrer's own Whop account. Recovering it
- *                                   means pulling funds back OUT of a third party's account, which
- *                                   is never done automatically here.
+ *   NOT CLAIMED — the debt is still a proposal. Reduce it (`reversedUsdCents` rises). Nothing moved.
+ *   CLAIMED     — the amount is fixed and may be in the referrer's own Whop account. Nothing is
+ *                 pulled back: the refund is booked as a debit netted off their next transfer.
  *
  * ⚠️ WHOP SENDS REFUND AMOUNTS IN DOLLARS. The SDK's own type says so: "The refunded amount as a
  * decimal in the specified currency, such as 10.43 for $10.43 USD" (`RefundCreatedWebhookEvent`).
  * Same unit trap as `/transfers` and the fee lines.
  *
- * ⚠️ THE STORED SHARE IS NEVER INFLATED, ONLY REDUCED. A refund can only ever take money back.
+ * ⚠️ THE STORED SHARE IS NEVER EDITED. Refunds raise `reversedUsdCents`, an absolute total that is
+ * rebuilt from the append-only reversal markers.
  */
 
 const PAID_AT = new Date(Date.UTC(2026, 5, 1));
@@ -29,60 +29,22 @@ function fake(
   row: Record<string, unknown> | null,
   extra: { feeLedger?: Record<string, unknown>[]; snapshot?: Record<string, unknown> | null } = {},
 ) {
-  const ledger: Record<string, unknown>[] = [];
-  const updates: Record<string, unknown>[] = [];
-  const preexisting = extra.feeLedger ?? [];
-  const affiliate = fakeAffiliateDb();
-  return {
-    ledger,
-    updates,
-    affiliateLedgerEntry: affiliate.affiliateLedgerEntry,
-    affiliateBalanceAdjustment: affiliate.affiliateBalanceAdjustment,
-    $transaction: affiliate.$transaction,
-    bookingFeeSnapshot: {
-      async findUnique() {
-        return extra.snapshot ?? null;
-      },
-    },
-    referralLedgerEntry: {
-      async findFirst() {
-        return row;
-      },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      async update(args: any) {
-        updates.push(args.data);
-        if (row) Object.assign(row, args.data); // the stored share really shrinks, as in Postgres
-        return { ...row, ...args.data };
-      },
-    },
-    feeLedgerEntry: {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      async upsert(args: any) {
-        const existing = ledger.find((l) => l.dedupeKey === args.where.dedupeKey);
-        if (existing) return existing;
-        ledger.push(args.create);
-        return args.create;
-      },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      async findFirst(args: any) {
-        return (
-          [...preexisting, ...ledger].find(
-            (l) => l.kind === args.where.kind && l.whopPaymentId === args.where.whopPaymentId,
-          ) ?? null
-        );
-      },
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      async findMany(args: any) {
-        return [...preexisting, ...ledger].filter((l) =>
-          Object.entries(args.where as Record<string, unknown>).every(([k, v]) => l[k] === v),
-        );
-      },
+  const db = fakeLedgerDb({ referral: { entries: row ? [row] : [] } });
+  for (const f of extra.feeLedger ?? []) db.fees.push({ ...f });
+  const markers = () => db.fees.filter((f: Record<string, unknown>) => String(f.kind).endsWith('REVERSAL'));
+  Object.defineProperty(db, 'ledger', { get: markers });
+  Object.defineProperty(db, 'row', { get: () => db.referralRows[0] as Record<string, any> | undefined }); // eslint-disable-line @typescript-eslint/no-explicit-any
+  db.bookingFeeSnapshot = {
+    async findUnique() {
+      return extra.snapshot ?? null;
     },
   };
+  return db as typeof db & { ledger: Record<string, any>[]; row: Record<string, any> | undefined }; // eslint-disable-line @typescript-eslint/no-explicit-any
 }
 
 const entry = (over: Record<string, unknown> = {}) => ({
   id: 'led_1',
+  bookingIntentId: 'bi_1',
   state: 'PAYABLE',
   grossUsdCents: 10_000,
   referrerShareUsdCents: 2_000,
@@ -104,7 +66,7 @@ describe('reverseReferralOnRefund — not yet paid out', () => {
     });
 
     expect(result.reversedUsdCents).toBe(2_000);
-    expect(db.updates[0]).toMatchObject({ referrerShareUsdCents: 0 });
+    expect(db.row).toMatchObject({ referrerShareUsdCents: 2_000, reversedUsdCents: 2_000, state: 'REVERSED' });
   });
 
   it('reverses PROPORTIONALLY on a partial refund', async () => {
@@ -118,7 +80,8 @@ describe('reverseReferralOnRefund — not yet paid out', () => {
     });
 
     expect(result.reversedUsdCents).toBe(500);
-    expect(db.updates[0]).toMatchObject({ referrerShareUsdCents: 1_500 });
+    expect(db.row).toMatchObject({ referrerShareUsdCents: 2_000, reversedUsdCents: 500, state: 'PAYABLE' });
+    expect(result.referrerDebitRecordedUsdCents).toBe(0);
   });
 
   it('⚠️ reads the refund amount as DOLLARS — $100 of a $100 session is a FULL refund', async () => {
@@ -147,7 +110,7 @@ describe('reverseReferralOnRefund — not yet paid out', () => {
     });
 
     expect(result.reversedUsdCents).toBe(2_000);
-    expect(db.updates[0]).toMatchObject({ referrerShareUsdCents: 0 });
+    expect(db.row).toMatchObject({ reversedUsdCents: 2_000 });
   });
 
   it('reduces a HELD share too — an unpaid debt is reversible whether or not we could pay it', async () => {
@@ -160,7 +123,7 @@ describe('reverseReferralOnRefund — not yet paid out', () => {
       at: PAID_AT,
     });
 
-    expect(db.updates[0]).toMatchObject({ referrerShareUsdCents: 0 });
+    expect(db.row).toMatchObject({ reversedUsdCents: 2_000, state: 'REVERSED' });
   });
 
   it('records the reversal on the fee ledger, keyed so a redelivered refund cannot double-count', async () => {
@@ -182,12 +145,11 @@ describe('reverseReferralOnRefund — not yet paid out', () => {
   });
 });
 
-describe('reverseReferralOnRefund — already paid out', () => {
-  it('does NOT claw back automatically — it records a recovery owed, for a human', async () => {
+describe('reverseReferralOnRefund — a transfer was already claimed', () => {
+  it('does NOT claw back, and does not flag a human: it books a DEBIT netted off the next transfer', async () => {
     // The money is in the referrer's own Whop account. Pulling funds back out of a third party's
-    // account on an automated heuristic is not recoverable if the heuristic is wrong, and Whop's
-    // own child → parent transfer needs that child to be holding a balance at the time.
-    const db = fake(entry({ state: 'SETTLED', settledAt: PAID_AT, whopTransferId: 'tr_1' }));
+    // account is not done; the next transfer to the same person is reduced instead.
+    const db = fake(entry({ state: 'SETTLED', settledAt: PAID_AT, whopTransferId: 'tr_1', transferUsdCents: 2_000 }));
 
     const result = await reverseReferralOnRefund(db, {
       whopPaymentId: 'pay_1',
@@ -196,10 +158,26 @@ describe('reverseReferralOnRefund — already paid out', () => {
       at: PAID_AT,
     });
 
-    expect(result.recoveryOwedUsdCents).toBe(2_000);
-    expect(db.updates).toEqual([]);
-    expect(db.ledger[0]).toMatchObject({ kind: 'REFUND_REVERSAL', status: 'PENDING' });
-    expect(String(db.ledger[0]!.note)).toMatch(/already paid|recover/i);
+    expect(result.reversedUsdCents).toBe(2_000);
+    expect(result.referrerDebitRecordedUsdCents).toBe(2_000);
+    expect(db.referralAdjustments).toHaveLength(1);
+    expect(db.referralAdjustments[0]).toMatchObject({
+      referrerPractitionerId: 'X',
+      sourceLedgerEntryId: 'led_1',
+      amountUsdCents: 2_000,
+      appliedUsdCents: 0,
+      state: 'OPEN',
+      dedupeKey: 'REFERRAL_REFUND:led_1:2000',
+    });
+    expect(db.ledger[0]).toMatchObject({ kind: 'REFUND_REVERSAL', status: 'SETTLED', amountUsdCents: -2_000 });
+    expect(db.row).toMatchObject({ state: 'SETTLED', reversedUsdCents: 2_000, referrerShareUsdCents: 2_000 });
+  });
+
+  it('a transfer in flight (SENDING) books the debit immediately too', async () => {
+    const db = fake(entry({ state: 'SENDING', transferUsdCents: 2_000, transferAttempts: 1 }));
+    const result = await reverseReferralOnRefund(db, { whopPaymentId: 'pay_1', refundAmountUsdDollars: 50, refundId: 'r1', at: PAID_AT });
+    expect(result.referrerDebitRecordedUsdCents).toBe(1_000);
+    expect(db.referralAdjustments.map((a: Record<string, unknown>) => a.amountUsdCents)).toEqual([1_000]);
   });
 });
 
@@ -216,7 +194,7 @@ describe('reverseReferralOnRefund — nothing to do', () => {
 
     expect(result).toEqual({
       reversedUsdCents: 0,
-      recoveryOwedUsdCents: 0,
+      referrerDebitRecordedUsdCents: 0,
       matched: false,
       affiliateReversedUsdCents: 0,
       affiliateDebitRecordedUsdCents: 0,
@@ -364,19 +342,17 @@ describe('reverseReferralOnRefund — cumulative partial refunds', () => {
     reverseReferralOnRefund(db, { whopPaymentId: pay, refundAmountUsdDollars: dollars, refundId: id, at: PAID_AT });
 
   it('two 50% refunds reverse the WHOLE share (they used to reverse 50% then 25%)', async () => {
-    const row = entry();
-    const db = fake(row);
+    const db = fake(entry());
     const a = await refund(db, 50, 'r1');
     const b = await refund(db, 50, 'r2');
 
     expect(a.reversedUsdCents).toBe(1_000);
     expect(b.reversedUsdCents).toBe(1_000);
-    expect(row.referrerShareUsdCents).toBe(0);
+    expect(db.row!.reversedUsdCents).toBe(2_000);
   });
 
-  it('a REDELIVERED refund does not shrink the stored share a second time', async () => {
-    const row = entry();
-    const db = fake(row);
+  it('a REDELIVERED refund does not reduce the share a second time', async () => {
+    const db = fake(entry());
     const first = await refund(db, 25, 'r1');
     const replay = await refund(db, 25, 'r1');
     const replay2 = await refund(db, 25, 'r1');
@@ -384,20 +360,20 @@ describe('reverseReferralOnRefund — cumulative partial refunds', () => {
     expect(first.reversedUsdCents).toBe(500);
     expect(replay).toEqual(first);
     expect(replay2).toEqual(first);
-    expect(row.referrerShareUsdCents).toBe(1_500);
-    expect(db.updates).toHaveLength(1);
+    expect(db.row!.reversedUsdCents).toBe(500);
     expect(db.ledger).toHaveLength(1);
   });
 
-  it('on an ALREADY-PAID share, repeated full refunds can never owe back more than was paid', async () => {
-    const row = entry({ state: 'SETTLED' });
-    const db = fake(row);
+  it('on an ALREADY-PAID share, repeated full refunds can never debit more than was paid', async () => {
+    const db = fake(entry({ state: 'SETTLED', transferUsdCents: 2_000 }));
     const a = await refund(db, 100, 'r1');
     const b = await refund(db, 100, 'r2');
 
-    expect(a.recoveryOwedUsdCents).toBe(2_000);
-    expect(b.recoveryOwedUsdCents).toBe(0);
-    const owed = db.ledger.reduce((n, l) => n + -(l.amountUsdCents as number), 0);
+    expect(a.reversedUsdCents).toBe(2_000);
+    expect(a.referrerDebitRecordedUsdCents).toBe(2_000);
+    expect(b.reversedUsdCents).toBe(0);
+    expect(b.matched).toBe(false);
+    const owed = db.referralAdjustments.reduce((n: number, l: Record<string, number>) => n + l.amountUsdCents, 0);
     expect(owed).toBe(2_000);
   });
 
@@ -405,8 +381,7 @@ describe('reverseReferralOnRefund — cumulative partial refunds', () => {
     const splits = [[3_333, 6_667], [1, 9_999], [2_500, 2_500, 2_500, 2_500], [3_334, 3_333, 3_333], [10_000], [9_999, 1]];
     for (const share of [300, 2_000, 1_999, 7]) {
       for (const split of splits) {
-        const row = entry({ referrerShareUsdCents: share });
-        const db = fake(row);
+        const db = fake(entry({ referrerShareUsdCents: share }));
         let total = 0;
         for (const [i, cents] of Array.from(split.entries())) {
           total += (await refund(db, cents / 100, `r${i}`)).reversedUsdCents;

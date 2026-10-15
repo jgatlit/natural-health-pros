@@ -493,6 +493,7 @@ export async function GET(request: Request): Promise<NextResponse> {
         state: true,
         notifiedAt: true,
         referrerShareUsdCents: true,
+        reversedUsdCents: true,
         holdExpiresAt: true,
         referrerPractitioner: {
           select: { slug: true, user: { select: { email: true } } },
@@ -516,7 +517,7 @@ export async function GET(request: Request): Promise<NextResponse> {
           to,
           ...referralHoldCopy({
             referredName: row.servingPractitioner?.displayName ?? 'a practitioner',
-            amountUsdCents: row.referrerShareUsdCents,
+            amountUsdCents: row.referrerShareUsdCents - row.reversedUsdCents,
             holdExpiresAt: row.holdExpiresAt,
             onboardingUrl: `${SITE_URL}/practitioners/${encodeURIComponent(
               row.referrerPractitioner!.slug,

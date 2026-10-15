@@ -14,7 +14,8 @@
  *
  * ⚠️ NOTHING HERE SENDS EMAIL AND NOTHING HERE CALLS WHOP. Whop retries a webhook 3× over ~70 s
  * and then drops the event permanently, so the handler must acknowledge fast. The referrer's
- * "you have money waiting" notice and the transfer itself both fire from the sweep.
+ * "you have money waiting" notice fires from the sweep; the transfers fire from the caller, after
+ * this function returns, via `waitUntil` (see `CommitResult`).
  *
  * ⚠️ EVERY WRITE IS AN UPSERT ON A UNIQUE KEY. Whop redelivers this event; a second ledger row is
  * a second payout. The database refuses it rather than the handler remembering to check.
@@ -94,6 +95,8 @@ export type CommitResult = {
   referrerShareUsdCents: number;
   /** PAYABLE | HELD, or null when nothing was owed to a referrer. */
   referralState: 'PAYABLE' | 'HELD' | null;
+  /** The referrer owed a share that can be paid now (null when none, or when the share is HELD). */
+  referralPayablePractitionerId: string | null;
   /** The recruiter's share recorded on the affiliate ledger (spec v1.5). 0 when none was owed. */
   affiliateShareUsdCents: number;
   /** Who is owed that share (null when none was). Lets the caller trigger a best-effort settle of that one row. */
@@ -128,13 +131,11 @@ export async function commitPaymentAttribution(
     termMonths: number;
     referrerTermMonths?: number | null;
     rateScheduleId?: string | null;
-    /** The CLIENT-REFERRAL hold (`referral_hold_days`). Never applied to the recruiter's share. */
-    holdDays: number;
     /**
-     * The RECRUITER hold (`affiliate_hold_days`), snapshotted onto the affiliate row. Defaults to the
-     * ruled 0 (paid as client payments come in) when a caller does not pass one.
+     * The unclaimed-share window (`referral_hold_days`) of a referrer who cannot receive money yet.
+     * Not applied to a referrer who can, nor to the recruiter's share.
      */
-    affiliateHoldDays?: number;
+    holdDays: number;
     /**
      * THE PAYMENT INSTANT — and, since the 2026-09-19 correction, also the term's ANCHOR.
      *
@@ -351,7 +352,6 @@ export async function commitPaymentAttribution(
     recruitedPractitionerId: input.practitionerId,
     whopPaymentId: input.whopPaymentId ?? null,
     snapshot,
-    holdDays: input.affiliateHoldDays ?? 0,
     paidAt: input.paidAt,
   });
 
@@ -359,6 +359,7 @@ export async function commitPaymentAttribution(
     owner,
     referrerShareUsdCents,
     referralState,
+    referralPayablePractitionerId: referralState === 'PAYABLE' ? referrerPractitionerId : null,
     affiliateShareUsdCents: affiliate.accrued ? affiliate.shareUsdCents : 0,
     affiliateRecruiterPractitionerId: affiliate.accrued ? affiliate.recruiterPractitionerId : null,
   };
