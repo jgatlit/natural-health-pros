@@ -95,7 +95,7 @@
           <button id="env-prod" class="active" type="button">Production</button>
           <button id="env-local" type="button">Local (localhost:3000)</button>
         </div>
-        <p class="meta-note">Generated 2026-10-15T05:28:51.727Z</p>
+        <p class="meta-note">Generated 2026-10-15T05:33:32.488Z</p>
       </header>
 
       <section class="group">
@@ -381,7 +381,7 @@
         <div class="route">
           <div>
             <div class="path"><a href="" data-route="/admin/commercial-settings" target="_blank">/admin/commercial-settings</a></div>
-            <p class="desc"><strong>Rate schedules and payouts.</strong> Every price, percentage and term lives in an immutable, content-addressed <code>RateSchedule</code> row; this page shows the current schedule, the practitioners on each, and a form that saves a new schedule for NEW sign-ups only (existing practitioners move through the audited &ldquo;migrate cohort&rdquo; action; a practitioner with no schedule is refused at checkout until an admin assigns one). Also holds the <em>Referral Hold Period</em> (<code>referral_hold_days</code>, 90): only the unclaimed-share window for a referrer who cannot yet receive money. Below: held and <code>expired_unclaimed</code> referral totals, the <strong>transfers needing attention</strong> table (rows whose transfer outcome needs a person) and the recruiting-affiliate ledger. Transfers are off in production; see <code>docs/money-model.md</code> and <code>docs/runbooks/transfers-canary.md</code>.</p>
+            <p class="desc"><strong>Rate schedules and payouts.</strong> Every price, percentage and term lives in an immutable, content-addressed <code>RateSchedule</code> row; this page shows the current schedule, the practitioners on each, and a form that saves a new schedule for NEW sign-ups only (existing practitioners move through the audited &ldquo;migrate cohort&rdquo; action; a practitioner with no schedule is refused at checkout until an admin assigns one). Also holds the <em>Referral Hold Period</em> (<code>referral_hold_days</code>, 90): only the unclaimed-share window for a referrer who cannot yet receive money. Below: held and <code>expired_unclaimed</code> referral totals, the <strong>transfers needing attention</strong> table (rows whose transfer outcome needs a person) and the recruiting-affiliate ledger. Transfers are off in production (read-only check, 2026-10-14/15); see <code>docs/money-model.md</code> and <code>docs/runbooks/transfers-canary.md</code>.</p>
             
           </div>
           <div class="badges">
@@ -508,7 +508,7 @@
         <div class="route">
           <div>
             <div class="path"><a href="" data-route="/api/cron/whop-reconcile" target="_blank">/api/cron/whop-reconcile</a></div>
-            <p class="desc"><strong>Whop payout drift sweep.</strong> The safety net behind the <code>identity_profile.*</code> webhook, which Whop drops permanently after 3 retries (~70s). Reads <code>GET /identity_profiles/{idpf_…}</code> — the only endpoint exposing <code>status</code>, <code>payout_status</code> and <code>payouts_enabled</code> together — and keys completion on <code>status: approved</code>. ONE-WAY: it may OPEN the payout gate, never close it, because a parent-company API key is known to under-report (<code>linked_companies</code> reads empty here but arrives populated on the webhook). Revocation stays with <code>identity_profile.rejected</code>/<code>needs_action</code>. Reports connected accounts that have NO stored Whop ids — the signature of a webhook that never resolved. Bearer <code>CRON_SECRET</code> when set. Hourly (<code>vercel.json</code>); it is also the retry backstop for referral and recruiter share transfers, which do nothing while <code>WHOP_TRANSFERS_ENABLED</code> is not exactly <code>true</code> (off in production).</p>
+            <p class="desc"><strong>Whop payout drift sweep.</strong> The safety net behind the <code>identity_profile.*</code> webhook, which Whop drops permanently after 3 retries (~70s). Reads <code>GET /identity_profiles/{idpf_…}</code> — the only endpoint exposing <code>status</code>, <code>payout_status</code> and <code>payouts_enabled</code> together — and keys completion on <code>status: approved</code>. ONE-WAY: it may OPEN the payout gate, never close it, because a parent-company API key is known to under-report (<code>linked_companies</code> reads empty here but arrives populated on the webhook). Revocation stays with <code>identity_profile.rejected</code>/<code>needs_action</code>. Reports connected accounts that have NO stored Whop ids — the signature of a webhook that never resolved. Bearer <code>CRON_SECRET</code> when set. Hourly (<code>vercel.json</code>); it is also the retry backstop for referral and recruiter share transfers, which do nothing while <code>WHOP_TRANSFERS_ENABLED</code> is not exactly <code>true</code> (off in production per a read-only check on 2026-10-14/15).</p>
             
           </div>
           <div class="badges">

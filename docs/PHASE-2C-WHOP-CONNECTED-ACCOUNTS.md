@@ -1,6 +1,6 @@
 # Phase 2C — Whop Connected Accounts (validated architecture)
 
-> Whop Connected Accounts architecture and API notes. Prices quoted in this document ($49, $59) are as of mid-2026; the practitioner monthly fee and every session rate now come from rate schedules in the database. Current rates, payouts and flags: `docs/money-model.md` and `CLAUDE.md`.
+> Whop Connected Accounts architecture and API notes. Prices quoted in this document ($49, $59) are as of mid-2026; the practitioner monthly fee and every session rate come from rate schedules in the database. Current rates, payouts and flags: `docs/money-model.md` and `CLAUDE.md`.
 
 > **Supersedes `docs/PHASE-2C-WHOP-DESIGN.md`** (2026-05-25). That doc's blocker premise ("Whop for Platforms is invite-only") was a **context error**. Its API shapes are also wrong in several load-bearing ways. Read this instead.
 >

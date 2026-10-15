@@ -37,7 +37,7 @@
 | **Local cwd** | `~/projects/HHE/HHE-directory/` (folder unchanged) |
 | **GitHub** | https://github.com/jgatlit/natural-health-pros (public; renamed from `HHE-directory` 2026-06-29, GitHub keeps redirects) |
 | **Vercel project** | `ai-chemist/natural-health-pros` — inspector: https://vercel.com/ai-chemist/natural-health-pros (**renamed** from `hhe-directory` 2026-07-16 as the final launch step; project id `prj_hILUAi7uYNQfCJkcXlX4mG4Kn32E` unchanged, so the local `.vercel` link + deploy hook still resolve). ⚠️ Vercel refreshes the auto `.vercel.app` alias only on the NEXT deployment — `hhe-directory.vercel.app` may keep serving and `natural-health-pros.vercel.app` may 404 until then. Cosmetic; `naturalhealthpros.com` is canonical. |
-| **Production URL** | **`naturalhealthpros.com` — LIVE over HTTPS** (cutover 2026-07-15). Apex `A → 76.76.21.21` (DNS-only, replaced the GoDaddy builder), `www` CNAME → `cname.vercel-dns.com` (DNS-only); Let's Encrypt cert; Vercel domain `verified:true`. Zone `naturalhealthpros.com` (id `3ec2cb56dd0ad83824440b2e802ff73c`) lives in **Jonathan's own Cloudflare account**, editable via `ssh vps:~/apps/cloudflare/` (`cfapi` wrapper) — DNS was never gated on Amy's domain-admin auth; that was a phantom blocker. **Auth gates ON** since 2026-07-16 (PR #22): `/admin` needs ADMIN, `/edit` needs sign-in + ownership, `/onboarding` needs a valid invite; `/search` + profiles stay public. |
+| **Production URL** | **`naturalhealthpros.com` — LIVE over HTTPS** (cutover 2026-07-15). Apex `A → 76.76.21.21` (DNS-only, replaced the GoDaddy builder), `www` CNAME → `cname.vercel-dns.com` (DNS-only); Let's Encrypt cert; Vercel domain `verified:true`. Zone `naturalhealthpros.com` (id `3ec2cb56dd0ad83824440b2e802ff73c`) lives in **Jonathan's own Cloudflare account**, editable via `ssh vps:~/apps/cloudflare/` (`cfapi` wrapper) — DNS is not gated on Amy's domain-admin auth. **Auth gates ON** since 2026-07-16 (PR #22): `/admin` needs ADMIN, `/edit` needs sign-in + ownership, `/onboarding` needs a valid invite; `/search` + profiles stay public. |
 | **Neon DB** | `neondb` @ `ep-plain-bird-ap6zr7b3.c-7.us-east-1.aws.neon.tech` (Marketplace-connected; branching per env) |
 | **Typesense Cloud** | cluster `vm8gj01ubsi7hyxep` (Server v30.2), host `vm8gj01ubsi7hyxep-1.a2.typesense.net`, collection `practitioners`, dashboard https://cloud.typesense.org (rebuilt 2026-06-24; prior cluster `1rt8fj5i9epv2s6mp` terminated) |
 
@@ -68,9 +68,9 @@ datasource db {
 
 If the prefix is later removed in Vercel/Neon settings, schema needs a parallel edit. See `~/.claude/projects/-home-jgatlit-vault/memory/reference_neon_vercel_prisma_integration.md` for the broader pattern.
 
-### Prisma reads `.env` not `.env.local`
+### Prisma reads `.env`, and `.env` is production
 
-After `vercel env pull .env.local`, also `cp .env.local .env` for Prisma CLI to find creds. `.env` is gitignored (added explicitly — `.env*.local` pattern doesn't match plain `.env`). Never commit `.env`.
+Prisma reads `.env`, not `.env.local`. A `.env` holding the Vercel-pulled variables points at the production Neon database. `.env` is gitignored (added explicitly; `.env*.local` does not match plain `.env`); never commit it. Never copy production credentials into a worktree or a scratch `.env`; run Prisma commands that need a database against a throwaway local Postgres with the datasource variables set inline.
 
 ### Phase 3 helpers stripped from action-utils.ts
 
@@ -79,7 +79,7 @@ After `vercel env pull .env.local`, also `cp .env.local .env` for Prisma CLI to 
 ## Build + deploy
 
 - `git push origin main` → auto-deploys via Vercel GitHub App (verified 2026-05-24)
-- Migration flow: `vercel env pull .env.local && cp .env.local .env && npm run db:migrate:dev --name <name>` → commit `prisma/migrations/` → push
+- Migration flow: edit `prisma/schema.prisma`; generate the SQL offline with `npx prisma migrate diff --from-schema-datamodel <schema at the base commit> --to-schema-datamodel prisma/schema.prisma --script` (no database and no shadow database involved; save the base commit's copy of `prisma/schema.prisma` to a scratch file for the `--from` side); hand-write any seed or backfill statements; verify on a throwaway local Docker Postgres with every datasource variable set inline to localhost; commit `prisma/migrations/`; push. Migrations apply on deploy (`prisma migrate deploy` in the build). Never use `prisma migrate dev` or a shadow-database URL against production, and never copy production credentials into a worktree or `.env`. See "Migrations".
 - Migrations **DO** auto-apply on deploy — build is `prisma migrate deploy && prisma generate && next build`. This makes expand/contract mandatory: the migration applies during build while the PREVIOUS deploy still serves traffic, so a migration must never break the currently-live code (add the column now, drop the old one a release later).
 - **Git auto-deploy works, but can be SLOW — don't mistake slow for broken.** Usually a merge deploys within seconds (PR #35: merge 19:09:14 → deploy 19:09:18). But on 2026-07-16 PR #34's deploy took **~10 minutes to start**, and another sat at `● Initializing` for **~12 minutes** before building normally. Both eventually succeeded on their own. Wait ~15 min before concluding anything is wrong; a CLI `vercel --prod --yes` fired impatiently just races the git deploy and creates duplicate production deployments.
 - **Verify what is actually LIVE, never infer it from status codes.** While a slow deploy is in flight the previous deployment keeps serving — the site returns 200 everywhere while running old code. Compare deployment IDs instead:
@@ -106,19 +106,21 @@ The rule is `resolveSessionFee` in `src/lib/referral-fees.ts`. `nhpa` is capture
 - Every internal NHP, practitioner, referral, affiliate and recruiting fee is computed on the full purchase price and moved by an internal Whop-to-Whop transfer when the client's payment clears. Whop's own payout (withdrawal) fee is each user's matter and appears in no share or ledger figure.
 - The recruiter's 3% is paid immediately with no hold. A refund before the transfer reduces the share; a refund after it becomes a debit netted off that person's next transfer.
 - `referral_hold_days` (90) is only the unclaimed-share window for a payee who cannot yet receive money.
-- Transfers are OFF in production. Flags (`.env.example`): `WHOP_TRANSFERS_ENABLED`, `WHOP_TRANSFERS_ALLOWLIST`, `WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED`, `WHOP_TRANSFERS_LOOKUP_VERIFIED`. Do not enable any before Whop business verification and the canary in `docs/runbooks/transfers-canary.md`.
+- Transfers are OFF in production (read-only check, 2026-10-14/15: the `WHOP_TRANSFERS_*` variables are absent). Flags (`.env.example`): `WHOP_TRANSFERS_ENABLED`, `WHOP_TRANSFERS_ALLOWLIST`, `WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED`, `WHOP_TRANSFERS_LOOKUP_VERIFIED`. Do not enable any before Whop business verification and the canary in `docs/runbooks/transfers-canary.md`.
 - One-page reference with the data model and the file for each rule: `docs/money-model.md`.
 
 ## Migrations
 
 - Never point a shadow database, `prisma migrate dev`, `migrate reset` or any destructive Prisma command at the production Neon URL (`.env` is production). A shadow DB is disposable: on 2026-08-27 `prisma migrate diff --shadow-database-url` against production wiped the live database.
-- Generate migrations offline on a local Docker Postgres (schema to schema with `prisma migrate diff --from-schema-datamodel` / `--to-schema-datamodel`), then hand-check the SQL. Every diff proposes `DROP INDEX "Practitioner_searchText_trgm_idx"` (a raw-SQL index the schema cannot express); remove it from the migration.
+- Generate migrations offline: `prisma migrate diff --from-schema-datamodel <base schema> --to-schema-datamodel prisma/schema.prisma --script` needs no database at all. Every diff proposes `DROP INDEX "Practitioner_searchText_trgm_idx"` (a raw-SQL index the schema cannot express); remove it from the migration.
+- Verify the SQL on a throwaway local Docker Postgres: `db push` the base schema, apply the migrations in folder order, then `prisma migrate diff` from that database to the final schema must be empty. Set every datasource variable inline to localhost.
 - Migrations are expand-only. `npm run build` runs `prisma migrate deploy` against whatever `.env` points at, so run `npx next build` locally.
-- The chain currently ends at `20261015122000_transfer_attention_and_allocations`. The history cannot be replayed on an empty database: migration `20260524141519_pg_trgm_search` references `Practitioner` before `20260524173856_init` creates it. Preview deploys and fresh databases are affected; fixing it is an operator decision (baseline or `migrate resolve`).
+- The chain ends at `20261015122000_transfer_attention_and_allocations`. The history cannot be replayed on an EMPTY database: migration `20260524141519_pg_trgm_search` references `Practitioner` before `20260524173856_init` creates it. Preview deployments are unaffected because they fork the production database. Fixing the replay is an operator decision (baseline or `migrate resolve`).
 
 ## Where the runbooks are
 
 - `docs/money-model.md`: rates, payouts, flags, where each rule is implemented.
+- Whop sales-access request drafts in `docs/outbound/` and `docs/demo-prep/` must not be sent; Connected Accounts is self-serve (see the banners on the two drafts).
 - `docs/runbooks/transfers-canary.md`: enabling transfers safely, resolving ambiguous rows.
 - `docs/runbooks/`: also `auth-middleware-missing-adapter.md`, `notfound-streaming-200.md`, `resend-domain-verification.md`, `typesense-cluster-rebuild.md`.
 - `docs/routes-index.html`: every route, generated from `scripts/routes-meta.ts` by `npm run docs:routes`.
@@ -143,7 +145,7 @@ Authoritative source documents kept in the operator's vault / Downloads (vault i
 
 - Practitioners choose Plan A (subscription plus a lower sourced-session rate) or Plan B (no subscription, higher sourced-session rate). Both require a Whop account. The numbers are in the database (see "Rates").
 - Sarah Schindler announced the directory to the listed practitioners on 2026-09-04. Open sign-up at `/join/hhe` is the current acquisition path; recruiter and referral links carry `nhpa` and `nhpr`.
-- Payout transfers are off in production (see "Money model"). Nothing on the payout side is switched on before Whop business verification of the parent company and the canary.
+- Payout transfers are off in production (read-only check, 2026-10-14/15; see "Money model"). Nothing on the payout side is switched on before Whop business verification of the parent company and the canary.
 - Marketing targets consumers, not practitioner acquisition. There is no free listing-only tier; paid featured placement waits for consumer traffic.
 - Before telling Amy or Sarah that something is live, compare deployment ids as described in "Build + deploy".
 

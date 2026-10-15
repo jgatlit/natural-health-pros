@@ -1,6 +1,6 @@
 # Triage context primer — 2026-09-15 (practitioner pricing becomes Plan A / Plan B)
 
-> **Point-in-time record, 2026-09-15.** Prices and splits shown here were working figures from the 2026-09-14 call. Rates are now immutable rate schedules in the database: `docs/money-model.md` and `CLAUDE.md` are current.
+> **Point-in-time record, 2026-09-15.** Prices and splits shown here were working figures from the 2026-09-14 call. Rates are immutable rate schedules in the database: `docs/money-model.md` and `CLAUDE.md` are current.
 
 > **Standalone primer, written by `/process-inbox` §3c (automated run, 2026-09-15).** It carries forward what landed in the vault from the **2026-09-14 Jonathan ↔ Amy call** so a session opened in this repo has it without resolving vault wiki-links.
 > **Sources (vault):** meeting note `~/vault/300 Entities/Meetings/2026-09-14 HHE Amy Jonathan - Practitioner Pricing Plan A-B + Consumer-First GTM.md` (canonical) · `~/vault/300 Entities/People/Amy (HHE).md` `## Notes` 2026-09-14 (applied by reconciler commit `1928356`, 2026-09-15 05:21).
