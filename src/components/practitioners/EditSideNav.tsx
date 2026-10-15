@@ -166,8 +166,17 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
     let retryTimer = 0;
     let lastInputAt = -Infinity;
     let pointerDown = false;
-    let held: { id: string; since: number; deadline: number; baseline: number | null; seen: boolean } | null =
-      null;
+    let held: {
+      id: string;
+      fromHash: boolean;
+      since: number;
+      deadline: number;
+      baseline: number | null;
+      seen: boolean;
+    } | null = null;
+    // history.pushState/replaceState (what Next's router uses) fire no hashchange, so the hash is
+    // also compared on scroll, compute and popstate. Not patching history.
+    let lastHash = window.location.hash;
 
     const settle = () => {
       if (held) held.baseline = window.scrollY;
@@ -180,6 +189,7 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
     };
     const compute = () => {
       frame = 0;
+      syncHash();
       if (held) {
         const present = document.getElementById(held.id) !== null;
         if (present && !held.seen) {
@@ -203,16 +213,34 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
       if (!frame) frame = window.requestAnimationFrame(compute);
     }
     scheduleRef.current = schedule;
-    const hold = (id: string) => {
+    const hold = (id: string, fromHash = false) => {
       const now = Date.now();
-      held = { id, since: now, deadline: now + LATE_TARGET_WAIT_MS, baseline: null, seen: document.getElementById(id) !== null };
+      lastHash = window.location.hash;
+      held = { id, fromHash, since: now, deadline: now + LATE_TARGET_WAIT_MS, baseline: null, seen: document.getElementById(id) !== null };
       lastInputAt = -Infinity;
       window.clearTimeout(settleTimer);
       settleTimer = window.setTimeout(settle, SETTLE_MS);
     };
     holdRef.current = hold;
 
+    function syncHash() {
+      const current = window.location.hash;
+      if (current === lastHash) return;
+      lastHash = current;
+      const id = hashEntryId(entriesRef.current);
+      if (id) {
+        hashHold.current = id;
+        setActive(id);
+        setPresent((prev) => new Set(prev).add(id));
+        hold(id, true);
+      } else if (held?.fromHash) {
+        release();
+        schedule();
+      }
+    }
+
     const onScroll = () => {
+      syncHash();
       if (held) {
         if (held.baseline === null) {
           window.clearTimeout(settleTimer);
@@ -236,14 +264,7 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
       if (e.key === ' ' && t?.closest?.(ACTIVATES_ON_SPACE)) return;
       markInput();
     };
-    const onHashChange = () => {
-      const id = hashEntryId(entriesRef.current);
-      if (!id) return;
-      hashHold.current = id;
-      setActive(id);
-      setPresent((prev) => new Set(prev).add(id));
-      hold(id);
-    };
+    const onHashChange = () => syncHash();
     const onPointerDown = () => {
       pointerDown = true;
     };
@@ -262,10 +283,11 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
     window.addEventListener('touchmove', markInput, { passive: true });
     window.addEventListener('keydown', onKey);
     window.addEventListener('hashchange', onHashChange);
+    window.addEventListener('popstate', onHashChange);
     window.addEventListener('pointerdown', onPointerDown, true);
     window.addEventListener('pointerup', onPointerUp, true);
     window.addEventListener('pointercancel', onPointerUp, true);
-    if (hashHold.current) hold(hashHold.current);
+    if (hashHold.current) hold(hashHold.current, true);
     schedule();
     return () => {
       window.removeEventListener('scroll', onScroll);
@@ -275,6 +297,7 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
       window.removeEventListener('touchmove', markInput);
       window.removeEventListener('keydown', onKey);
       window.removeEventListener('hashchange', onHashChange);
+      window.removeEventListener('popstate', onHashChange);
       window.removeEventListener('pointerdown', onPointerDown, true);
       window.removeEventListener('pointerup', onPointerUp, true);
       window.removeEventListener('pointercancel', onPointerUp, true);

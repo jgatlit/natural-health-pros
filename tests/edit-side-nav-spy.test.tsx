@@ -329,6 +329,90 @@ describe('EditSideNav reading-line scroll-spy', () => {
     expect(currentIds()).toEqual(['#sections']);
   });
 
+  describe('hash changes made with history.pushState (what router.push does)', () => {
+    const url = (hash: string) => `/practitioners/x/edit${hash}`;
+
+    it('holds the entry the new hash names after the scroll Next causes', () => {
+      mount();
+      scrollTo(MAX);
+      expect(currentIds()).toEqual(['#account']);
+      window.history.pushState(null, '', url('#share-signup'));
+      scrollTo(MAX);
+      wait(3000);
+      scrollTo(MAX);
+      expect(currentIds()).toEqual(['#share-signup']);
+    });
+
+    it('an unknown or empty hash clears a hash-derived hold', () => {
+      mount();
+      scrollTo(MAX);
+      window.history.pushState(null, '', url('#share-signup'));
+      scrollTo(MAX);
+      wait(1000);
+      expect(currentIds()).toEqual(['#share-signup']);
+      window.history.pushState(null, '', url('#nope'));
+      scrollTo(MAX);
+      expect(currentIds()).toEqual(['#account']);
+      window.history.pushState(null, '', url('#share-signup'));
+      scrollTo(MAX);
+      window.history.pushState(null, '', url(''));
+      scrollTo(MAX);
+      expect(currentIds()).toEqual(['#account']);
+    });
+
+    it('does not clear a click hold when the hash becomes unknown', () => {
+      mount();
+      clickShareSignup();
+      wait(1000);
+      window.history.pushState(null, '', url('#nope'));
+      scrollTo(scrollY);
+      expect(currentIds()).toEqual(['#share-signup']);
+    });
+
+    it('re-derives the hold on popstate (back/forward)', () => {
+      mount();
+      scrollTo(MAX);
+      window.history.replaceState(null, '', url('#share-signup'));
+      act(() => {
+        window.dispatchEvent(new PopStateEvent('popstate'));
+      });
+      wait(1000);
+      scrollTo(MAX);
+      expect(currentIds()).toEqual(['#share-signup']);
+    });
+
+    it('a malformed hash set by pushState does not throw', () => {
+      mount();
+      window.history.pushState(null, '', url('#%E0%A4%A'));
+      expect(() => scrollTo(MAX)).not.toThrow();
+    });
+  });
+
+  it('an instant jump to the top with no input leaves no stale entry', () => {
+    mount();
+    Element.prototype.scrollIntoView = vi.fn(function (this: Element) {
+      scrollY = Math.min(PAGE_TOPS[this.id]! - 96, MAX);
+    });
+    click(link('account'));
+    wait(1000);
+    expect(currentIds()).toEqual(['#account']);
+    scrollTo(0);
+    expect(currentIds()).toEqual(['#profile']);
+  });
+
+  it('tabbing the page far down with no input does not leave the clicked entry highlighted', () => {
+    mount();
+    Element.prototype.scrollIntoView = vi.fn(function (this: Element) {
+      scrollY = PAGE_TOPS[this.id]! - 96;
+    });
+    scrollTo(0);
+    click(link('profile'));
+    wait(1000);
+    expect(currentIds()).toEqual(['#profile']);
+    scrollTo(1700);
+    expect(currentIds()).toEqual(['#client-outcomes']);
+  });
+
   it('a malformed hash on load does not throw', () => {
     window.history.replaceState(null, '', '/practitioners/x/edit#%E0%A4%A');
     expect(() => mount()).not.toThrow();
