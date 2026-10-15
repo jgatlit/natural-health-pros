@@ -2,7 +2,13 @@ import Link from 'next/link';
 
 import { prisma } from '@/lib/prisma';
 import { selectRecruiter, whereAnyRecruiter } from '@/lib/recruiter';
-import { summarizeEntries, type LedgerAmounts, type LedgerTotals } from '@/lib/affiliate-earnings';
+import {
+  summarizeAdjustments,
+  summarizeEntries,
+  type AdjustmentTotals,
+  type LedgerAmounts,
+  type LedgerTotals,
+} from '@/lib/affiliate-earnings';
 import { STUCK_SENDING_AFTER_MS } from '@/lib/affiliate-payouts';
 
 const usd = (cents: number) => `$${(cents / 100).toFixed(2)}`;
@@ -13,6 +19,7 @@ type Row = {
   slug: string;
   recruits: number;
   totals: LedgerTotals;
+  adjustments: AdjustmentTotals;
 };
 
 /**
@@ -22,9 +29,13 @@ type Row = {
  *
  * There is deliberately no action here. Overriding a recruiter is a separate, audited feature; this
  * lane only makes the numbers visible. Amounts are the ledger's own, net of refunds.
+ *
+ * "Refund balance" is the OPEN total of refund debits: client payments refunded after the recruiter's
+ * share was paid, which are netted off that recruiter's next payouts. It is money NHP is out of
+ * pocket for until the recruiter's next share arrives, so it is shown as a total as well.
  */
 export async function AffiliateLedgerSection({ now = new Date() }: { now?: Date }) {
-  const [recruited, entries] = await Promise.all([
+  const [recruited, entries, adjustmentRows] = await Promise.all([
     prisma.practitioner.findMany({
       where: whereAnyRecruiter,
       select: selectRecruiter,
@@ -40,7 +51,12 @@ export async function AffiliateLedgerSection({ now = new Date() }: { now?: Date 
         reversedUsdCents: true,
         transferUsdCents: true,
         holdUntil: true,
+        adjustmentAppliedUsdCents: true,
       },
+      take: 50_000,
+    }),
+    prisma.affiliateBalanceAdjustment.findMany({
+      select: { recruiterPractitionerId: true, amountUsdCents: true, appliedUsdCents: true },
       take: 50_000,
     }),
   ]);
@@ -63,7 +79,21 @@ export async function AffiliateLedgerSection({ now = new Date() }: { now?: Date 
     byRecruiter.set(e.recruiterPractitionerId, list);
   }
 
-  const ids = Array.from(new Set([...Array.from(recruitCount.keys()), ...Array.from(byRecruiter.keys())]));
+  const adjustmentsByRecruiter = new Map<string, Array<{ amountUsdCents: number; appliedUsdCents: number }>>();
+  for (const a of adjustmentRows) {
+    const list = adjustmentsByRecruiter.get(a.recruiterPractitionerId) ?? [];
+    list.push(a);
+    adjustmentsByRecruiter.set(a.recruiterPractitionerId, list);
+  }
+  const openRefundBalanceUsdCents = summarizeAdjustments(adjustmentRows).openBalanceUsdCents;
+
+  const ids = Array.from(
+    new Set([
+      ...Array.from(recruitCount.keys()),
+      ...Array.from(byRecruiter.keys()),
+      ...Array.from(adjustmentsByRecruiter.keys()),
+    ]),
+  );
   const people = ids.length
     ? await prisma.practitioner.findMany({
         where: { id: { in: ids } },
@@ -79,6 +109,7 @@ export async function AffiliateLedgerSection({ now = new Date() }: { now?: Date 
       slug: person.get(id)?.slug ?? '',
       recruits: recruitCount.get(id) ?? 0,
       totals: summarizeEntries(byRecruiter.get(id) ?? [], now),
+      adjustments: summarizeAdjustments(adjustmentsByRecruiter.get(id) ?? []),
     }))
     .sort((a, b) => b.recruits - a.recruits || a.name.localeCompare(b.name));
 
@@ -91,8 +122,15 @@ export async function AffiliateLedgerSection({ now = new Date() }: { now?: Date 
       </h2>
       <p className="mt-1 max-w-2xl text-sm leading-relaxed text-slate-600">
         Read-only. Recruiter links are written once at sign-up and never change. Amounts are the affiliate
-        ledger&apos;s, net of refunds. Payouts are net of Whop&apos;s transfer fee.{' '}
+        ledger&apos;s, net of refunds. Recruiters are paid as client payments come in once payouts are live; payouts
+        are net of Whop&apos;s transfer fee. A refund after a share was paid becomes a balance netted off that
+        recruiter&apos;s next payouts.{' '}
         {!transfersOn && <strong>Payouts are off (WHOP_TRANSFERS_ENABLED is not true): nothing has been paid.</strong>}
+      </p>
+
+      <p className="mt-3 text-sm text-slate-700" data-testid="affiliate-refund-balance-total">
+        Open refund balance across all recruiters (to be netted off their next payouts):{' '}
+        <strong>{usd(openRefundBalanceUsdCents)}</strong>
       </p>
 
       {stuck.length > 0 && (
@@ -149,7 +187,7 @@ export async function AffiliateLedgerSection({ now = new Date() }: { now?: Date 
                 <th className="py-2 pr-3">Accrued</th>
                 <th className="py-2 pr-3">Held</th>
                 <th className="py-2 pr-3">Paid</th>
-                <th className="py-2 pr-3">Owed back</th>
+                <th className="py-2 pr-3">Refund balance (open)</th>
               </tr>
             </thead>
             <tbody className="divide-y">
@@ -169,7 +207,7 @@ export async function AffiliateLedgerSection({ now = new Date() }: { now?: Date 
                   <td className="py-2 pr-3">{usd(r.totals.accruedUsdCents)}</td>
                   <td className="py-2 pr-3">{usd(r.totals.heldUsdCents)}</td>
                   <td className="py-2 pr-3">{usd(r.totals.settledUsdCents)}</td>
-                  <td className="py-2 pr-3">{usd(r.totals.recoveryOwedUsdCents)}</td>
+                  <td className="py-2 pr-3">{usd(r.adjustments.openBalanceUsdCents)}</td>
                 </tr>
               ))}
             </tbody>

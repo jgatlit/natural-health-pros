@@ -305,6 +305,7 @@ model Practitioner {
   /// the ones their own sessions GENERATE (as the recruited practitioner).
   affiliateEntriesEarned    AffiliateLedgerEntry[] @relation("AffiliateEntriesEarned")
   affiliateEntriesGenerated AffiliateLedgerEntry[] @relation("AffiliateEntriesGenerated")
+  affiliateBalanceAdjustments AffiliateBalanceAdjustment[] @relation("AffiliateAdjustmentsOwed")
 
   /// THIS practitioner's own client list (spec v1.4 §2 `client_list_entry`). An entry made
   /// strictly BEFORE both the client's first booking and any referral of them exempts that client
@@ -1112,13 +1113,16 @@ model AffiliateLedgerEntry {
 
   state AffiliateLedgerState @default(ACCRUED)
 
-  /// Snapshot of `referral_hold_days` at write time, and the instant the hold lapses.
+  /// Snapshot of `affiliate_hold_days` at write time (default 0: recruiters are paid as client
+  /// payments come in), and the instant the hold lapses (paidAt + holdDays). The CLIENT-REFERRAL
+  /// hold is a different setting (`referral_hold_days`) on a different ledger.
   holdDays  Int
   holdUntil DateTime
 
-  /// The amount CLAIMED for transfer (shareUsdCents - reversedUsdCents at claim time), in cents.
-  /// Set by the same guarded UPDATE that moves the row to SENDING. What was actually requested,
-  /// so a refund that lands after the claim can tell how much (if any) is owed back.
+  /// The amount CLAIMED for transfer, in cents: the share after refunds (shareUsdCents -
+  /// reversedUsdCents at claim time) less any refund debit netted against it
+  /// (adjustmentAppliedUsdCents) and less the transfer fee the payee bears. 0 when debits swallowed
+  /// the whole share. Set by the same guarded UPDATE that moves the row to SENDING.
   transferUsdCents Int?
   settledAt        DateTime?
   whopTransferId   String?
@@ -1128,6 +1132,11 @@ model AffiliateLedgerEntry {
   grossShareUsdCents  Int?
   transferFeeUsdCents Int?
   netPaidUsdCents     Int?
+  /// REFUND NETTING (lane R2). The part of THIS row's gross share that was cancelled against the
+  /// recruiter's open `AffiliateBalanceAdjustment` debits instead of being sent. Cumulative across
+  /// claim attempts (a definitively rejected transfer returns the row to ACCRUED with the debit
+  /// still applied). gross - adjustmentApplied = what the transfer fee is charged on. NULL = none.
+  adjustmentAppliedUsdCents Int?
   /// Definitive (4xx) transfer rejections are retried by the next sweep; this counts them and keeps
   /// the last message so a stuck row explains itself.
   transferAttempts Int       @default(0)
@@ -1142,6 +1151,59 @@ model AffiliateLedgerEntry {
   @@index([state, holdUntil])
   @@index([recruiterPractitionerId, state])
   @@index([recruitedPractitionerId])
+
+  adjustments AffiliateBalanceAdjustment[]
+}
+
+enum AffiliateAdjustmentState {
+  /// Some or all of the debit is still owed by the recruiter and will be netted off their next payouts.
+  OPEN
+  /// Fully netted (appliedUsdCents = amountUsdCents). Terminal.
+  APPLIED
+}
+
+enum AffiliateAdjustmentReason {
+  /// A client payment was refunded AFTER the recruiter's share of it had already been paid out.
+  REFUND
+}
+
+/// A DEBIT against a recruiter (lane R2, operator ruling 2026-10-14): a client payment was refunded
+/// after the recruiter's share was sent, so NHP never claws the money back by transfer; it carries
+/// the amount as a negative balance and nets it off the recruiter's NEXT payable shares, oldest
+/// debit first. `amountUsdCents` is the debit (> 0); `appliedUsdCents` is how much of it has been
+/// netted so far; the open balance is the sum of (amount - applied) over OPEN rows.
+///
+/// WRITTEN ONLY BY A REFUND, in the same transaction as the ledger row's monotone
+/// `reversedUsdCents` raise, so each cache transition produces exactly one debit and a redelivery
+/// (which transitions nothing) produces none. `dedupeKey` = REFUND:<ledgerEntryId>:<cumulative
+/// reversed after this refund> is the database-level backstop for the same property.
+///
+/// Foreign keys are RESTRICT, not CASCADE like the ledger: a debt is money NHP is owed, and deleting
+/// a practitioner or a ledger row must never silently erase it.
+model AffiliateBalanceAdjustment {
+  id String @id @default(cuid())
+
+  recruiterPractitionerId String
+  recruiterPractitioner   Practitioner @relation("AffiliateAdjustmentsOwed", fields: [recruiterPractitionerId], references: [id], onDelete: Restrict)
+
+  /// The paid-out ledger row whose share was (partly) reversed.
+  sourceLedgerEntryId String
+  sourceLedgerEntry   AffiliateLedgerEntry @relation(fields: [sourceLedgerEntryId], references: [id], onDelete: Restrict)
+
+  /// Cents. The DEBIT, always > 0 (enforced by the writer; a CHECK would need hand-written SQL).
+  amountUsdCents  Int
+  appliedUsdCents Int @default(0)
+
+  state  AffiliateAdjustmentState  @default(OPEN)
+  reason AffiliateAdjustmentReason @default(REFUND)
+
+  dedupeKey String @unique
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([recruiterPractitionerId, state, createdAt])
+  @@index([sourceLedgerEntryId])
 }
 
 /// A PRACTITIONER'S OWN CLIENT LIST (spec v1.4 §2 `client_list_entry`, R4/R5).
@@ -1399,6 +1461,9 @@ model PlatformSettingChange {
   oldValue        String?
   newValue        String
   changedByUserId String?
+  /// WHY it was changed. Required by the writer for `affiliate_hold_days` (money timing); NULL on
+  /// older rows and on settings that do not ask for one.
+  reason          String?
   changedAt       DateTime @default(now())
 
   @@index([key, changedAt])

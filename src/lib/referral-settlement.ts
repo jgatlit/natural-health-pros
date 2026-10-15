@@ -23,10 +23,11 @@
 import { holdExpiry } from './attribution-term';
 import { hashClientEmail, recordAttributedClient } from './attributed-clients';
 import { resolveAttributionDecision, type AttributionResolverDb } from './attribution-resolver';
-import { accrueAffiliateShare } from './affiliate-ledger';
+import { accrueAffiliateShare, type AffiliateReversalDb } from './affiliate-ledger';
 
 /** STRUCTURAL — see the note on `attributed-clients.ts`'s `Db`. */
-export type SettlementDb = AttributionResolverDb & {
+export type SettlementDb = AttributionResolverDb &
+  Pick<AffiliateReversalDb, 'affiliateBalanceAdjustment' | '$transaction'> & {
   attributedClient: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     upsert(args: any): Promise<unknown>;
@@ -95,6 +96,8 @@ export type CommitResult = {
   referralState: 'PAYABLE' | 'HELD' | null;
   /** The recruiter's share recorded on the affiliate ledger (spec v1.5). 0 when none was owed. */
   affiliateShareUsdCents: number;
+  /** Who is owed that share (null when none was). Lets the caller trigger a best-effort settle of that one row. */
+  affiliateRecruiterPractitionerId: string | null;
 };
 
 /**
@@ -125,7 +128,13 @@ export async function commitPaymentAttribution(
     termMonths: number;
     referrerTermMonths?: number | null;
     rateScheduleId?: string | null;
+    /** The CLIENT-REFERRAL hold (`referral_hold_days`). Never applied to the recruiter's share. */
     holdDays: number;
+    /**
+     * The RECRUITER hold (`affiliate_hold_days`), snapshotted onto the affiliate row. Defaults to the
+     * ruled 0 (paid as client payments come in) when a caller does not pass one.
+     */
+    affiliateHoldDays?: number;
     /**
      * THE PAYMENT INSTANT — and, since the 2026-09-19 correction, also the term's ANCHOR.
      *
@@ -342,7 +351,7 @@ export async function commitPaymentAttribution(
     recruitedPractitionerId: input.practitionerId,
     whopPaymentId: input.whopPaymentId ?? null,
     snapshot,
-    holdDays: input.holdDays,
+    holdDays: input.affiliateHoldDays ?? 0,
     paidAt: input.paidAt,
   });
 
@@ -351,5 +360,6 @@ export async function commitPaymentAttribution(
     referrerShareUsdCents,
     referralState,
     affiliateShareUsdCents: affiliate.accrued ? affiliate.shareUsdCents : 0,
+    affiliateRecruiterPractitionerId: affiliate.accrued ? affiliate.recruiterPractitionerId : null,
   };
 }

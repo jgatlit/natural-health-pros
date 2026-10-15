@@ -37,6 +37,8 @@ function fake(
     ledger,
     updates,
     affiliateLedgerEntry: affiliate.affiliateLedgerEntry,
+    affiliateBalanceAdjustment: affiliate.affiliateBalanceAdjustment,
+    $transaction: affiliate.$transaction,
     bookingFeeSnapshot: {
       async findUnique() {
         return extra.snapshot ?? null;
@@ -217,7 +219,7 @@ describe('reverseReferralOnRefund — nothing to do', () => {
       recoveryOwedUsdCents: 0,
       matched: false,
       affiliateReversedUsdCents: 0,
-      affiliateRecoveryOwedUsdCents: 0,
+      affiliateDebitRecordedUsdCents: 0,
     });
     expect(db.ledger).toEqual([]);
   });

@@ -138,6 +138,17 @@ export default async function CommercialSettingsPage() {
           min={SETTING_DEFS.referralHoldDays.min}
           max={SETTING_DEFS.referralHoldDays.max}
         />
+
+        <SettingForm
+          name="affiliateHoldDays"
+          label={SETTING_DEFS.affiliateHoldDays.label}
+          help={SETTING_DEFS.affiliateHoldDays.help}
+          unit="days"
+          current={settings.affiliateHoldDays}
+          min={SETTING_DEFS.affiliateHoldDays.min}
+          max={SETTING_DEFS.affiliateHoldDays.max}
+          requiresReason
+        />
       </div>
 
       <section className="mt-10 rounded-lg border border-slate-200 p-5">
@@ -181,6 +192,7 @@ export default async function CommercialSettingsPage() {
               <li key={c.id} className="font-mono text-xs">
                 {c.changedAt.toISOString().slice(0, 16).replace('T', ' ')} · {c.key} ·{' '}
                 {c.oldValue ?? '(unset)'} → {c.newValue} · {c.changedByUserId ?? 'unknown admin'}
+                {c.reason ? ` · reason: ${c.reason}` : ''}
               </li>
             ))}
           </ul>

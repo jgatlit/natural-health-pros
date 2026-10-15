@@ -48,6 +48,8 @@ function db(seed: {
   return {
     affiliateRows: affiliate.rows,
     affiliateLedgerEntry: affiliate.affiliateLedgerEntry,
+    affiliateBalanceAdjustment: affiliate.affiliateBalanceAdjustment,
+    $transaction: affiliate.$transaction,
     referralLedger,
     feeLedger,
     attributed,

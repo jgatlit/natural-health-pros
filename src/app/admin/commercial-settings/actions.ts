@@ -30,12 +30,15 @@ async function authorizeAdmin() {
 
 export type SettingFormState = { ok: boolean; message: string } | null;
 
+const SAVEABLE = ['referralHoldDays', 'affiliateHoldDays'] as const;
+
 /**
- * Save one commercial setting (today only the referral hold period — rates and terms live in the
- * rate schedule below).
+ * Save one commercial setting (the referral hold period and the recruiter payout hold — rates and
+ * terms live in the rate schedule below).
  *
- * ⚠️ FORWARD-ONLY, AND THAT IS NOT ENFORCED HERE. Every held ledger row snapshots the hold at
- * creation, so a change made on this screen governs NEW rows only.
+ * ⚠️ FORWARD-ONLY, AND THAT IS NOT ENFORCED HERE. Every ledger row snapshots its hold at creation,
+ * so a change made on this screen governs NEW rows only. The recruiter hold requires a reason,
+ * which `saveSetting` records on the audit row.
  */
 export async function saveCommercialSetting(
   _prev: SettingFormState,
@@ -44,10 +47,12 @@ export async function saveCommercialSetting(
   const session = await authorizeAdmin();
 
   const name = String(formData.get('name') ?? '');
-  if (name !== 'referralHoldDays') {
+  if (!(SAVEABLE as readonly string[]).includes(name)) {
     return { ok: false, message: 'Unknown setting.' };
   }
-  const def = SETTING_DEFS[name];
+  const settingName = name as (typeof SAVEABLE)[number];
+  const def = SETTING_DEFS[settingName];
+  const reason = String(formData.get('reason') ?? '').trim();
 
   const raw = String(formData.get('value') ?? '').trim();
   const value = Number(raw);
@@ -56,7 +61,12 @@ export async function saveCommercialSetting(
   }
 
   try {
-    await saveSetting(prisma, { name, value, updatedByUserId: session.user.id ?? null });
+    await saveSetting(prisma, {
+      name: settingName,
+      value,
+      updatedByUserId: session.user.id ?? null,
+      reason: reason || null,
+    });
   } catch (err) {
     return { ok: false, message: err instanceof Error ? err.message : 'Could not save.' };
   }
@@ -64,7 +74,7 @@ export async function saveCommercialSetting(
   revalidatePath('/admin/commercial-settings');
   return {
     ok: true,
-    message: `${def.label} is now ${value} ${def.unit}. This applies to new holds only — existing ones keep the hold they were created under.`,
+    message: `${def.label} is now ${value} ${def.unit}. This applies to new ledger rows only — existing ones keep the hold they were created under.`,
   };
 }
 

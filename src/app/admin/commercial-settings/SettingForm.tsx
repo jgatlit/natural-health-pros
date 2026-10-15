@@ -44,14 +44,17 @@ export function SettingForm({
   current,
   min,
   max,
+  requiresReason = false,
 }: {
-  name: 'referralHoldDays';
+  name: 'referralHoldDays' | 'affiliateHoldDays';
   label: string;
   help: string;
   unit: string;
   current: number;
   min: number;
   max: number;
+  /** Shows a mandatory "why" box; the server refuses the change without one. */
+  requiresReason?: boolean;
 }) {
   const [state, action] = useFormState<SettingFormState, FormData>(saveCommercialSetting, null);
 
@@ -76,6 +79,22 @@ export function SettingForm({
         <span className="text-sm text-slate-600">{unit}</span>
         <SaveButton />
       </div>
+      {requiresReason && (
+        <div className="mt-3">
+          <label htmlFor={`setting-${name}-reason`} className="block text-xs font-medium text-slate-700">
+            Reason for the change (kept in the change history)
+          </label>
+          <input
+            id={`setting-${name}-reason`}
+            name="reason"
+            type="text"
+            required
+            minLength={3}
+            maxLength={500}
+            className="mt-1 w-full max-w-xl rounded-md border border-slate-300 px-3 py-2 text-sm"
+          />
+        </div>
+      )}
       {state ? (
         <p className={`mt-3 text-sm ${state.ok ? 'text-emerald-700' : 'text-red-700'}`}>
           {state.message}

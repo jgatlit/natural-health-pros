@@ -5,7 +5,9 @@ import { commitPaymentAttribution } from '@/lib/referral-settlement';
 import { reverseReferralOnRefund } from '@/lib/referral-refunds';
 import { loadSettings } from '@/lib/platform-settings';
 import { resolvePaymentTerms } from '@/lib/rate-schedules';
-import { unwrapWebhook } from '@/lib/whop';
+import { createTransfer, unwrapWebhook } from '@/lib/whop';
+import { settleAffiliateEntryBestEffort } from '@/lib/affiliate-payouts';
+import { waitUntil } from '@vercel/functions';
 import { indexPractitioner } from '@/lib/practitioner-indexer';
 
 export const runtime = 'nodejs';
@@ -329,12 +331,12 @@ async function handleEvent(
         // come from the rate schedule that PRICED this booking (spec v1.5 §2) and the hold from the
         // admin settings. Reading them later would let a schedule change or an operator edit
         // reprice a claim already sold or move a hold clock that is already running.
-        const { referralHoldDays } = await loadSettings(prisma);
+        const { referralHoldDays, affiliateHoldDays } = await loadSettings(prisma);
         const terms = await resolvePaymentTerms(prisma, {
           bookingIntentId: intent.id,
           practitionerId: intent.practitionerId,
         });
-        await commitPaymentAttribution(prisma, {
+        const committed = await commitPaymentAttribution(prisma, {
           bookingIntentId: intent.id,
           practitionerId: intent.practitionerId,
           email: intent.email,
@@ -345,6 +347,9 @@ async function handleEvent(
           referrerTermMonths: terms.referrerTermMonths,
           rateScheduleId: terms.rateScheduleId,
           holdDays: referralHoldDays,
+          // The recruiter's share has its OWN hold (default 0: paid as client payments come in).
+          // The client-referral hold above is deliberately not applied to it.
+          affiliateHoldDays,
           // ANCHOR ON THE DAY OF TRANSACTION (operator correction, 2026-09-19). `effectivePaidAt`
           // is both the payment instant and the term's anchor — there is no second date here any
           // more, and `intent.scheduledAt` is deliberately not even selected above.
@@ -358,6 +363,7 @@ async function handleEvent(
           paidAt: effectivePaidAt,
           whopPaymentId: asString(data.id),
         });
+        triggerAffiliateSettle(intent.id, committed.affiliateRecruiterPractitionerId);
       } catch (err) {
         const detail = err instanceof Error ? err.message : String(err);
         attributionFailure = `payment.succeeded marked booking intent ${intentId} PAID but the attribution/referral/affiliate ledger write FAILED (${detail}) — the lead attribution term never started for this client, and any referrer or recruiter share on this payment may be unrecorded`;
@@ -404,16 +410,42 @@ async function handleEvent(
         console.error(`v1 webhook: ${message}`);
         return message;
       }
-      // The recruiter's (affiliate) share is the same shape of problem: paid out, now partly owed back.
-      if (outcome.affiliateRecoveryOwedUsdCents > 0) {
-        const message = `refund on payment ${paymentId} reverses a recruiting-affiliate share of ${outcome.affiliateRecoveryOwedUsdCents} cents that was ALREADY PAID OUT — recovery needs an explicit action`;
-        console.error(`v1 webhook: ${message}`);
-        return message;
+      // The recruiter's (affiliate) share that was ALREADY PAID OUT is handled by policy, not by a
+      // human: it is recorded as a debit against the recruiter and netted off their next payouts
+      // (lane R2). Not a failure, so it does not stamp the event red; it is logged so it is findable,
+      // and the open balance is on the admin commercial-settings page.
+      if (outcome.affiliateDebitRecordedUsdCents > 0) {
+        console.warn(
+          `v1 webhook: refund on payment ${paymentId} was after the recruiter's share was paid; ${outcome.affiliateDebitRecordedUsdCents} cents recorded as a debit to net off their next payouts`,
+        );
       }
       return null;
     }
     default:
       return null;
+  }
+}
+
+/**
+ * Best-effort, post-ack payout of the recruiter share this payment just accrued (lane R2: recruiters
+ * are paid as client payments come in).
+ *
+ * NEVER blocks or fails the webhook: the settle is started, not awaited, and handed to the platform's
+ * `waitUntil` so it can finish after the response is sent. The flag is checked FIRST inside
+ * `settleAffiliateEntryBestEffort` (not exactly 'true' = zero reads, zero writes, zero Whop calls),
+ * the helper itself never rejects, and the hourly whop-reconcile cron settles anything this misses.
+ */
+function triggerAffiliateSettle(bookingIntentId: string, recruiterPractitionerId: string | null): void {
+  if (!recruiterPractitionerId) return;
+  try {
+    const run = settleAffiliateEntryBestEffort(
+      prisma as unknown as Parameters<typeof settleAffiliateEntryBestEffort>[0],
+      { bookingIntentId, recruiterPractitionerId },
+      { transfer: createTransfer },
+    );
+    waitUntil(run);
+  } catch (err) {
+    console.error('v1 webhook: could not start the immediate affiliate settle (cron will retry)', err);
   }
 }
 
