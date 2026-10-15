@@ -10,6 +10,7 @@ import {
   effectivePlan,
   isPlanKey,
   monthlyFeeLabel,
+  planADiscount,
   planComparison,
 } from '@/lib/pricing-plans';
 import { isBillingInterval, ownerBillingState } from '@/lib/plan-a-billing';
@@ -65,7 +66,7 @@ import { BookingsSection, type BookingRow } from '@/components/practitioners/Boo
 import { ClientsAndReferralsSection } from '@/components/practitioners/ClientsAndReferralsSection';
 import { loadClientList } from '@/lib/client-list';
 import { referralUrl } from '@/lib/referrals';
-import { getScheduleForCopy } from '@/lib/rate-schedules';
+import { getPlanAListSchedule, getScheduleForCopy } from '@/lib/rate-schedules';
 import { bookableWhere } from '@/lib/practitioner-indexer';
 import { paymentsLive } from '@/lib/booking-flow';
 import { BookingLinksField } from '@/components/practitioners/BookingLinksField';
@@ -298,7 +299,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
   // Loaded after the block above rather than inside it because `loadClientList` issues its own
   // four scoped reads and the term setting is a fifth; folding them in would make the existing
   // tuple destructuring harder to read for no saving.
-  const [clientRows, referable, copySchedule, billingState] = await Promise.all([
+  const [clientRows, referable, copySchedule, billingState, listSchedule] = await Promise.all([
     loadClientList(prisma, practitioner.id),
     // Who this practitioner may refer TO. `bookableWhere()` rather than `listedWhere()`: an
     // unlisted practitioner is absent from directory search but still bookable, so referring to
@@ -314,6 +315,8 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
     getScheduleForCopy(prisma, practitioner.rateScheduleId),
     // The PROFILE OWNER's sign-up path, never the viewer's: it decides whether their billing is on.
     ownerBillingState(prisma, practitioner),
+    // Words only: the regular Plan A price, struck through beside a lower one.
+    getPlanAListSchedule(prisma),
   ]);
 
   // A freshly minted referral link, echoed back through the redirect so it can be copied. The
@@ -413,7 +416,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
   const startMonthlyCheckoutAction = startSubscriptionCheckout.bind(null, params.slug, 'monthly');
   const startAnnualCheckoutAction = startSubscriptionCheckout.bind(null, params.slug, 'annual');
   const choosePlanAction = choosePlan.bind(null, params.slug);
-  const comparison = planComparison(copySchedule);
+  const comparison = planComparison(copySchedule, listSchedule);
   const requestAccountEmailChangeAction = requestAccountEmailChange.bind(null, params.slug);
 
   // ── Setup path ─────────────────────────────────────────────────────────────────────────────
@@ -1008,6 +1011,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
           priceLabel={monthlyFeeLabel(copySchedule, 'PLAN_A')}
           annualPriceLabel={annualPlanALabel(copySchedule)}
           annualSavingsLabel={annualPlanASavingsLabel(copySchedule)}
+          discount={planADiscount(copySchedule, listSchedule)}
         />
         </div>
         </div>

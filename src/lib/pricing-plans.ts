@@ -73,6 +73,41 @@ export function annualPlanASavingsLabel(schedule: CopySchedule): string | null {
   return saving > 0 ? `Save ${dollars(saving)} vs monthly` : null;
 }
 
+/** The name of a Plan A price below the list price. */
+export const PLAN_A_DISCOUNT_NAME = 'Founding rate';
+
+/**
+ * The regular ("list") Plan A prices beside a practitioner's lower ones: "$39" to strike through
+ * next to "$29/mo", and "Founding rate: save $10/mo". The list schedule is the one the
+ * `plan_a_list_rate_schedule_id` setting names. Null when there is no list schedule or the Plan A
+ * monthly price is not below it, so nothing claims a discount that is not there. The annual pair is
+ * null when the yearly price is not below the list yearly price.
+ */
+export type PlanADiscountView = {
+  monthlyListLabel: string;
+  monthlySavingsLabel: string;
+  annualListLabel: string | null;
+  annualSavingsLabel: string | null;
+};
+
+export function planADiscount(schedule: CopySchedule, list: CopySchedule | null): PlanADiscountView | null {
+  if (!list) return null;
+  const monthly = planMonthlyCents(schedule, 'PLAN_A');
+  const listMonthly = planMonthlyCents(list, 'PLAN_A');
+  if (monthly >= listMonthly) return null;
+  const annual = annualPlanAPriceCents(schedule);
+  const listAnnual = annualPlanAPriceCents(list);
+  const annualDiscounted = monthly > 0 && annual < listAnnual;
+  return {
+    monthlyListLabel: dollars(listMonthly),
+    monthlySavingsLabel: `${PLAN_A_DISCOUNT_NAME}: save ${dollars(listMonthly - monthly)}/mo`,
+    annualListLabel: annualDiscounted ? dollars(listAnnual) : null,
+    annualSavingsLabel: annualDiscounted
+      ? `${PLAN_A_DISCOUNT_NAME}: save ${dollars(listAnnual - annual)}/yr`
+      : null,
+  };
+}
+
 /**
  * The referral and term sentences' numbers, as strings. One object so every surface (plan choice,
  * summary table, referrer-side copy, notification emails) states the same split.
@@ -114,13 +149,20 @@ function examplePriceCents(): number {
 }
 
 /** Everything the plan-choice UI renders, derived from a schedule in one place. */
-export function planComparison(schedule: CopySchedule): {
+export function planComparison(
+  schedule: CopySchedule,
+  listSchedule: CopySchedule | null = null,
+): {
   cards: {
     key: PlanKey;
     label: string;
     monthlyLabel: string;
     /** Yearly price, only where the plan has a subscription to discount. */
     annualLabel: string | null;
+    /** The regular prices to strike through beside a discounted Plan A; null when undiscounted. */
+    monthlyListLabel: string | null;
+    annualListLabel: string | null;
+    discountLabel: string | null;
     /** Every NHP-sourced session INSIDE the lead term — there is only one sourced rate per plan. */
     sourcedSessionLabel: string;
     /** After the term. Zero on both plans (operator ruling O5). */
@@ -138,12 +180,16 @@ export function planComparison(schedule: CopySchedule): {
   // ONE SOURCED RATE PER PLAN. The cards must quote the rate the checkout actually charges on every
   // sourced session inside the term; copy that disagrees with the charge is the thing a
   // practitioner points at when they dispute an invoice.
+  const discount = planADiscount(schedule, listSchedule);
   const cards = [
     {
       key: 'PLAN_A' as const,
       label: planLabel('PLAN_A'),
       monthlyLabel: monthlyFeeLabel(schedule, 'PLAN_A'),
       annualLabel: planMonthlyCents(schedule, 'PLAN_A') > 0 ? annualPlanALabel(schedule) : null,
+      monthlyListLabel: discount?.monthlyListLabel ?? null,
+      annualListLabel: discount?.annualListLabel ?? null,
+      discountLabel: discount ? PLAN_A_DISCOUNT_NAME : null,
       sourcedSessionLabel: share(planSourcedBps(schedule, 'PLAN_A')),
       afterTermLabel: share(0),
       suits:
@@ -154,6 +200,9 @@ export function planComparison(schedule: CopySchedule): {
       label: planLabel('PLAN_B'),
       monthlyLabel: monthlyFeeLabel(schedule, 'PLAN_B'),
       annualLabel: null,
+      monthlyListLabel: null,
+      annualListLabel: null,
+      discountLabel: null,
       sourcedSessionLabel: share(planSourcedBps(schedule, 'PLAN_B')),
       afterTermLabel: share(0),
       suits:

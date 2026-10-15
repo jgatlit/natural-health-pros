@@ -11,7 +11,7 @@ import { newRecruiterToken, recruitedFields, resolveRecruiterId, RECRUITER_DISCL
 import { RECRUITER_COOKIE, verifyRecruiterCookie } from '@/lib/recruiter-cookie';
 import { cohortRedemptionOpen } from '@/lib/join-cohort';
 import { planComparison } from '@/lib/pricing-plans';
-import { getScheduleForCopy, signupScheduleData } from '@/lib/rate-schedules';
+import { getPlanAListSchedule, getScheduleForCopy, signupScheduleData } from '@/lib/rate-schedules';
 
 type Props = { searchParams: { invitation?: string } };
 
@@ -219,8 +219,11 @@ export default async function OnboardingPage({ searchParams }: Props) {
   const action = submitOnboarding.bind(null, practitioner.slug);
   // Words only: the plan cards quote the practitioner's own schedule, or the current one for a
   // practitioner who has none yet. Never used to price anything.
-  const copySchedule = await getScheduleForCopy(prisma, practitioner.rateScheduleId);
-  const comparison = planComparison(copySchedule);
+  const [copySchedule, listSchedule] = await Promise.all([
+    getScheduleForCopy(prisma, practitioner.rateScheduleId),
+    getPlanAListSchedule(prisma),
+  ]);
+  const comparison = planComparison(copySchedule, listSchedule);
 
   return (
     <OnboardingForm

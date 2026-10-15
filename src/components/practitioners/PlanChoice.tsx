@@ -2,6 +2,7 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { CheckCircle2 } from 'lucide-react';
 import { PendingButton } from './PendingButton';
+import { StrikePrice } from './StrikePrice';
 import type { ReferralTermsView } from '@/lib/pricing-plans';
 
 export type PlanCardView = {
@@ -10,6 +11,10 @@ export type PlanCardView = {
   monthlyLabel: string;
   /** "$374.40/yr", only for a plan with a subscription. Derived from the schedule. */
   annualLabel?: string | null;
+  /** Regular prices struck through beside a discounted Plan A, and the discount's name. */
+  monthlyListLabel?: string | null;
+  annualListLabel?: string | null;
+  discountLabel?: string | null;
   sourcedSessionLabel: string;
   afterTermLabel: string;
   suits: string;
@@ -87,12 +92,19 @@ export function PlanChoice({
               <dl className="space-y-1 text-xs">
                 <div className="flex justify-between gap-2">
                   <dt className="text-muted-foreground">Monthly</dt>
-                  <dd className="font-medium">{plan.monthlyLabel}</dd>
+                  <dd className="font-medium">
+                    <StrikePrice listLabel={plan.monthlyListLabel} priceLabel={plan.monthlyLabel} />
+                    {plan.discountLabel && (
+                      <span className="font-normal text-muted-foreground"> · {plan.discountLabel}</span>
+                    )}
+                  </dd>
                 </div>
                 {plan.annualLabel && (
                   <div className="flex justify-between gap-2">
                     <dt className="text-muted-foreground">Yearly</dt>
-                    <dd className="font-medium">{plan.annualLabel}</dd>
+                    <dd className="font-medium">
+                      <StrikePrice listLabel={plan.annualListLabel} priceLabel={plan.annualLabel} />
+                    </dd>
                   </div>
                 )}
                 {/* "Every session … for N months", not "first session / after that". The old

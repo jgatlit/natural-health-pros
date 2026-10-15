@@ -31,6 +31,11 @@ import { rateScheduleContentHash } from './rate-schedule-hash';
 
 /** PlatformSetting key holding the schedule new sign-ups are assigned. */
 export const CURRENT_RATE_SCHEDULE_KEY = 'current_rate_schedule_id';
+/**
+ * PlatformSetting key naming the schedule whose Plan A price is the regular ("list") price. Copy
+ * only: a practitioner priced below it sees the list price struck through. Never charges anything.
+ */
+export const PLAN_A_LIST_RATE_SCHEDULE_KEY = 'plan_a_list_rate_schedule_id';
 /** PlatformSettingChange key for the audited cohort migration. */
 export const COHORT_MIGRATION_AUDIT_KEY = 'rate_schedule_cohort_migration';
 
@@ -135,6 +140,18 @@ export async function getScheduleForCopy(
   rateScheduleId: string | null | undefined,
 ): Promise<RateSchedule> {
   return (await getScheduleById(db, rateScheduleId)) ?? (await requireCurrentSchedule(db));
+}
+
+/** The list-price schedule, or null when the setting is absent or names no schedule. COPY ONLY. */
+export async function getPlanAListSchedule(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  db: FindScheduleDb & { platformSetting: { findUnique(args: any): Promise<any> } },
+) {
+  const setting = (await db.platformSetting.findUnique({
+    where: { key: PLAN_A_LIST_RATE_SCHEDULE_KEY },
+    select: { value: true },
+  })) as { value: string } | null;
+  return getScheduleById(db, setting?.value.trim());
 }
 
 /**

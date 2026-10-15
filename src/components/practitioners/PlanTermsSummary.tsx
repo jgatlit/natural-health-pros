@@ -1,4 +1,5 @@
 import type { PlanCardView } from './PlanChoice';
+import { StrikePrice } from './StrikePrice';
 import type { ReferralTermsView } from '@/lib/pricing-plans';
 
 type Props = {
@@ -47,7 +48,8 @@ export function PlanTermsSummary({ plans, referral }: Props) {
             </th>
             {plans.map((p) => (
               <td key={p.key} className="py-1.5 text-right">
-                {p.monthlyLabel}
+                <StrikePrice listLabel={p.monthlyListLabel} priceLabel={p.monthlyLabel} />
+                {p.discountLabel && <span className="block text-muted-foreground">{p.discountLabel}</span>}
               </td>
             ))}
           </tr>
