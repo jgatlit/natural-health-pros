@@ -296,17 +296,20 @@ async function outcomesFor(cfg: LedgerConfig): Promise<void> {
   const serving = await newPractitioner('oserving');
   const NOW = new Date();
   const only = (r: Seeded) => ({ bookingIntentId: r.bookingId, payeeId: payee.id });
-  const gate = (on: boolean) => {
-    if (on) process.env.WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED = 'true';
-    else delete process.env.WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED;
+  /** Which canary proof the operator has recorded: neither, the lookup, or the idempotence key. */
+  const proof = (mode: 'none' | 'lookup' | 'key') => {
+    delete process.env.WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED;
+    delete process.env.WHOP_TRANSFERS_LOOKUP_VERIFIED;
+    if (mode === 'lookup') process.env.WHOP_TRANSFERS_LOOKUP_VERIFIED = 'true';
+    if (mode === 'key') process.env.WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED = 'true';
   };
   const sweep = (row: Seeded, whop: ReturnType<typeof fakeWhop>, at: Date, lookup: LookupFn = whop.lookup) =>
     settleLedger(db, cfg, { transfer: whop.transfer, lookup, at, only: only(row) });
   const later = (min: number) => new Date(NOW.getTime() + min * 60_000);
 
-  // ---- G. the reviewer's mock: key ignored, list omits metadata, 502 after the transfer exists
+  // ---- G. key ignored, list omits metadata, 502 after the transfer exists
   {
-    gate(false);
+    proof('none');
     const row = await seedRow(cfg, payee.id, serving.id, 3_000, 10_000);
     const whop = fakeWhop({ honourKey: false, listShows: 'no-metadata', afterCreate: ['bad-gateway'] });
     await sweep(row, whop, NOW);
@@ -316,17 +319,17 @@ async function outcomesFor(cfg: LedgerConfig): Promise<void> {
       whop.transfers.length === 1 && whop.posts === 1 && r?.attentionReason === 'ambiguous-unverified' && r?.state === cfg.waiting, { transfers: whop.transfers.length, posts: whop.posts, r });
 
     // the admin records that it went out
-    const res = await resolveTransferAttention(db, { ledger: cfg.kind, rowId: row.id, outcome: 'went-out', transferId: 'wt_1', reason: 'seen in the dashboard', adminUserId: null, at: later(30) });
+    const res = await resolveTransferAttention(db, { ledger: cfg.kind, rowId: row.id, outcome: 'went-out', transferId: `wt_${run}_${tag}_g`, reason: 'seen in the dashboard', adminUserId: null, at: later(30) });
     r = await rowOf(cfg, row.id);
     const audit = await prisma.feeLedgerEntry.findFirst({ where: { kind: 'TRANSFER_RESOLUTION', practitionerId: payee.id, bookingIntentId: row.bookingId } });
-    check(`${tag}: "it went out" settles the row with the recorded id, audited in the same transaction`, res.ok && r?.state === 'SETTLED' && r?.whopTransferId === 'wt_1' && audit?.whopTransferId === 'wt_1', { res, r, audit });
+    check(`${tag}: "it went out" settles the row with the recorded id, audited in the same transaction`, res.ok && r?.state === 'SETTLED' && r?.whopTransferId === `wt_${run}_${tag}_g` && audit?.whopTransferId === `wt_${run}_${tag}_g`, { res, r, audit });
     await sweep(row, whop, later(60));
     check(`${tag}: nothing is sent after the decision`, whop.posts === 1);
   }
 
   // ---- H. "it did not go out" returns a fresh row (debits restored) that is then sent once
   {
-    gate(false);
+    proof('none');
     const src = await seedRow(cfg, payee.id, serving.id, 300);
     const debitRow = await (prisma as any)[cfg.adjustment].create({ data: { [cfg.payeeKey]: payee.id, sourceLedgerEntryId: src.id, amountUsdCents: 120, dedupeKey: uid('hdebit') } }); // eslint-disable-line @typescript-eslint/no-explicit-any
     await (prisma as any)[cfg.entry].update({ where: { id: src.id }, data: { state: 'SETTLED', settledAt: NOW, transferUsdCents: 300 } }); // eslint-disable-line @typescript-eslint/no-explicit-any
@@ -345,21 +348,65 @@ async function outcomesFor(cfg: LedgerConfig): Promise<void> {
     check(`${tag}: the next sweep sends it once, netting the debit again ($1.80)`, whop.posts === 2 && r?.state === 'SETTLED' && r?.netPaidUsdCents === 180, { posts: whop.posts, r });
   }
 
-  // ---- I. gate true, key honoured, list lags: one retry with the same key, one transfer
+  // ---- I. idempotence flag, key honoured, list cannot answer: one retry with the same key, one transfer
   {
-    gate(true);
+    proof('key');
     const row = await seedRow(cfg, payee.id, serving.id, 3_000, 10_000);
     const whop = fakeWhop({ honourKey: true, afterCreate: ['timeout'] });
     const lagging: LookupFn = async () => ({ kind: 'not-found' });
     await sweep(row, whop, NOW, lagging);
     await sweep(row, whop, later(1), lagging);
     const r = await rowOf(cfg, row.id);
-    check(`${tag}: gate true + key honoured: retried once with the same key, one transfer, settled`, whop.posts === 2 && whop.transfers.length === 1 && r?.state === 'SETTLED', { posts: whop.posts, r });
+    check(`${tag}: idempotence flag + key honoured: retried once with the same key, one transfer, settled`, whop.posts === 2 && whop.transfers.length === 1 && r?.state === 'SETTLED', { posts: whop.posts, r });
+  }
+
+  // ---- K. a blind but well-formed list (empty) with neither proof: still one transfer and a flagged row
+  {
+    proof('none');
+    const row = await seedRow(cfg, payee.id, serving.id, 3_000, 10_000);
+    const whop = fakeWhop({ honourKey: false, listShows: 'empty', afterCreate: ['bad-gateway'] });
+    await sweep(row, whop, NOW);
+    for (const m of [2, 61, 25 * 60]) await sweep(row, whop, later(m));
+    proof('lookup');
+    await sweep(row, whop, later(26 * 60));
+    proof('key');
+    await sweep(row, whop, later(27 * 60));
+    const r = await rowOf(cfg, row.id);
+    check(`${tag}: key ignored + a blind empty list: ONE transfer and a flagged row, even after either proof is later recorded (flagged rows are never re-sent)`,
+      whop.posts === 1 && whop.transfers.length === 1 && r?.attentionReason === 'ambiguous-unverified', { posts: whop.posts, r });
+  }
+
+  // ---- L. a 2xx without a transfer id is an unknown outcome, never a receipt
+  {
+    proof('none');
+    const row = await seedRow(cfg, payee.id, serving.id, 300);
+    const noId: TransferFn = async () => ({ transferId: undefined as unknown as string });
+    await settleLedger(db, cfg, { transfer: noId, lookup: noLookup, at: NOW, only: only(row) });
+    const r = await rowOf(cfg, row.id);
+    check(`${tag}: a success status with no transfer id does not settle the row; it is flagged`, r?.state === cfg.waiting && r?.whopTransferId == null && r?.settledAt == null && r?.attentionReason === 'ambiguous-unverified', r);
+  }
+
+  // ---- M. a row retrying under a lookup that cannot answer can still be resolved by an admin; a duplicate id is refused
+  {
+    proof('lookup');
+    const row = await seedRow(cfg, payee.id, serving.id, 300);
+    const whop = fakeWhop({ honourKey: false, listShows: 'no-metadata', afterCreate: ['timeout'] });
+    await sweep(row, whop, NOW);
+    let r = await rowOf(cfg, row.id);
+    check(`${tag}: the row retries (not flagged) with an attempt of unknown outcome recorded`, r?.attentionReason == null && r?.maybeSentAt != null && r?.state === cfg.waiting, r);
+    const taken = await seedRow(cfg, payee.id, serving.id, 300);
+    await (prisma as any)[cfg.entry].update({ where: { id: taken.id }, data: { state: 'SETTLED', settledAt: NOW, whopTransferId: `wt_taken_${run}_${tag}` } }); // eslint-disable-line @typescript-eslint/no-explicit-any
+    const dup = await resolveTransferAttention(db, { ledger: cfg.kind, rowId: row.id, outcome: 'went-out', transferId: `wt_taken_${run}_${tag}`, reason: 'seen', adminUserId: null, at: later(5) });
+    const refusal = await prisma.feeLedgerEntry.findFirst({ where: { kind: 'TRANSFER_RESOLUTION_REFUSED', bookingIntentId: row.bookingId } });
+    check(`${tag}: "it went out" with a transfer id already recorded on another row is refused and the refusal is audited`, !dup.ok && refusal != null, { dup, refusal });
+    const ok = await resolveTransferAttention(db, { ledger: cfg.kind, rowId: row.id, outcome: 'went-out', transferId: `wt_found_${run}_${tag}`, reason: 'seen', adminUserId: null, at: later(6) });
+    r = await rowOf(cfg, row.id);
+    check(`${tag}: ...and a fresh id settles the unflagged retrying row`, ok.ok && r?.state === 'SETTLED' && r?.whopTransferId === `wt_found_${run}_${tag}`, { ok, r });
   }
 
   // ---- J. a refund after a REFUSED attempt reduces the share; the claim's debits are restored
   {
-    gate(true);
+    proof('lookup');
     const refusing = (): import('../src/lib/ledger-transfer').TransferFn => {
       let first = true;
       return async (args) => {
@@ -388,9 +435,9 @@ async function outcomesFor(cfg: LedgerConfig): Promise<void> {
     await settleLedger(db, cfg, { transfer: t2, lookup: noLookup, at: NOW, only: only(full) });
     await applyLedgerReversal(prisma as unknown as ReversalDb, cfg, { bookingIntentId: full.bookingId, payeeId: payee.id, totalReversedUsdCents: 3_000 });
     const fr = await rowOf(cfg, full.id);
-    check(`${tag}: the reviewer's sequence (refused, then a FULL refund) ends REVERSED and sends nothing`, fr?.state === 'REVERSED' && calls.length === 1, { fr, calls: calls.length });
+    check(`${tag}: a refused attempt followed by a FULL refund ends REVERSED and sends nothing`, fr?.state === 'REVERSED' && calls.length === 1, { fr, calls: calls.length });
   }
-  gate(true);
+  proof('lookup');
 }
 
 async function referralRefundPipeline(): Promise<void> {
@@ -421,9 +468,10 @@ async function main(): Promise<void> {
   process.env.WHOP_PARENT_COMPANY_ID = 'biz_pg_parent';
   delete process.env.WHOP_TRANSFERS_ALLOWLIST;
   delete process.env.WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED;
+  delete process.env.WHOP_TRANSFERS_LOOKUP_VERIFIED;
 
-  // The scenarios above G run with the lookup verified; G..J set the gate themselves.
-  process.env.WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED = 'true';
+  // The first scenarios run with the lookup verified; the outcome scenarios set the recorded proof themselves.
+  process.env.WHOP_TRANSFERS_LOOKUP_VERIFIED = 'true';
   await scenarioFor(AFFILIATE_LEDGER);
   await scenarioFor(REFERRAL_LEDGER);
   await outcomesFor(AFFILIATE_LEDGER);

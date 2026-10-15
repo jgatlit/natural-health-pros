@@ -180,12 +180,15 @@ export async function GET(request: NextRequest) {
     at: now,
     deadlineMs: startedAtMs + BUDGET_MS,
   };
+  // The referral sweep runs first and gets half the budget, so a long run of lookups there cannot
+  // starve the recruiter sweep run after run.
+  const referralDeps = { ...deps, deadlineMs: startedAtMs + BUDGET_MS / 2 };
   const promoted = await promoteHeldToPayable(prisma).catch((e) => {
     errors.push(`promote-held: ${e instanceof Error ? e.message : String(e)}`);
     return 0;
   });
 
-  const settlement = await settlePayableShares(ledgerDb, deps).catch((e) => {
+  const settlement = await settlePayableShares(ledgerDb, referralDeps).catch((e) => {
     errors.push(`settle-referrals: ${e instanceof Error ? e.message : String(e)}`);
     return null;
   });
@@ -218,10 +221,13 @@ export async function GET(request: NextRequest) {
   // attempt had its chance. They go into `errors` with their ids,
   // which makes `ok` false (a 207 on the cron, red in Vercel monitoring) and logs one console.error
   // line naming every row. Empty while transfers are off.
-  const unconfirmed = await findUnconfirmedTransfers(ledgerDb, { at: now }).catch((e) => {
+  const allUnconfirmed = await findUnconfirmedTransfers(ledgerDb, { at: now }).catch((e) => {
     errors.push(`transfers-unconfirmed-check: ${e instanceof Error ? e.message : String(e)}`);
     return [];
   });
+  // Only rows that put money at risk turn the cron red; an inactive recruiter's owed share is listed.
+  const unconfirmed = allUnconfirmed.filter((r) => r.severity === 'alert');
+  const informational = allUnconfirmed.filter((r) => r.severity === 'info');
   if (unconfirmed.length > 0) {
     const detail = unconfirmed
       .map((r) => `${r.ledger}:${r.id}(${r.reason},${r.state},${r.amountUsdCents}c,attempts=${r.attempts}${r.lastError ? `,${r.lastError.slice(0, 80)}` : ''})`)
@@ -312,6 +318,7 @@ export async function GET(request: NextRequest) {
       referrals: { promoted, expired, ...(settlement ?? {}) },
       affiliates: affiliates ?? null,
       transfersUnconfirmed: unconfirmed.map((r) => ({ ledger: r.ledger, id: r.id })),
+      transfersInformational: informational.map((r) => ({ ledger: r.ledger, id: r.id, reason: r.reason })),
       feeMismatches: mismatches,
       errors,
     },

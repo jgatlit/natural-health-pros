@@ -91,6 +91,7 @@ export function fakeLedgerDb(
   const matchWhere = (r: Entry, where: Record<string, any> = {}, relations: Record<string, Entry | null> = {}): boolean =>
     Object.entries(where).every(([k, v]) => {
       if (k === 'OR') return (v as Record<string, any>[]).some((sub) => matchWhere(r, sub, relations));
+      if (k === 'NOT') return !matchWhere(r, v as Record<string, any>, relations);
       if (k in relations) {
         const rel = relations[k];
         return !!rel && matchWhere(rel, v);

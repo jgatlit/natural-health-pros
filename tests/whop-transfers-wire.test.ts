@@ -97,6 +97,20 @@ describe('createTransfer', () => {
     expect(classifyTransferFailure(await createTransfer({ originId: 'a', destinationId: 'b', amountUsdDollars: 1 }).catch((e) => e))).toBe('AMBIGUOUS');
   });
 
+  it.each([
+    ['an error body', { error: 'something' }],
+    ['an empty object', {}],
+    ['a blank id', { id: '' }],
+    ['a non-string id', { id: 42 }],
+    ['null', null],
+  ])('a 2xx with %s is an unknown outcome, never a receipt', async (_n, body) => {
+    vi.stubGlobal('fetch', vi.fn(async () => json(body)));
+    const err = await createTransfer({ originId: 'a', destinationId: 'b', amountUsdDollars: 1 }).catch((e) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err.message).toMatch(/success status but no transfer id/);
+    expect(classifyTransferFailure(err)).toBe('AMBIGUOUS');
+  });
+
   it('is a WhopNotConfigured error (a parked refusal) when the key is missing', async () => {
     delete process.env.WHOP_COMPANY_API_KEY;
     const err = await createTransfer({ originId: 'a', destinationId: 'b', amountUsdDollars: 1 }).catch((e) => e);
@@ -169,6 +183,82 @@ describe('findTransferForLedgerEntry: found / not-found / unknown', () => {
     expect(await look()).toMatchObject({ kind: 'unknown', reason: expect.stringMatching(/page budget/) });
   });
 
+  describe('not-found needs POSITIVE evidence that the whole list was scanned', () => {
+    const fullPage = Array.from({ length: 100 }, (_, i) => ({ id: `t${i}`, amount: 3, metadata: { ledger_entry_id: `other_${i}` } }));
+
+    it('a FULL page whose cursor is under another key (next_cursor / has_more) is UNKNOWN, even though our transfer is on page 2', async () => {
+      const f = vi
+        .fn()
+        .mockResolvedValueOnce(json({ data: fullPage, has_more: true, next_cursor: 'c1' }))
+        .mockResolvedValueOnce(json({ data: [{ id: 'ours', amount: 3, metadata: { ledger_entry_id: 'afl_1' } }], has_more: false }));
+      vi.stubGlobal('fetch', f);
+      expect(await look()).toMatchObject({ kind: 'unknown', reason: expect.stringMatching(/full page with no cursor/) });
+      expect(f).toHaveBeenCalledTimes(1);
+    });
+
+    it('a full page with no cursor and no end marker at all is UNKNOWN', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => json({ data: fullPage, page_info: {} })));
+      expect(await look()).toMatchObject({ kind: 'unknown' });
+    });
+
+    it('page_info.has_next_page = true with no cursor is UNKNOWN', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => json({ data: fullPage, page_info: { has_next_page: true } })));
+      expect(await look()).toMatchObject({ kind: 'unknown' });
+    });
+
+    it('a full page that carries an explicit end marker (has_more:false, or has_next_page:false) IS the end: not-found', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => json({ data: fullPage, has_more: false })));
+      expect(await look()).toEqual({ kind: 'not-found' });
+      vi.stubGlobal('fetch', vi.fn(async () => json({ data: fullPage, page_info: { has_next_page: false } })));
+      expect(await look()).toEqual({ kind: 'not-found' });
+    });
+
+    it('a SHORT page is the end even without any marker: not-found', async () => {
+      vi.stubGlobal('fetch', vi.fn(async () => json({ data: fullPage.slice(0, 99), page_info: {} })));
+      expect(await look()).toEqual({ kind: 'not-found' });
+    });
+
+    it('our transfer on page 2 behind the expected cursor is found', async () => {
+      const f = vi
+        .fn()
+        .mockResolvedValueOnce(json({ data: fullPage, page_info: { end_cursor: 'c1' } }))
+        .mockResolvedValueOnce(json({ data: [{ id: 'ours', amount: 3, metadata: { ledger_entry_id: 'afl_1' } }], page_info: {} }));
+      vi.stubGlobal('fetch', f);
+      expect(await look()).toEqual({ kind: 'found', transferId: 'ours', amountUsdDollars: 3 });
+    });
+  });
+
+  describe('the lookup budget', () => {
+    it('gives up (unknown) instead of running past the deadline, and bounds each request by what is left', async () => {
+      const f = vi.fn(async () => json({ data: [], page_info: {} }));
+      vi.stubGlobal('fetch', f);
+      const expired = await findTransferForLedgerEntry({ originId: 'o', destinationId: 'd', ledgerEntryId: 'afl_1', deadlineMs: Date.now() - 1 });
+      expect(expired).toMatchObject({ kind: 'unknown', reason: expect.stringMatching(/time budget/) });
+      expect(f).not.toHaveBeenCalled();
+
+      const live = await findTransferForLedgerEntry({ originId: 'o', destinationId: 'd', ledgerEntryId: 'afl_1', deadlineMs: Date.now() + 5_000 });
+      expect(live).toEqual({ kind: 'not-found' });
+      const signal = (f.mock.calls[0] as any)[1].signal as AbortSignal;
+      expect(signal).toBeInstanceOf(AbortSignal);
+    });
+
+    it('stops between pages when the deadline passes mid-scan', async () => {
+      const fullP = Array.from({ length: 100 }, (_, i) => ({ id: `t${i}`, amount: 3, metadata: { ledger_entry_id: `other_${i}` } }));
+      const deadline = Date.now() + 1_000;
+      let calls = 0;
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => {
+          calls += 1;
+          vi.spyOn(Date, 'now').mockReturnValue(deadline + 1); // the first page took the whole budget
+          return json({ data: fullP, page_info: { end_cursor: 'c' } });
+        }),
+      );
+      expect(await findTransferForLedgerEntry({ originId: 'o', destinationId: 'd', ledgerEntryId: 'afl_1', deadlineMs: deadline })).toMatchObject({ kind: 'unknown' });
+      expect(calls).toBe(1);
+    });
+  });
+
   it('THROWS when the request fails: that is never "no transfer exists"', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response('down', { status: 503 })));
     await expect(look()).rejects.toThrow(/lookup failed \(503\)/);
@@ -193,6 +283,16 @@ describe('isConnectedAccountOfParent', () => {
     await expect(isConnectedAccountOfParent('biz_sib')).resolves.toBe(true);
     await expect(isConnectedAccountOfParent('biz_stranger')).resolves.toBe(false);
     expect((f.mock.calls.find((c) => String(c[0]).includes('/companies?'))![0] as string)).toContain('parent_company_id=biz_parent');
+  });
+
+  it('throws on a full page of connected accounts it cannot page past, rather than answering "not a sibling"', async () => {
+    const f = vi.fn(async (url: string) =>
+      url.includes('/companies?')
+        ? json({ data: Array.from({ length: 100 }, (_, i) => ({ id: `biz_${i}` })), page_info: {} })
+        : json({ id: 'biz_sib' }),
+    );
+    vi.stubGlobal('fetch', f);
+    await expect(isConnectedAccountOfParent('biz_sib')).rejects.toThrow(/full page with no cursor/);
   });
 
   it('throws when it cannot read the company, rather than guessing', async () => {

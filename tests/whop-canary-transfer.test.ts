@@ -266,6 +266,39 @@ describe('--go with the confirmation: the Step 0 sequence', () => {
     expect(out.report.lookupFoundFirst).toBe(true);
   });
 
+  it.each([
+    // [repeat id, lookup result, expected flags]
+    ['tr_1', 'found', { WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED: true, WHOP_TRANSFERS_LOOKUP_VERIFIED: true }],
+    ['tr_1', 'not-found', { WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED: true, WHOP_TRANSFERS_LOOKUP_VERIFIED: false }],
+    ['tr_2', 'found', { WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED: false, WHOP_TRANSFERS_LOOKUP_VERIFIED: true }],
+    // key IGNORED and lookup BLIND: both unset
+    ['tr_2', 'not-found', { WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED: false, WHOP_TRANSFERS_LOOKUP_VERIFIED: false }],
+    ['tr_2', 'unknown', { WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED: false, WHOP_TRANSFERS_LOOKUP_VERIFIED: false }],
+  ] as const)('repeat returned %s, lookup %s: recommended flags %j (each flag from its own result only)', async (repeatId, lookup, flags) => {
+    const { deps } = fakeDeps({ repeatId });
+    if (lookup === 'not-found') (deps.find as any).mockResolvedValue({ kind: 'not-found' });
+    if (lookup === 'unknown') (deps.find as any).mockResolvedValue({ kind: 'unknown', reason: 'blind' });
+    const out = await go(deps);
+    if (out.kind !== 'done') throw new Error('expected a report');
+    expect(out.report.recommendedFlags).toEqual(flags);
+  });
+
+  it('a first transfer that failed recommends neither flag', async () => {
+    const { deps } = fakeDeps();
+    (deps.transfer as any).mockRejectedValueOnce(new Error('Whop /transfers failed (403): verify your business'));
+    const out = await go(deps);
+    if (out.kind !== 'done') throw new Error('expected a report');
+    expect(out.report.recommendedFlags).toEqual({ WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED: false, WHOP_TRANSFERS_LOOKUP_VERIFIED: false });
+  });
+
+  it('a repeat that Whop rejects as a duplicate does not by itself recommend the idempotence flag', async () => {
+    const { deps } = fakeDeps();
+    (deps.transfer as any).mockResolvedValueOnce({ transferId: 'tr_1' }).mockRejectedValueOnce(new Error('Whop /transfers failed (409): duplicate'));
+    const out = await go(deps);
+    if (out.kind !== 'done') throw new Error('expected a report');
+    expect(out.report.recommendedFlags.WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED).toBe(false);
+  });
+
   it('a transfer list that cannot answer (unknown) is reported with its reason, not as not-found', async () => {
     const { deps } = fakeDeps();
     (deps.find as any).mockResolvedValue({ kind: 'unknown', reason: 'the transfer list rows carry no metadata field' });

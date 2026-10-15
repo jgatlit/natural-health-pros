@@ -310,10 +310,10 @@ describe('fee reconciliation (spec §7)', () => {
 });
 
 const OLD = new Date(Date.UTC(2026, 0, 1)); // far outside the 30-minute window
-const ENVS = ['WHOP_TRANSFERS_ENABLED', 'WHOP_TRANSFERS_ALLOWLIST', 'WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED', 'WHOP_PARENT_COMPANY_ID', 'WHOP_COMPANY_API_KEY'];
+const ENVS = ['WHOP_TRANSFERS_ENABLED', 'WHOP_TRANSFERS_ALLOWLIST', 'WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED', 'WHOP_TRANSFERS_LOOKUP_VERIFIED', 'WHOP_PARENT_COMPANY_ID', 'WHOP_COMPANY_API_KEY'];
 const enableTransfers = () => {
   process.env.WHOP_TRANSFERS_ENABLED = 'true';
-  process.env.WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED = 'true';
+  process.env.WHOP_TRANSFERS_LOOKUP_VERIFIED = 'true';
   process.env.WHOP_PARENT_COMPANY_ID = 'biz_parent';
   process.env.WHOP_COMPANY_API_KEY = 'apik_x';
 };
@@ -480,7 +480,7 @@ describe('share transfers: the hourly sweep is the RETRY BACKSTOP (spec v1.4 §6
 
   it('a transfer with an unknown outcome while the lookup is unverified waits for a person: ONE transfer, 207, listed as needs-attention, never re-sent by later sweeps', async () => {
     enableTransfers();
-    delete process.env.WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED;
+    delete process.env.WHOP_TRANSFERS_LOOKUP_VERIFIED;
     mocks.createTransfer.mockRejectedValue(new Error('Whop /transfers failed (502): bad gateway'));
     mocks.ledger.db = fakeLedgerDb({ practitioners: wallets, affiliate: { entries: [affiliateRow()] } });
     const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -503,7 +503,7 @@ describe('share transfers: the hourly sweep is the RETRY BACKSTOP (spec v1.4 §6
 
   it('a flagged row is settled by a later sweep if Whop SHOWS the transfer (found is positive evidence at any gate)', async () => {
     enableTransfers();
-    delete process.env.WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED;
+    delete process.env.WHOP_TRANSFERS_LOOKUP_VERIFIED;
     mocks.createTransfer.mockRejectedValueOnce(new Error('The operation was aborted due to timeout'));
     mocks.ledger.db = fakeLedgerDb({ practitioners: wallets, affiliate: { entries: [affiliateRow({ createdAt: new Date() })] } });
     vi.spyOn(console, 'error').mockImplementation(() => {});
@@ -534,6 +534,51 @@ describe('share transfers: the hourly sweep is the RETRY BACKSTOP (spec v1.4 §6
     expect(body.affiliates).toMatchObject({ budgetExhausted: true, deferred: 2, settled: 0 });
     expect(mocks.createTransfer).not.toHaveBeenCalled();
     expect(mocks.ledger.db.affiliateRows.map((r: { state: string }) => r.state)).toEqual(['ACCRUED', 'ACCRUED']);
+  });
+
+  it('shares owed to an inactive recruiter are reported as information and do NOT turn the sweep red', async () => {
+    enableTransfers();
+    const w: any = { prac_R: { whopCompanyId: 'biz_R', whopPayoutsEnabled: true, archivedAt: new Date(Date.UTC(2026, 5, 1)) } };
+    mocks.ledger.db = fakeLedgerDb({ practitioners: w, affiliate: { entries: [affiliateRow()] } });
+    const res = await GET(req());
+    const body = (await res.json()) as { ok: boolean; errors: string[]; transfersUnconfirmed: unknown[]; transfersInformational: Array<{ id: string; reason: string }> };
+    expect(res.status).toBe(200);
+    expect(body.ok).toBe(true);
+    expect(body.transfersUnconfirmed).toEqual([]);
+    expect(body.transfersInformational).toEqual([{ ledger: 'affiliate', id: 'afl_1', reason: 'payee-inactive' }]);
+    expect(mocks.createTransfer).not.toHaveBeenCalled();
+  });
+
+  it('a claimed row whose payee can no longer receive money DOES turn the sweep red', async () => {
+    enableTransfers();
+    const w: any = { prac_R: { whopCompanyId: 'biz_R', whopPayoutsEnabled: false } };
+    mocks.ledger.db = fakeLedgerDb({ practitioners: w, affiliate: { entries: [affiliateRow({ transferUsdCents: 300, transferAttempts: 1, maybeSentAt: OLD })] } });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await GET(req());
+    const body = (await res.json()) as { transfersUnconfirmed: Array<{ id: string }> };
+    expect(res.status).toBe(207);
+    expect(body.transfersUnconfirmed).toEqual([{ ledger: 'affiliate', id: 'afl_1' }]);
+  });
+
+  it('the referral sweep gets half the budget, so it cannot starve the recruiter sweep; both lookups carry their deadline', async () => {
+    enableTransfers();
+    mocks.createTransfer.mockRejectedValue(new Error('The operation was aborted due to timeout'));
+    mocks.ledger.db = fakeLedgerDb({
+      practitioners: wallets,
+      referral: { entries: [referralRow({ createdAt: new Date() })] },
+      affiliate: { entries: [affiliateRow({ createdAt: new Date() })] },
+    });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    await GET(req()); // both rows attempt once and end with an unknown outcome
+    mocks.ledger.db.referralRows[0].nextAttemptAt = new Date(0);
+    mocks.ledger.db.affiliateRows[0].nextAttemptAt = new Date(0);
+    mocks.findTransfer.mockResolvedValue({ kind: 'not-found' });
+    await GET(req());
+    const deadlines = mocks.findTransfer.mock.calls.map((c) => ({ id: (c[0] as any).ledgerEntryId, deadlineMs: (c[0] as any).deadlineMs as number }));
+    const ref = deadlines.find((d) => d.id === 'led_1')!;
+    const aff = deadlines.find((d) => d.id === 'afl_1')!;
+    expect(ref.deadlineMs).toBeGreaterThan(Date.now());
+    expect(aff.deadlineMs - ref.deadlineMs).toBeGreaterThanOrEqual(100_000); // 240 s vs 120 s from the same start
   });
 
   it('exports maxDuration so a sweep of transfers is not cut off', async () => {

@@ -11,6 +11,9 @@ import type { LookupFn, TransferFn } from '@/lib/ledger-transfer';
  *                       'metadata'   returns rows with our metadata (a lookup can find and rule out)
  *                       'no-metadata' returns rows without the metadata field (metadata not returned)
  *                       'bad-envelope' answers with an envelope the code does not recognise
+ *                       'full-page-no-cursor' returns a full page it gives no way to continue from
+ *                       'empty'      a well-formed list that is empty although transfers exist (blind)
+ *                       'null-metadata' well-formed rows whose metadata is null (blind)
  *   afterCreate       the next POST creates the transfer and THEN fails (a timeout or a 502 after the
  *                     transfer exists), the shape of every ambiguous outcome.
  *
@@ -19,7 +22,7 @@ import type { LookupFn, TransferFn } from '@/lib/ledger-transfer';
 export function fakeWhop(
   opts: {
     honourKey?: boolean;
-    listShows?: 'metadata' | 'no-metadata' | 'bad-envelope';
+    listShows?: 'metadata' | 'no-metadata' | 'bad-envelope' | 'empty' | 'null-metadata' | 'full-page-no-cursor';
     afterCreate?: Array<'timeout' | 'bad-gateway'>;
   } = {},
 ) {
@@ -52,6 +55,10 @@ export function fakeWhop(
   const lookup: LookupFn = async (a) => {
     if (listShows === 'bad-envelope') {
       return { kind: 'unknown', reason: 'the transfer list did not have the expected { data: [...] } envelope' };
+    }
+    if (listShows === 'empty' || listShows === 'null-metadata') return { kind: 'not-found' };
+    if (listShows === 'full-page-no-cursor') {
+      return { kind: 'unknown', reason: 'the transfer list returned a full page with no cursor or end marker to continue from' };
     }
     if (listShows === 'no-metadata' && transfers.length > 0) {
       return { kind: 'unknown', reason: 'the transfer list rows carry no metadata field, so a transfer cannot be matched by metadata' };

@@ -28,11 +28,14 @@
  * Before anything is sent it reads the `--to` company (read-only GET) and refuses unless it is a
  * connected account (sibling) of the configured parent company.
  *
- * WHAT TO DO WITH THE REPORT (the switch the operator sets afterwards):
- *   `WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED=true` only if `repeatCreatedSecondTransfer` is false (the key
- *   is honoured) OR `lookupFoundFirst` is true (the metadata lookup finds a transfer). Until it is set,
- *   a transfer attempt that ends with an unknown outcome is never re-sent: the row waits for an admin
- *   to record whether it went out (/admin/commercial-settings).
+ * WHAT TO DO WITH THE REPORT. The two proofs are independent and each is set from one result only:
+ *   WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED=true  only if `repeatCreatedSecondTransfer` is false (the repeat
+ *                                             returned the SAME transfer: the key is honoured);
+ *   WHOP_TRANSFERS_LOOKUP_VERIFIED=true       only if `lookupFoundFirst` is true (GET /transfers found the
+ *                                             known canary transfer by metadata).
+ * `recommendedFlags` in the report applies exactly that rule. If the key is ignored AND the lookup is
+ * blind, leave both unset: a transfer attempt that ends with an unknown outcome is then never re-sent,
+ * and an admin records whether it went out (/admin/commercial-settings).
  *
  * Balances are read from `GET /ledger_accounts/{id}`. If Whop does not accept the company id there,
  * the report records the error for that read and still reports the transfer and lookup answers;
@@ -87,6 +90,8 @@ export type CanaryReport = {
   lookupFoundFirst: boolean | null;
   /** Why the list could not answer (unexpected envelope, no metadata on its rows) or the request failed. */
   lookupError: string | null;
+  /** The operator switches this report supports (set a flag only when it is true here). */
+  recommendedFlags: { WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED: boolean; WHOP_TRANSFERS_LOOKUP_VERIFIED: boolean };
   /** Q3 in one line, without interpretation: did the second identical request create a second transfer? */
   idempotenceVerdict: string;
   /** The transfer record's own fee field, when Whop returns it. */
@@ -264,6 +269,10 @@ export async function runCanary(opts: {
     lookupFoundFirst,
     lookupError,
     idempotenceVerdict,
+    recommendedFlags: {
+      WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED: repeatCreatedSecondTransfer === false,
+      WHOP_TRANSFERS_LOOKUP_VERIFIED: lookupFoundFirst === true,
+    },
     transferRecord: record
       ? { amountUsd: record.amount, feeAmountUsd: record.feeAmount, metadata: record.metadata }
       : null,

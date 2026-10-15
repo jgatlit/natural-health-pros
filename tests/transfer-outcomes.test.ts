@@ -33,15 +33,17 @@ import {
  *
  *   1. An attempt with an UNKNOWN outcome is never blindly re-sent. "No row matched" is not "no
  *      transfer exists" unless the list could have shown it AND the operator has recorded that the
- *      canary proved the lookup (`WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED`). Until then the row waits for
- *      an admin, who records whether it went out.
+ *      canary proved the lookup (`WHOP_TRANSFERS_LOOKUP_VERIFIED`); a proven idempotence key
+ *      (`WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED`) is the other way to allow a re-send
+ *      (tests/transfer-proofs.test.ts). With neither, the row waits for an admin, who records whether
+ *      it went out. These tests run with the lookup flag set unless they say otherwise.
  *   2. A refund after a REFUSED attempt (nothing was created) reduces the share.
  *   3. The alert covers every row that holds money back; the sweep stops cleanly at its budget.
  */
 
 installTransferTestEnv();
 
-describe('the gate', () => {
+describe('the idempotence flag', () => {
   it('is exactly the string "true"', () => {
     expect(idempotenceVerified({ WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED: 'true' })).toBe(true);
     for (const v of [undefined, '', 'TRUE', 'True', '1', 'yes', 'false', ' true']) {
@@ -54,7 +56,7 @@ describe.each(KINDS)('$name ledger: an unknown outcome is never blindly re-sent'
   const bigShare = (over: Record<string, any> = {}) => k.entry({ id: 'led_1', [k.cfg.shareKey]: 3_000, grossUsdCents: 10_000, ...over });
 
   it.each(['no-metadata', 'bad-envelope'] as const)(
-    'the reviewer’s mock (key ignored, list shows %s, 502 after the transfer exists): ONE transfer and a needs-attention row, however many sweeps follow',
+    'key ignored, list shows %s, 502 after the transfer exists: ONE transfer and a needs-attention row, however many sweeps follow',
     async (shape) => {
       enableUnverified();
       const whop = fakeWhop({ honourKey: false, listShows: shape, afterCreate: ['bad-gateway'] });
@@ -77,7 +79,7 @@ describe.each(KINDS)('$name ledger: an unknown outcome is never blindly re-sent'
     },
   );
 
-  it('the same mock with the gate TRUE and a list that cannot answer: still no second POST (the unknown lookup is retried later)', async () => {
+  it('the same mock with the lookup flag set and a list that cannot answer: still no second POST (the unknown lookup is retried later)', async () => {
     enable();
     const whop = fakeWhop({ honourKey: false, listShows: 'no-metadata', afterCreate: ['bad-gateway'] });
     const db = makeDb(k, { entries: [bigShare()] });
@@ -91,7 +93,7 @@ describe.each(KINDS)('$name ledger: an unknown outcome is never blindly re-sent'
     expect(k.rows(db)[0].lastError).toMatch(/no metadata field/);
   });
 
-  it('gate FALSE and a lookup that says not-found (the list lags): still not re-sent; the row waits for a person', async () => {
+  it('neither proof recorded and a lookup that says not-found (the list lags): still not re-sent; the row waits for a person', async () => {
     enableUnverified();
     const whop = fakeWhop({ honourKey: false, afterCreate: ['timeout'] });
     const db = makeDb(k, { entries: [bigShare()] });
@@ -102,7 +104,7 @@ describe.each(KINDS)('$name ledger: an unknown outcome is never blindly re-sent'
     expect(k.rows(db)[0].attentionReason).toBe('ambiguous-unverified');
   });
 
-  it('gate TRUE and a mock that honours the key (stale list): one retry with the SAME key, one transfer, settled', async () => {
+  it('lookup flag set and a mock that honours the key (stale list): one retry with the SAME key, one transfer, settled', async () => {
     enable();
     const whop = fakeWhop({ honourKey: true, afterCreate: ['timeout'] });
     const db = makeDb(k, { entries: [bigShare()] });
@@ -118,7 +120,7 @@ describe.each(KINDS)('$name ledger: an unknown outcome is never blindly re-sent'
     expect(k.rows(db)[0]).toMatchObject({ state: 'SETTLED', whopTransferId: 'wt_1', netPaidUsdCents: 3_000 });
   });
 
-  it('gate TRUE, key ignored but the list shows our metadata: the transfer is FOUND and never re-posted', async () => {
+  it('lookup flag set, key ignored but the list shows our metadata: the transfer is FOUND and never re-posted', async () => {
     enable();
     const whop = fakeWhop({ honourKey: false, listShows: 'metadata', afterCreate: ['bad-gateway'] });
     const db = makeDb(k, { entries: [bigShare()] });
@@ -129,7 +131,7 @@ describe.each(KINDS)('$name ledger: an unknown outcome is never blindly re-sent'
     expect(k.rows(db)[0]).toMatchObject({ state: 'SETTLED', whopTransferId: 'wt_1' });
   });
 
-  it('a transfer that Whop SHOWS settles a flagged row whatever the gate says; a list that cannot answer leaves it alone', async () => {
+  it('a transfer that Whop SHOWS settles a flagged row at any setting; a list that cannot answer leaves it alone', async () => {
     enableUnverified();
     const whop = fakeWhop({ honourKey: false, listShows: 'metadata', afterCreate: ['timeout'] });
     const db = makeDb(k, { entries: [bigShare()] });
@@ -156,7 +158,7 @@ describe.each(KINDS)('$name ledger: an unknown outcome is never blindly re-sent'
     expect(k.rows(db)[0]).toMatchObject({ state: k.waiting, attentionReason: 'ambiguous-unverified' });
   });
 
-  it('the FIRST send of a fresh row is unaffected by the gate', async () => {
+  it('the FIRST send of a fresh row is unaffected by the flags', async () => {
     enableUnverified();
     const whop = fakeWhop();
     const db = makeDb(k, { entries: [bigShare()] });
@@ -165,7 +167,7 @@ describe.each(KINDS)('$name ledger: an unknown outcome is never blindly re-sent'
     expect(whop.posts).toBe(1);
   });
 
-  it('definitive refusals need no verification: they are retried whatever the gate says', async () => {
+  it('definitive refusals need no verification: they are retried at any setting', async () => {
     enableUnverified();
     const db = makeDb(k, { entries: [bigShare()] });
     const transfer = vi.fn().mockRejectedValueOnce(new Error('Whop /transfers failed (402): insufficient available balance')).mockResolvedValue({ transferId: 'tr_ok' });
@@ -188,7 +190,7 @@ describe.each(KINDS)('$name ledger: a refund after a REFUSED attempt reduces the
     return applyLedgerReversal(db, k.cfg, { bookingIntentId: 'bi_1', payeeId: 'R', totalReversedUsdCents: total });
   };
 
-  it('the reviewer’s sequence: 3000c share, refused attempt, FULL refund -> REVERSED, nothing is ever sent, no debit', async () => {
+  it('3000c share, refused attempt, FULL refund -> REVERSED, nothing is ever sent, no debit', async () => {
     enable();
     const db = makeDb(k, { entries: [bigShare()] });
     const transfer = refusing();

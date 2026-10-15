@@ -18,7 +18,7 @@ import { fakeLedgerDb } from './helpers/fake-ledger-db';
  * referral half is also $0.30 so the two halves read the same.
  */
 
-const ENV = ['WHOP_TRANSFERS_ENABLED', 'WHOP_TRANSFERS_ALLOWLIST', 'WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED', 'WHOP_COMPANY_API_KEY', 'WHOP_PARENT_COMPANY_ID'];
+const ENV = ['WHOP_TRANSFERS_ENABLED', 'WHOP_TRANSFERS_ALLOWLIST', 'WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED', 'WHOP_TRANSFERS_LOOKUP_VERIFIED', 'WHOP_COMPANY_API_KEY', 'WHOP_PARENT_COMPANY_ID'];
 let saved: Record<string, string | undefined>;
 beforeEach(() => {
   saved = Object.fromEntries(ENV.map((k) => [k, process.env[k]]));
@@ -35,7 +35,7 @@ afterEach(() => {
 });
 const enable = () => {
   process.env.WHOP_TRANSFERS_ENABLED = 'true';
-  process.env.WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED = 'true';
+  process.env.WHOP_TRANSFERS_LOOKUP_VERIFIED = 'true';
   process.env.WHOP_COMPANY_API_KEY = 'test-key';
   process.env.WHOP_PARENT_COMPANY_ID = 'biz_parent';
 };

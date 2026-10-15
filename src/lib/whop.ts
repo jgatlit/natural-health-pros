@@ -554,6 +554,11 @@ export async function createTransfer(params: {
     'transfer a share',
     { timeoutMs: TRANSFER_TIMEOUT_MS },
   );
+  // A 2xx that carries no transfer id says nothing about whether a transfer exists. The message has no
+  // HTTP status in it, so the caller classifies it as an unknown outcome and never records a receipt.
+  if (typeof res?.id !== 'string' || res.id === '') {
+    throw new Error('Whop /transfers answered with a success status but no transfer id');
+  }
   return { transferId: res.id };
 }
 
@@ -600,11 +605,15 @@ export async function findTransfer(params: {
   destinationId: string;
   createdAfter?: Date;
   match: (t: WhopTransferRecord) => boolean;
+  /** Epoch ms. The scan gives up (unknown) rather than run past it; each request is also bounded by it. */
+  deadlineMs?: number;
 }): Promise<TransferLookup> {
   if (!isWhopPlatformsReady()) throw new WhopNotConfigured('look up a transfer');
   const base = process.env.WHOP_API_BASE ?? 'https://api.whop.com/api/v1';
   let after: string | undefined;
   for (let page = 0; page < TRANSFER_LOOKUP_MAX_PAGES; page += 1) {
+    const remainingMs = params.deadlineMs === undefined ? Infinity : params.deadlineMs - Date.now();
+    if (remainingMs <= 0) return { kind: 'unknown', reason: 'the lookup ran out of its time budget' };
     const qs = new URLSearchParams({
       origin_id: params.originId,
       destination_id: params.destinationId,
@@ -615,14 +624,15 @@ export async function findTransfer(params: {
     if (after) qs.set('after', after);
     const res = await fetch(`${base}/transfers?${qs.toString()}`, {
       headers: { Authorization: `Bearer ${process.env.WHOP_COMPANY_API_KEY}` },
-      signal: AbortSignal.timeout(TRANSFER_TIMEOUT_MS),
+      signal: AbortSignal.timeout(Math.min(TRANSFER_TIMEOUT_MS, Math.max(1, remainingMs))),
     });
     if (!res.ok) {
       throw new Error(`Whop /transfers lookup failed (${res.status}): ${await res.text().catch(() => '')}`);
     }
     const body = (await res.json().catch(() => null)) as {
       data?: unknown;
-      page_info?: { end_cursor?: string | null };
+      has_more?: boolean;
+      page_info?: { end_cursor?: string | null; has_next_page?: boolean };
     } | null;
     if (!body || !Array.isArray(body.data)) {
       return { kind: 'unknown', reason: 'the transfer list did not have the expected { data: [...] } envelope' };
@@ -651,8 +661,14 @@ export async function findTransfer(params: {
       };
       if (params.match(record)) return { kind: 'found', transfer: record };
     }
+    // The scan has reached the end of the list only on POSITIVE evidence: a page shorter than the page
+    // size, or an explicit end marker. A full page we cannot page past is not the end of the list.
+    const endMarked = body.has_more === false || body.page_info?.has_next_page === false;
+    if (rows.length < TRANSFER_LOOKUP_PAGE || endMarked) return { kind: 'not-found' };
     after = body.page_info?.end_cursor ?? undefined;
-    if (rows.length < TRANSFER_LOOKUP_PAGE || !after) return { kind: 'not-found' };
+    if (!after) {
+      return { kind: 'unknown', reason: 'the transfer list returned a full page with no cursor or end marker to continue from' };
+    }
   }
   return { kind: 'unknown', reason: 'the transfer list did not end within the page budget' };
 }
@@ -669,11 +685,13 @@ export async function findTransferForLedgerEntry(params: {
   destinationId: string;
   ledgerEntryId: string;
   createdAfter?: Date;
+  deadlineMs?: number;
 }): Promise<LedgerTransferLookup> {
   const hit = await findTransfer({
     originId: params.originId,
     destinationId: params.destinationId,
     createdAfter: params.createdAfter,
+    deadlineMs: params.deadlineMs,
     match: (t) => t.metadata?.ledger_entry_id === params.ledgerEntryId,
   });
   if (hit.kind === 'found') return { kind: 'found', transferId: hit.transfer.id, amountUsdDollars: hit.transfer.amount };
@@ -720,8 +738,9 @@ export async function isConnectedAccountOfParent(companyId: string): Promise<boo
     }
     const rows = body.data as Array<{ id?: string }>;
     if (rows.some((c) => c?.id === companyId)) return true;
+    if (rows.length < TRANSFER_LOOKUP_PAGE) return false;
     after = body.page_info?.end_cursor ?? undefined;
-    if (rows.length < TRANSFER_LOOKUP_PAGE || !after) return false;
+    if (!after) throw new Error('Whop /companies list returned a full page with no cursor to continue from');
   }
   throw new Error('Whop /companies list did not end within the page budget');
 }

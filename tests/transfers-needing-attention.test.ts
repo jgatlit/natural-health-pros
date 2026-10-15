@@ -99,6 +99,31 @@ describe('TransfersNeedingAttention', () => {
     expect(html).toContain('name="rowId" value="afl_flag"');
   });
 
+  it('shares owed to an inactive recruiter appear in a separate informational block, with no alert and no forms', async () => {
+    process.env.WHOP_TRANSFERS_ENABLED = 'true';
+    state.db = fakeLedgerDb({
+      practitioners: { R: { whopCompanyId: 'biz_R', whopPayoutsEnabled: true, archivedAt: new Date(Date.UTC(2026, 5, 1)) } },
+      affiliate: { entries: [{ id: 'afl_idle', bookingIntentId: 'b8', recruiterPractitionerId: 'R', shareUsdCents: 300, state: 'ACCRUED', createdAt: OLD }] },
+    });
+    const html = (await render())!;
+    expect(html).toContain('data-testid="transfers-informational"');
+    expect(html).toContain('afl_idle');
+    expect(html).toContain('for information');
+    expect(html).not.toContain('role="alert"');
+    expect(html).not.toContain('<form');
+  });
+
+  it('a retrying row with an unknown-outcome attempt (not flagged) gets the decision forms too', async () => {
+    process.env.WHOP_TRANSFERS_ENABLED = 'true';
+    state.db = fakeLedgerDb({
+      practitioners: wallets,
+      referral: { entries: [{ id: 'rfl_retry2', bookingIntentId: 'b7', referrerPractitionerId: 'R', referrerShareUsdCents: 500, state: 'PAYABLE', transferUsdCents: 500, transferAttempts: 2, maybeSentAt: OLD, createdAt: OLD }] },
+    });
+    const html = (await render())!;
+    expect(html).toContain('rfl_retry2');
+    expect((html.match(/<form/g) ?? []).length).toBe(2);
+  });
+
   it('renders nothing when every share has a receipt', async () => {
     process.env.WHOP_TRANSFERS_ENABLED = 'true';
     state.db = fakeLedgerDb({ practitioners: wallets });

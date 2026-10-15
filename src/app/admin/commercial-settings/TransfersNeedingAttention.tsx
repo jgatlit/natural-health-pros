@@ -13,7 +13,7 @@ const REASON_LABEL: Record<UnconfirmedReason, string> = {
   'needs-attention': 'Outcome unknown: decide',
   sending: 'Attempt in flight or lost',
   waiting: 'Not yet transferred',
-  'payee-inactive': 'Recruiter inactive: nothing will move until reinstated',
+  'payee-inactive': 'Recruiter inactive: owed until reinstated',
   'payee-unpayable': 'Transfer claimed; payee can no longer receive money',
 };
 
@@ -30,12 +30,15 @@ const REASON_LABEL: Record<UnconfirmedReason, string> = {
  * are the audited server action; nothing here sends money.
  */
 export async function TransfersNeedingAttention({ now = new Date() }: { now?: Date }) {
-  const rows = await findUnconfirmedTransfers(prisma as unknown as LedgerTransferDb, { at: now });
-  if (rows.length === 0) return null;
+  const all = await findUnconfirmedTransfers(prisma as unknown as LedgerTransferDb, { at: now });
+  const rows = all.filter((r) => r.severity === 'alert');
+  const info = all.filter((r) => r.severity === 'info');
+  if (all.length === 0) return null;
   const minutes = Math.round(UNCONFIRMED_AFTER_MS / 60_000);
 
   return (
     <section className="mt-10" aria-labelledby="transfers-attention-heading">
+      {rows.length > 0 && (
       <div className="rounded-lg border border-red-300 bg-red-50 p-4" role="alert">
         <h2 id="transfers-attention-heading" className="text-sm font-semibold text-red-900">
           {rows.length} share{rows.length === 1 ? '' : 's'} without a confirmed transfer after {minutes} minutes
@@ -73,7 +76,7 @@ export async function TransfersNeedingAttention({ now = new Date() }: { now?: Da
                 <td className="py-1 pr-3">{r.attempts}</td>
                 <td className="py-1 pr-3 text-xs">{r.lastError ?? ''}</td>
                 <td className="py-1 pr-3 text-xs">
-                  {r.reason === 'needs-attention' ? (
+                  {r.canResolve ? (
                     <div className="space-y-2">
                       <form action={resolveTransferAttentionAction} className="space-y-1">
                         <input type="hidden" name="ledger" value={r.ledger} />
@@ -98,6 +101,25 @@ export async function TransfersNeedingAttention({ now = new Date() }: { now?: Da
           </tbody>
         </table>
       </div>
+      )}
+      {info.length > 0 && (
+        <div className="mt-4 rounded-lg border border-slate-200 p-4" data-testid="transfers-informational">
+          <h3 className="text-sm font-semibold text-slate-900">
+            {info.length} share{info.length === 1 ? '' : 's'} owed to an inactive recruiter (for information)
+          </h3>
+          <p className="mt-1 text-sm leading-relaxed text-slate-600">
+            The share stays owed and nothing is lost. It is transferred if the recruiter is reinstated. These rows do
+            not turn the sweep red.
+          </p>
+          <ul className="mt-2 space-y-1 text-sm text-slate-700">
+            {info.map((r) => (
+              <li key={`${r.ledger}:${r.id}`}>
+                <span className="font-mono text-xs">{r.id}</span> · {r.payeeId} · {usd(r.amountUsdCents)}
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
     </section>
   );
 }

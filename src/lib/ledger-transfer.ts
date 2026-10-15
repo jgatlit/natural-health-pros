@@ -1,5 +1,5 @@
 /**
- * MOVING A SHARE TO THE PAYEE'S WHOP BALANCE (referral and recruiter shares; lane R4).
+ * MOVING A SHARE TO THE PAYEE'S WHOP BALANCE (referral and recruiter shares).
  *
  * Every internal NHP, practitioner, referral, affiliate and recruiting fee is computed on the full
  * purchase price and moved by an internal Whop-to-Whop transfer as soon as the client's payment
@@ -31,16 +31,21 @@
  *   - THE AMOUNT IS FIXED WHILE A TRANSFER MAY EXIST (`transferUsdCents`). Every retry sends that
  *     amount with the same `idempotence_key` (the ledger row id). A refund while the amount is fixed
  *     is a debit against the payee's next transfer (`ledger-reversal.ts`), never a change to it.
- *   - AN ATTEMPT WITH AN UNKNOWN OUTCOME (timeout, 5xx, network error after the request was sent) is
- *     NEVER blindly re-sent. "No row matched" is not "no transfer exists": the lookup can only say so
- *     when its list is usable (`findTransfer` answers found / not-found / unknown) AND the operator has
- *     recorded that the canary proved the key or the metadata lookup works
- *     (`WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED=true`). Until then such a row waits for a person
- *     (`attentionReason = ambiguous-unverified`): the retry selection excludes it, the cron returns
- *     207, the admin table lists it, and an admin records "it went out (transfer id)" or "it did not go
- *     out" (`transfer-attention.ts`). A transfer found in Whop settles the row either way, because a
- *     found transfer is positive evidence. Once the gate is true an unknown outcome is retried with
- *     backoff, the lookup first, the same key and the same amount.
+ *   - AN ATTEMPT WITH AN UNKNOWN OUTCOME (timeout, 5xx, network error after the request was sent, a
+ *     success status with no transfer id) is NEVER blindly re-sent. "No row matched" is not "no
+ *     transfer exists": a list can only show absence if it is usable (`findTransfer` answers found /
+ *     not-found / unknown, and not-found needs positive evidence that the whole list was scanned). Two
+ *     independent facts, each recorded by the operator from the canary report, allow a re-send:
+ *       WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED  a repeated request with the same idempotence_key did NOT
+ *                                            create a second transfer: re-send with the same key,
+ *                                            whatever the lookup says;
+ *       WHOP_TRANSFERS_LOOKUP_VERIFIED       GET /transfers found the canary transfer by metadata: a
+ *                                            not-found with end-of-list evidence counts as "it did
+ *                                            not go out" and allows the re-send.
+ *     With neither, the row waits for a person (`attentionReason = ambiguous-unverified`): the retry
+ *     selection excludes it, the cron returns 207, the admin table lists it, and an admin records "it
+ *     went out (transfer id)" or "it did not go out" (`transfer-attention.ts`). A transfer found in
+ *     Whop settles the row at any setting, because a found transfer is positive evidence.
  *
  * A FAILED ATTEMPT IS CLASSIFIED (`classifyTransferFailure`):
  *   RETRY      Whop answered "no" for a reason that passes (insufficient available balance, rate
@@ -157,12 +162,22 @@ export function transfersAllowlist(env: Record<string, string | undefined> = pro
 }
 
 /**
- * `WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED`, exactly 'true': the operator's record that the canary
- * (scripts/whop-canary-transfer.ts, Step 0) showed Whop honours the idempotence key or that the
- * metadata lookup finds a transfer. Only then may an attempt with an unknown outcome be re-sent.
+ * `WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED`, exactly 'true': the operator's record that canary Step 0
+ * (scripts/whop-canary-transfer.ts) showed a repeated request with the same idempotence_key did NOT
+ * create a second transfer. Only then may an attempt with an unknown outcome be re-sent with the same
+ * key regardless of what the lookup says.
  */
 export function idempotenceVerified(env: Record<string, string | undefined> = process.env): boolean {
   return env.WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED === 'true';
+}
+
+/**
+ * `WHOP_TRANSFERS_LOOKUP_VERIFIED`, exactly 'true': the operator's record that canary Step 0 showed
+ * `GET /transfers` finds our known canary transfer by its metadata. Only then may a lookup `not-found`
+ * (with end-of-list evidence) be believed as "it did not go out" and allow a re-send.
+ */
+export function lookupVerified(env: Record<string, string | undefined> = process.env): boolean {
+  return env.WHOP_TRANSFERS_LOOKUP_VERIFIED === 'true';
 }
 
 /** The transfer call itself, injected so nothing in the test suite can reach the live API. */
@@ -184,6 +199,8 @@ export type LookupFn = (args: {
   destinationId: string;
   ledgerEntryId: string;
   createdAfter?: Date;
+  /** Epoch ms: the lookup returns `unknown` rather than run past it. */
+  deadlineMs?: number;
 }) => Promise<LedgerTransferLookup>;
 
 export type TransferFailure = 'RETRY' | 'AMBIGUOUS' | 'PARKED';
@@ -459,6 +476,8 @@ export async function restoreRowToFresh(
   input: {
     rowId: string;
     fromState: string;
+    /** When given, the row must still be at this attempt count (no new attempt began since it was read). */
+    attempts?: number;
     patch: Record<string, unknown>;
     /** Runs inside the same transaction once the row is fresh (e.g. an audit row). */
     afterRestore?: (tx: LedgerTx) => Promise<void>;
@@ -474,10 +493,12 @@ export async function restoreRowToFresh(
           reversedUsdCents: true,
           grossShareUsdCents: true,
           adjustmentAllocations: true,
+          transferAttempts: true,
           [cfg.shareKey]: true,
         },
       });
       if (!cur || cur.state !== input.fromState || cur.transferUsdCents == null) return false;
+      if (input.attempts !== undefined && cur.transferAttempts !== input.attempts) return false;
       const share = cur[cfg.shareKey] as number;
       const reversedAtClaim = share - (cur.grossShareUsdCents ?? share);
       if (cur.reversedUsdCents !== reversedAtClaim) return false;
@@ -719,7 +740,7 @@ export async function settleLedger(
 /** The lookup result for a row, with a thrown failure folded into `unknown`. */
 async function lookupRow(
   lookup: LookupFn,
-  args: { originId: string; destinationId: string; row: Candidate },
+  args: { originId: string; destinationId: string; row: Candidate; deadlineMs?: number },
 ): Promise<LedgerTransferLookup> {
   try {
     return await lookup({
@@ -727,6 +748,7 @@ async function lookupRow(
       destinationId: args.destinationId,
       ledgerEntryId: args.row.id,
       createdAfter: args.row.createdAt,
+      deadlineMs: args.deadlineMs,
     });
   } catch (err) {
     return { kind: 'unknown', reason: `transfer lookup failed: ${err instanceof Error ? err.message : String(err)}` };
@@ -755,7 +777,7 @@ async function recoverFlaggedRow(
   db: LedgerTransferDb,
   cfg: LedgerConfig,
   row: Candidate,
-  ctx: { lookup: LookupFn; at: Date; originId: string },
+  ctx: { lookup: LookupFn; at: Date; originId: string; deadlineMs?: number },
   summary: LedgerSettlementSummary,
 ): Promise<void> {
   const destination = row.payee?.whopCompanyId;
@@ -763,7 +785,12 @@ async function recoverFlaggedRow(
     summary.skipped += 1;
     return;
   }
-  const result = await lookupRow(ctx.lookup, { originId: ctx.originId, destinationId: destination, row });
+  const result = await lookupRow(ctx.lookup, {
+    originId: ctx.originId,
+    destinationId: destination,
+    row,
+    deadlineMs: ctx.deadlineMs,
+  });
   if (result.kind !== 'found') {
     summary.skipped += 1;
     return;
@@ -801,7 +828,14 @@ async function processRow(
   db: LedgerTransferDb,
   cfg: LedgerConfig,
   row: Candidate,
-  ctx: { transfer: TransferFn; lookup: LookupFn; at: Date; originId: string; allowlist: Set<string> | null },
+  ctx: {
+    transfer: TransferFn;
+    lookup: LookupFn;
+    at: Date;
+    originId: string;
+    allowlist: Set<string> | null;
+    deadlineMs?: number;
+  },
   summary: LedgerSettlementSummary,
 ): Promise<void> {
   const { at } = ctx;
@@ -915,7 +949,8 @@ async function processRow(
     canRestore = !needsLookup;
   }
 
-  const verified = idempotenceVerified();
+  const keyHonoured = idempotenceVerified();
+  const lookupTrusted = lookupVerified();
 
   const release = async (mode: ReleaseMode, message: string) => {
     summary.failed += 1;
@@ -928,29 +963,36 @@ async function processRow(
       JSON.stringify({ entryId: row.id, mode, attempt: attemptsNow, error: message }),
     );
   };
-  /** An unknown outcome: retry (lookup first) once the lookup is verified, otherwise wait for a person. */
-  const unknownOutcome = (message: string) => release(verified ? 'ambiguous' : 'attention', message);
+  /** An unknown outcome: retried (lookup first) when either proof is recorded, otherwise it waits for a person. */
+  const unknownOutcome = (message: string) => release(keyHonoured || lookupTrusted ? 'ambiguous' : 'attention', message);
 
   let transferId: string | null = null;
   let netCents = amountCents;
 
   if (needsLookup) {
-    const result = await lookupRow(ctx.lookup, { originId: ctx.originId, destinationId: destination, row });
+    const result = await lookupRow(ctx.lookup, {
+      originId: ctx.originId,
+      destinationId: destination,
+      row,
+      deadlineMs: ctx.deadlineMs,
+    });
     if (result.kind === 'found') {
       transferId = result.transferId;
       netCents = foundNet(cfg, row, result, amountCents);
       summary.recovered += 1;
-    } else if (result.kind === 'unknown') {
-      // The lookup could not see the transfer: "no row matched" is not evidence it does not exist.
-      await unknownOutcome(result.reason);
-      return;
-    } else if (!verified) {
-      // The list looks usable, but nothing has proven it would show our transfer.
-      await unknownOutcome('ambiguous-unverified: no transfer found, but the transfer lookup has not been verified');
-      return;
-    } else if (!mayPay()) {
-      // Nothing was sent and the payee cannot be paid now: back to waiting, with the reason.
-      await release('retry', 'payee cannot receive transfers right now');
+    } else if (keyHonoured || (lookupTrusted && result.kind === 'not-found')) {
+      // Either a repeated request with this key is known to be harmless, or the lookup is known to see
+      // our transfers and did not see this one. Re-send, unless the payee cannot be paid right now.
+      if (!mayPay()) {
+        await release('retry', 'payee cannot receive transfers right now');
+        return;
+      }
+    } else {
+      await unknownOutcome(
+        result.kind === 'unknown'
+          ? result.reason
+          : 'ambiguous-unverified: no transfer found, but neither the key nor the transfer lookup has been verified',
+      );
       return;
     }
   }
@@ -969,6 +1011,10 @@ async function processRow(
       const message = err instanceof Error ? err.message : String(err);
       if (failure === 'AMBIGUOUS') await unknownOutcome(message);
       else await release(failure === 'PARKED' ? 'parked' : 'retry', message);
+      return;
+    }
+    if (typeof transferId !== 'string' || transferId === '') {
+      await unknownOutcome('the transfer call returned no transfer id');
       return;
     }
   }
@@ -1063,10 +1109,10 @@ export type UnconfirmedReason =
   | 'sending'
   /** Waiting for a payee who can receive money, 30+ minutes after accrual. */
   | 'waiting'
-  /** Waiting, but the recruiter is archived or retired: nothing will move until they are reinstated. */
-  | 'payee-inactive'
   /** A transfer was claimed (it may exist) and the payee can no longer receive money. */
-  | 'payee-unpayable';
+  | 'payee-unpayable'
+  /** Waiting, but the recruiter is archived or retired: nothing will move until they are reinstated. */
+  | 'payee-inactive';
 
 export type UnconfirmedTransfer = {
   ledger: LedgerConfig['kind'];
@@ -1074,6 +1120,14 @@ export type UnconfirmedTransfer = {
   payeeId: string;
   state: string;
   reason: UnconfirmedReason;
+  /**
+   * `alert` rows put money at risk (an unconfirmed transfer, a row waiting for a person, a claimed row
+   * whose payee can no longer be paid) and turn the cron red. `info` rows are owed and safe (an inactive
+   * recruiter's share) and are only listed.
+   */
+  severity: 'alert' | 'info';
+  /** An admin may record whether the transfer went out (`transfer-attention.ts`). */
+  canResolve: boolean;
   amountUsdCents: number;
   attempts: number;
   lastError: string | null;
@@ -1081,14 +1135,32 @@ export type UnconfirmedTransfer = {
   createdAt: Date;
 };
 
+const UNCONFIRMED_SELECT = (cfg: LedgerConfig) => ({
+  id: true,
+  state: true,
+  createdAt: true,
+  [cfg.payeeKey]: true,
+  [cfg.shareKey]: true,
+  reversedUsdCents: true,
+  transferUsdCents: true,
+  transferAttempts: true,
+  lastError: true,
+  lastAttemptAt: true,
+  maybeSentAt: true,
+  attentionReason: true,
+  [cfg.payeeRel]: { select: { whopCompanyId: true, whopPayoutsEnabled: true, archivedAt: true, trialEndsAt: true } },
+});
+
 /**
- * Rows that should have a receipt by now and do not. A row is listed when it
+ * Rows that should have a receipt by now and do not. A row is an ALERT when it
  *   - is waiting for a person (`attentionReason`), at once; or
  *   - is older than `UNCONFIRMED_AFTER_MS` since accrual and is SENDING, or waiting with a payee who
- *     can receive money (an inactive recruiter included, listed as `payee-inactive`), or waiting with a
- *     transfer already claimed whatever the payee's state now (`payee-unpayable`: it may exist).
- * The cron turns a non-empty result into a 207 and a console.error naming the ids, and the admin page
- * lists them.
+ *     can receive money, or waiting with a transfer already claimed whatever the payee's state now
+ *     (`payee-unpayable`: it may exist).
+ * A row owed to an inactive (archived or retired) recruiter is listed as INFORMATION only: the share
+ * stays owed and nothing is lost, so it must not keep the cron red and hide a real failure.
+ * The cron turns the alerts into a 207 and a console.error naming the ids, and the admin page lists
+ * both.
  *
  * Empty unless transfers are enabled (while they are off nothing is expected to move), and it
  * respects the allowlist (a row for a payee outside it is not expected to move either). An unclaimed
@@ -1100,61 +1172,75 @@ export async function findUnconfirmedTransfers(
 ): Promise<UnconfirmedTransfer[]> {
   if (process.env.WHOP_TRANSFERS_ENABLED !== 'true') return [];
   const allowlist = transfersAllowlist();
+  const cutoff = new Date(opts.at.getTime() - UNCONFIRMED_AFTER_MS);
+  const staleSending = new Date(opts.at.getTime() - STALE_SENDING_AFTER_MS);
   const out: UnconfirmedTransfer[] = [];
+
+  const toRow = (cfg: LedgerConfig, r: Record<string, any>, severity: 'alert' | 'info'): UnconfirmedTransfer => { // eslint-disable-line @typescript-eslint/no-explicit-any
+    const payee = (r[cfg.payeeRel] ?? null) as Payee | null;
+    let reason: UnconfirmedReason;
+    if (r.attentionReason) reason = 'needs-attention';
+    else if (r.state === 'SENDING') reason = 'sending';
+    else if (severity === 'info') reason = 'payee-inactive';
+    else if (r.transferUsdCents != null && !isPayable(payee)) reason = 'payee-unpayable';
+    else reason = 'waiting';
+    const unknownOutcome = r.attentionReason != null || r.maybeSentAt != null;
+    const staleInFlight = r.state === 'SENDING' && r.lastAttemptAt != null && r.lastAttemptAt.getTime() <= staleSending.getTime();
+    return {
+      ledger: cfg.kind,
+      id: r.id,
+      payeeId: r[cfg.payeeKey],
+      state: r.state,
+      reason,
+      severity,
+      canResolve: r.transferUsdCents != null && (unknownOutcome || staleInFlight),
+      amountUsdCents: r.transferUsdCents ?? Math.max(0, r[cfg.shareKey] - (r.reversedUsdCents ?? 0)),
+      attempts: r.transferAttempts ?? 0,
+      lastError: r.lastError ?? null,
+      attentionReason: r.attentionReason ?? null,
+      createdAt: r.createdAt,
+    };
+  };
+
   for (const cfg of [AFFILIATE_LEDGER, REFERRAL_LEDGER]) {
     const allowScope = allowlist ? { [cfg.payeeKey]: { in: Array.from(allowlist) } } : {};
-    const rows = (await db[cfg.entry].findMany({
+    const alerts = (await db[cfg.entry].findMany({
       where: {
         ...allowScope,
         settledAt: null,
         OR: [
           { attentionReason: { not: null } },
           {
-            createdAt: { lte: new Date(opts.at.getTime() - UNCONFIRMED_AFTER_MS) },
+            createdAt: { lte: cutoff },
             OR: [
               { state: 'SENDING' },
               { state: cfg.waiting, transferUsdCents: { not: null } },
-              { state: cfg.waiting, [cfg.payeeRel]: { whopCompanyId: { not: null }, whopPayoutsEnabled: true } },
+              { state: cfg.waiting, [cfg.payeeRel]: payeeFilter(cfg) },
             ],
           },
         ],
       },
-      select: {
-        id: true,
-        state: true,
-        createdAt: true,
-        [cfg.payeeKey]: true,
-        [cfg.shareKey]: true,
-        reversedUsdCents: true,
-        transferUsdCents: true,
-        transferAttempts: true,
-        lastError: true,
-        attentionReason: true,
-        [cfg.payeeRel]: { select: { whopCompanyId: true, whopPayoutsEnabled: true, archivedAt: true, trialEndsAt: true } },
-      },
+      select: UNCONFIRMED_SELECT(cfg),
       orderBy: { createdAt: 'asc' },
       take: 200,
     })) as Array<Record<string, any>>; // eslint-disable-line @typescript-eslint/no-explicit-any
-    for (const r of rows) {
-      const payee = (r[cfg.payeeRel] ?? null) as Payee | null;
-      let reason: UnconfirmedReason;
-      if (r.attentionReason) reason = 'needs-attention';
-      else if (r.state === 'SENDING') reason = 'sending';
-      else if (!isPayable(payee)) reason = 'payee-unpayable';
-      else if (cfg.activePayeeOnly && !isActivePayee(payee)) reason = 'payee-inactive';
-      else reason = 'waiting';
-      out.push({
-        ledger: cfg.kind,
-        id: r.id,
-        payeeId: r[cfg.payeeKey],
-        state: r.state,
-        reason,
-        amountUsdCents: r.transferUsdCents ?? Math.max(0, r[cfg.shareKey] - (r.reversedUsdCents ?? 0)),
-        attempts: r.transferAttempts ?? 0,
-        lastError: r.lastError ?? null,
-        attentionReason: r.attentionReason ?? null,
-        createdAt: r.createdAt,
-      });
+    for (const r of alerts) out.push(toRow(cfg, r, 'alert'));
+
+    if (cfg.activePayeeOnly) {
+      const inactive = (await db[cfg.entry].findMany({
+        where: {
+          ...allowScope,
+          settledAt: null,
+          state: cfg.waiting,
+          transferUsdCents: null,
+          attentionReason: null,
+          [cfg.payeeRel]: { whopCompanyId: { not: null }, whopPayoutsEnabled: true, NOT: bookableWhere() },
+        },
+        select: UNCONFIRMED_SELECT(cfg),
+        orderBy: { createdAt: 'asc' },
+        take: 200,
+      })) as Array<Record<string, any>>; // eslint-disable-line @typescript-eslint/no-explicit-any
+      for (const r of inactive) out.push(toRow(cfg, r, 'info'));
     }
   }
   return out.filter((r) => r.amountUsdCents > 0 || r.state === 'SENDING' || r.reason === 'needs-attention');

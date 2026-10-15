@@ -13,7 +13,7 @@ import { fakeLedgerDb, type Entry } from './fake-ledger-db';
  * `enableUnverified` = payouts on, lookup not verified).
  */
 
-export const ENV = ['WHOP_TRANSFERS_ENABLED', 'WHOP_TRANSFERS_ALLOWLIST', 'WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED', 'WHOP_COMPANY_API_KEY', 'WHOP_PARENT_COMPANY_ID'];
+export const ENV = ['WHOP_TRANSFERS_ENABLED', 'WHOP_TRANSFERS_ALLOWLIST', 'WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED', 'WHOP_TRANSFERS_LOOKUP_VERIFIED', 'WHOP_COMPANY_API_KEY', 'WHOP_PARENT_COMPANY_ID'];
 let saved: Record<string, string | undefined>;
 
 /** Registers the env isolation and console silencing every transfer suite needs. Call once at the top of the file. */
@@ -32,17 +32,28 @@ afterEach(() => {
 });
 }
 
-/** Payouts on, with the lookup verified (the operator recorded the canary result). */
+/** Payouts on, the lookup VERIFIED (canary: GET /transfers found the known transfer by metadata). */
 export const enable = () => {
   process.env.WHOP_TRANSFERS_ENABLED = 'true';
-  process.env.WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED = 'true';
+  process.env.WHOP_TRANSFERS_LOOKUP_VERIFIED = 'true';
+  delete process.env.WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED;
   process.env.WHOP_COMPANY_API_KEY = 'test-key';
   process.env.WHOP_PARENT_COMPANY_ID = 'biz_parent';
 };
-/** Payouts on, the lookup NOT verified (the state until the canary has been read). */
+/** Payouts on, NEITHER proof recorded (the state until the canary has been read). */
 export const enableUnverified = () => {
   enable();
-  delete process.env.WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED;
+  delete process.env.WHOP_TRANSFERS_LOOKUP_VERIFIED;
+};
+/** Payouts on, the idempotence key VERIFIED (canary: a repeated request created no second transfer). */
+export const enableKeyHonoured = () => {
+  enableUnverified();
+  process.env.WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED = 'true';
+};
+/** Payouts on, both proofs recorded. */
+export const enableBoth = () => {
+  enableKeyHonoured();
+  process.env.WHOP_TRANSFERS_LOOKUP_VERIFIED = 'true';
 };
 
 export const NOW = new Date(Date.UTC(2027, 0, 1));
