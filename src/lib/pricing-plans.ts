@@ -20,6 +20,7 @@
 
 import {
   annualPlanAPriceCents,
+  annualPlanASavingsCents,
   planMonthlyCents,
   planSourcedBps,
   type RateScheduleNumbers,
@@ -61,6 +62,15 @@ export function monthlyFeeLabel(schedule: CopySchedule, key: PlanKey): string {
 /** "$374.40/yr" — the yearly Plan A price, DERIVED from the schedule, never typed in. */
 export function annualPlanALabel(schedule: CopySchedule): string {
   return `${dollars(annualPlanAPriceCents(schedule))}/yr`;
+}
+
+/**
+ * "Save $49 vs monthly": twelve monthly Plan A fees less the yearly price, both from the schedule.
+ * Null when the yearly price saves nothing, so no card claims a saving that is not there.
+ */
+export function annualPlanASavingsLabel(schedule: CopySchedule): string | null {
+  const saving = annualPlanASavingsCents(schedule);
+  return saving > 0 ? `Save ${dollars(saving)} vs monthly` : null;
 }
 
 /**

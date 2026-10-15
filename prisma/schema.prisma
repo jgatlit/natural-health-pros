@@ -399,6 +399,10 @@ model Practitioner {
   recruitedVia   String?
 
   whopMembershipId            String? @unique // membership on our own $49/mo Whop product
+  /// `monthly` | `annual`: which Plan A plan the membership was bought on, written by the Layer X
+  /// webhook when the membership's plan id matches a configured interval (plan-a-billing.ts). Plain
+  /// text, like `plan`. Null = not known (no subscription yet, or bought before this column).
+  subscriptionInterval        String?
   /// Per-practitioner checkout for the monthly listing plan, minted once and reused. Carries
   /// metadata.practitioner_id so the webhook attributes payment directly instead of matching on
   /// email — which silently fails when someone pays from a different address than their profile.

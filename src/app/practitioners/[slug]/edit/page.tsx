@@ -4,7 +4,15 @@ import { ArrowLeft, Check, AlertCircle, X, Sparkles } from 'lucide-react';
 import { auth } from '@/auth';
 import { QUALIFICATIONS_HEADING } from '@/lib/profile-sections';
 import { prisma } from '@/lib/prisma';
-import { effectivePlan, isPlanKey, monthlyFeeLabel, planComparison } from '@/lib/pricing-plans';
+import {
+  annualPlanALabel,
+  annualPlanASavingsLabel,
+  effectivePlan,
+  isPlanKey,
+  monthlyFeeLabel,
+  planComparison,
+} from '@/lib/pricing-plans';
+import { hasJoinedViaCohort, isBillingInterval, planABillingOpen } from '@/lib/plan-a-billing';
 import { PlanChoice } from '@/components/practitioners/PlanChoice';
 import { isWhopPlatformsReady } from '@/lib/whop';
 import { profileCompletenessSignals } from '@/lib/practitioner-indexer';
@@ -288,7 +296,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
   // Loaded after the block above rather than inside it because `loadClientList` issues its own
   // four scoped reads and the term setting is a fifth; folding them in would make the existing
   // tuple destructuring harder to read for no saving.
-  const [clientRows, referable, copySchedule] = await Promise.all([
+  const [clientRows, referable, copySchedule, joinedViaCohort] = await Promise.all([
     loadClientList(prisma, practitioner.id),
     // Who this practitioner may refer TO. `bookableWhere()` rather than `listedWhere()`: an
     // unlisted practitioner is absent from directory search but still bookable, so referring to
@@ -302,6 +310,8 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
     }),
     // Words only: this practitioner's own schedule, or the current one if they have none yet.
     getScheduleForCopy(prisma, practitioner.rateScheduleId),
+    // The PROFILE OWNER's sign-up path, never the viewer's: it decides whether their billing is on.
+    hasJoinedViaCohort(prisma, practitioner.userId),
   ]);
 
   // A freshly minted referral link, echoed back through the redirect so it can be copied. The
@@ -398,7 +408,8 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
     );
   const startWhopOnboardingAction = startWhopOnboarding.bind(null, params.slug);
   const openPayoutPortalAction = openPayoutPortal.bind(null, params.slug);
-  const startSubscriptionCheckoutAction = startSubscriptionCheckout.bind(null, params.slug);
+  const startMonthlyCheckoutAction = startSubscriptionCheckout.bind(null, params.slug, 'monthly');
+  const startAnnualCheckoutAction = startSubscriptionCheckout.bind(null, params.slug, 'annual');
   const choosePlanAction = choosePlan.bind(null, params.slug);
   const comparison = planComparison(copySchedule);
   const requestAccountEmailChangeAction = requestAccountEmailChange.bind(null, params.slug);
@@ -975,20 +986,27 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
           chooseAction={choosePlanAction}
         />
 
+        <div id="billing" className="scroll-mt-24">
         <SubscriptionSection
           status={practitioner.subscriptionStatus}
-          trialEndsAt={practitioner.trialEndsAt}
+          billingOpen={planABillingOpen({ joinedViaCohort, trialEndsAt: practitioner.trialEndsAt })}
+          foundingRate={joinedViaCohort}
           isAdmin={ownerIsAdmin}
           plan={effectivePlan(practitioner.plan)}
+          interval={isBillingInterval(practitioner.subscriptionInterval) ? practitioner.subscriptionInterval : null}
           isComplete={missing.length === 0}
-          // The action mints a per-practitioner checkout carrying metadata.practitioner_id and
-          // reuses whopSubscriptionCheckoutUrl once minted. The generic hosted URL is the last
-          // resort only: it has no metadata, so the webhook can only match the payer by EMAIL —
-          // which fails silently when someone pays from a different address than their profile.
-          subscribeAction={startSubscriptionCheckoutAction}
+          // Each action mints a per-practitioner checkout carrying metadata.practitioner_id. The
+          // generic hosted URL is the last resort only: it has no metadata, so the webhook can only
+          // match the payer by EMAIL — which fails silently when someone pays from a different
+          // address than their profile.
+          monthlyAction={startMonthlyCheckoutAction}
+          annualAction={startAnnualCheckoutAction}
           fallbackCheckoutUrl={process.env.WHOP_PLATFORM_CHECKOUT_URL ?? null}
           priceLabel={monthlyFeeLabel(copySchedule, 'PLAN_A')}
+          annualPriceLabel={annualPlanALabel(copySchedule)}
+          annualSavingsLabel={annualPlanASavingsLabel(copySchedule)}
         />
+        </div>
         </div>
 
         <div id="payments" className="scroll-mt-24">
