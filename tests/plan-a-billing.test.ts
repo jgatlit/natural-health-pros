@@ -1,7 +1,9 @@
+import { readFileSync } from 'node:fs';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   PLAN_A_PLAN_SETTING_KEYS,
   hasJoinedViaCohort,
+  ownerBillingState,
   intervalForPlanId,
   loadPlanAPlanIds,
   planABillingOpen,
@@ -31,17 +33,42 @@ describe('planABillingOpen', () => {
   });
 });
 
-describe('hasJoinedViaCohort', () => {
-  it('asks for an accepted invitation of this user that carries a cohort', async () => {
+describe('hasJoinedViaCohort / ownerBillingState', () => {
+  const created = new Date('2026-10-15T22:43:50Z');
+
+  it('counts only a cohort invitation created no later than the profile', async () => {
     const findFirst = vi.fn(async () => ({ id: 'inv_1' }));
-    expect(await hasJoinedViaCohort({ invitation: { findFirst } }, 'usr_1')).toBe(true);
+    expect(await hasJoinedViaCohort({ invitation: { findFirst } }, { userId: 'usr_1', createdAt: created })).toBe(true);
     expect(findFirst).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { acceptedByUserId: 'usr_1', cohortId: { not: null } } }),
+      expect.objectContaining({
+        where: { acceptedByUserId: 'usr_1', cohortId: { not: null }, createdAt: { lte: created } },
+      }),
     );
   });
 
   it('is false for an admin-invited pilot', async () => {
-    expect(await hasJoinedViaCohort({ invitation: { findFirst: vi.fn(async () => null) } }, 'usr_2')).toBe(false);
+    const db = { invitation: { findFirst: vi.fn(async () => null) } };
+    expect(await hasJoinedViaCohort(db, { userId: 'usr_2', createdAt: created })).toBe(false);
+  });
+
+  it('opens billing for the owner who joined via a cohort, and not for a pilot', async () => {
+    const owner = { userId: 'usr_1', createdAt: created, trialEndsAt: null };
+    const joined = { invitation: { findFirst: vi.fn(async () => ({ id: 'inv_1' })) } };
+    const pilot = { invitation: { findFirst: vi.fn(async () => null) } };
+    expect(await ownerBillingState(joined, owner)).toEqual({ joinedViaCohort: true, billingOpen: true });
+    expect(await ownerBillingState(pilot, owner)).toEqual({ joinedViaCohort: false, billingOpen: false });
+    expect(joined.invitation.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ acceptedByUserId: 'usr_1' }) }),
+    );
+  });
+});
+
+describe('the edit page asks about the PROFILE OWNER, never the viewer', () => {
+  it('passes the loaded practitioner row to ownerBillingState', () => {
+    const src = readFileSync('src/app/practitioners/[slug]/edit/page.tsx', 'utf8');
+    expect(src).toMatch(/ownerBillingState\(prisma, practitioner\)/);
+    expect(src).toMatch(/billingOpen=\{billingState\.billingOpen\}/);
+    expect(src).toMatch(/foundingRate=\{billingState\.joinedViaCohort\}/);
   });
 });
 

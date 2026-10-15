@@ -35,13 +35,40 @@ type CohortDb = {
   };
 };
 
-/** Did this user sign up through a /join/<cohort> link? Their accepted invitation carries the cohort. */
-export async function hasJoinedViaCohort(db: CohortDb, userId: string): Promise<boolean> {
+/**
+ * Did this practitioner's profile come from a /join/<cohort> sign-up?
+ *
+ * Only a cohort invitation created BEFORE the profile counts: that is the one whose redemption made
+ * it. Anyone can request a cohort link for any address, and /onboarding lets an existing
+ * practitioner redeem one, so "has ever accepted a cohort invitation" would bill a pilot who merely
+ * clicked a cohort email after their profile existed.
+ */
+export async function hasJoinedViaCohort(
+  db: CohortDb,
+  owner: { userId: string; createdAt: Date },
+): Promise<boolean> {
   const invitation = await db.invitation.findFirst({
-    where: { acceptedByUserId: userId, cohortId: { not: null } },
+    where: {
+      acceptedByUserId: owner.userId,
+      cohortId: { not: null },
+      createdAt: { lte: owner.createdAt },
+    },
     select: { id: true },
   });
   return invitation !== null;
+}
+
+/** The PROFILE OWNER's billing state for the edit page's billing card. Never the viewer's. */
+export async function ownerBillingState(
+  db: CohortDb,
+  owner: { userId: string; createdAt: Date; trialEndsAt: Date | null },
+  now?: number,
+): Promise<{ joinedViaCohort: boolean; billingOpen: boolean }> {
+  const joinedViaCohort = await hasJoinedViaCohort(db, owner);
+  return {
+    joinedViaCohort,
+    billingOpen: planABillingOpen({ joinedViaCohort, trialEndsAt: owner.trialEndsAt, now }),
+  };
 }
 
 /** Both interval plan ids, database first. A missing or blank row resolves to null. */

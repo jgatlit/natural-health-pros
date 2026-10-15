@@ -89,9 +89,13 @@ export async function POST(request: NextRequest) {
       try {
         // Either Plan A plan activates the listing alike; the plan id only tells us which interval
         // was bought. The checkout's own metadata is the fallback for a payload without a plan id.
+        // A failed settings read must never cost the activation itself: the interval is a label.
         let interval: string | null = null;
         if (status === 'ACTIVE') {
-          const planIds = await loadPlanAPlanIds(prisma);
+          const planIds = await loadPlanAPlanIds(prisma).catch((e) => {
+            console.error('plan-id settings read failed; activating without an interval:', e);
+            return { monthly: null, annual: null };
+          });
           interval =
             intervalForPlanId(planIds, data.plan?.id ?? data.plan_id) ??
             (isBillingInterval(data.metadata?.nhp_billing_interval) ? data.metadata.nhp_billing_interval : null);

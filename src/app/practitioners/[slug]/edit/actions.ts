@@ -1212,24 +1212,33 @@ export async function choosePlan(slug: string, formData: FormData): Promise<void
 export async function startSubscriptionCheckout(slug: string, interval: string): Promise<void> {
   const target = await authorizeForSlug(slug);
   if (!isBillingInterval(interval)) {
-    redirect(`/practitioners/${slug}/edit?whop=error#billing`);
+    redirect(`/practitioners/${slug}/edit?subscription=error#billing`);
   }
 
   let redirectUrl: string | null = null;
   try {
-    const planIds = await loadPlanAPlanIds(prisma);
-    const { purchaseUrl } = await createSubscriptionCheckout({
-      practitionerId: target.id,
-      slug,
-      interval,
-      planId: planIds[interval],
+    // An ACTIVE subscription is never sold a second one from this button.
+    const current = await prisma.practitioner.findUnique({
+      where: { id: target.id },
+      select: { subscriptionStatus: true },
     });
-    redirectUrl = purchaseUrl;
+    if (current?.subscriptionStatus === 'ACTIVE') {
+      redirectUrl = `/practitioners/${slug}/edit#billing`;
+    } else {
+      const planIds = await loadPlanAPlanIds(prisma);
+      const { purchaseUrl } = await createSubscriptionCheckout({
+        practitionerId: target.id,
+        slug,
+        interval,
+        planId: planIds[interval],
+      });
+      redirectUrl = purchaseUrl;
+    }
   } catch (err) {
     console.error('Whop subscription checkout failed:', err);
   }
 
-  redirect(redirectUrl ?? `/practitioners/${slug}/edit?whop=error#billing`);
+  redirect(redirectUrl ?? `/practitioners/${slug}/edit?subscription=error#billing`);
 }
 
 export async function startWhopOnboarding(slug: string): Promise<void> {

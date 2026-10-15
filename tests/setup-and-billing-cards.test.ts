@@ -119,6 +119,22 @@ describe('SubscriptionSection is plan-aware', () => {
     expect(html).not.toContain('example.test/checkout');
   });
 
+  it('after checkout, hides both choices until the webhook activates the subscription', () => {
+    const html = renderToStaticMarkup(
+      h(SubscriptionSection, { ...base, plan: 'PLAN_A', status: 'NONE', billingOpen: true, notice: 'success' }),
+    );
+    expect(html).toContain('being confirmed');
+    expect(html).not.toMatch(/Pay monthly|Pay annually/);
+  });
+
+  it('shows a failed checkout on the billing card itself', () => {
+    const html = renderToStaticMarkup(
+      h(SubscriptionSection, { ...base, plan: 'PLAN_A', status: 'NONE', billingOpen: true, notice: 'error' }),
+    );
+    expect(html).toContain('Checkout could not be opened');
+    expect(html).toContain('Pay monthly');
+  });
+
   it('an active subscription is shown whichever plan the practitioner is recorded on', () => {
     const html = renderToStaticMarkup(
       h(SubscriptionSection, { ...base, plan: 'PLAN_B', status: 'ACTIVE', billingOpen: false }),

@@ -48,6 +48,11 @@ type Props = {
   annualPriceLabel: string;
   /** "Save $49 vs monthly", or null when the yearly price saves nothing. */
   annualSavingsLabel: string | null;
+  /**
+   * `success`: back from Whop checkout, before the webhook has activated the subscription; the
+   * choices are hidden so the payer is not invited to buy twice. `error`: checkout could not open.
+   */
+  notice?: 'success' | 'error' | null;
 };
 
 /**
@@ -77,6 +82,7 @@ export function SubscriptionSection({
   priceLabel,
   annualPriceLabel,
   annualSavingsLabel,
+  notice = null,
 }: Props) {
   let title = plan === 'PLAN_A' ? 'Plan A · Listing' : 'Plan B · No monthly fee';
   let badge: React.ReactNode;
@@ -155,6 +161,17 @@ export function SubscriptionSection({
       ? 'Choose monthly or annual billing for your Plan A listing. Your founding rate is below.'
       : "Your Plan A subscription isn't active. Subscribe to be listed in directory search. Your profile and everything you've built are safe: nothing is ever deleted.";
     cta = 'choose';
+    if (notice === 'success') {
+      badge = (
+        <Badge variant="outline" className="gap-1 text-[10px] uppercase tracking-wider">
+          <Clock className="h-3 w-3" aria-hidden />
+          Confirming
+        </Badge>
+      );
+      description =
+        'Thank you. Your payment is being confirmed with Whop; this card shows your subscription as soon as it is active. Refresh in a minute.';
+      cta = 'none';
+    }
   }
 
   const buttonClass =
@@ -201,6 +218,12 @@ export function SubscriptionSection({
           <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
         </div>
       </div>
+
+      {notice === 'error' && cta !== 'none' && (
+        <p role="alert" className="rounded-md border border-destructive/40 bg-destructive/5 px-3 py-2 text-xs text-destructive">
+          Checkout could not be opened. Please try again, or contact us if it keeps happening.
+        </p>
+      )}
 
       {cta === 'choose' && (
         <>

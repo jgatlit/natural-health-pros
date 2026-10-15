@@ -12,7 +12,7 @@ import {
   monthlyFeeLabel,
   planComparison,
 } from '@/lib/pricing-plans';
-import { hasJoinedViaCohort, isBillingInterval, planABillingOpen } from '@/lib/plan-a-billing';
+import { isBillingInterval, ownerBillingState } from '@/lib/plan-a-billing';
 import { PlanChoice } from '@/components/practitioners/PlanChoice';
 import { isWhopPlatformsReady } from '@/lib/whop';
 import { profileCompletenessSignals } from '@/lib/practitioner-indexer';
@@ -87,6 +87,8 @@ type Props = {
     drafted?: string;
     source?: string;
     whop?: string;
+    /** Plan A checkout outcome, from the Whop redirect or startSubscriptionCheckout. */
+    subscription?: string;
     /** Echoed-back concurrency token — see the hidden `profileUpdatedAt` field below. */
     v?: string;
     /** Clients & referrals outcomes — see CLIENT_NOTICES below. */
@@ -296,7 +298,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
   // Loaded after the block above rather than inside it because `loadClientList` issues its own
   // four scoped reads and the term setting is a fifth; folding them in would make the existing
   // tuple destructuring harder to read for no saving.
-  const [clientRows, referable, copySchedule, joinedViaCohort] = await Promise.all([
+  const [clientRows, referable, copySchedule, billingState] = await Promise.all([
     loadClientList(prisma, practitioner.id),
     // Who this practitioner may refer TO. `bookableWhere()` rather than `listedWhere()`: an
     // unlisted practitioner is absent from directory search but still bookable, so referring to
@@ -311,7 +313,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
     // Words only: this practitioner's own schedule, or the current one if they have none yet.
     getScheduleForCopy(prisma, practitioner.rateScheduleId),
     // The PROFILE OWNER's sign-up path, never the viewer's: it decides whether their billing is on.
-    hasJoinedViaCohort(prisma, practitioner.userId),
+    ownerBillingState(prisma, practitioner),
   ]);
 
   // A freshly minted referral link, echoed back through the redirect so it can be copied. The
@@ -989,8 +991,9 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
         <div id="billing" className="scroll-mt-24">
         <SubscriptionSection
           status={practitioner.subscriptionStatus}
-          billingOpen={planABillingOpen({ joinedViaCohort, trialEndsAt: practitioner.trialEndsAt })}
-          foundingRate={joinedViaCohort}
+          billingOpen={billingState.billingOpen}
+          foundingRate={billingState.joinedViaCohort}
+          notice={searchParams.subscription === 'success' || searchParams.subscription === 'error' ? searchParams.subscription : null}
           isAdmin={ownerIsAdmin}
           plan={effectivePlan(practitioner.plan)}
           interval={isBillingInterval(practitioner.subscriptionInterval) ? practitioner.subscriptionInterval : null}
