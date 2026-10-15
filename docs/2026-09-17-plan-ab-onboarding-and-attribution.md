@@ -1,5 +1,7 @@
 # Plan A/B onboarding + leakage attribution — design notes (2026-09-17)
 
+> **Point-in-time record, 2026-09-17.** Figures and rules below are as of that date. Current rates, payouts and flags: `docs/money-model.md` and `CLAUDE.md`. Rates and attribution terms are now defined by immutable rate schedules in the database.
+
 > Status: **proposal, not built.** Prices and splits remain Amy's decision; everything here is
 > parameterised through `src/lib/pricing-plans.ts`.
 

@@ -4,33 +4,31 @@
 
 ## What this project is
 
-**Natural Health Pros** — HHE-students-first practitioner directory + marketplace for Holistic Health Educators (HHE). Phase 0 stack live as of 2026-05-24. Phase 1 demo'd for Amy (HHE budget authority) 2026-05-28; V1 pilot greenlit.
+**Natural Health Pros** — HHE-students-first practitioner directory + marketplace for Holistic Health Educators (HHE). Live at `naturalhealthpros.com` with the HHE pilot practitioners; open sign-up at `/join/hhe`. Amy is the HHE budget authority; Sarah Schindler is the practitioner-side owner.
 
 **Brand note**: Product name lineage: "PracticeNear" (discontinued 2026-05-24) → "HHE Directory" (interim) → **"Natural Health Pros"** (canonical go-forward, rebranded 2026-06-29; domain `naturalhealthpros.com`). User-facing product copy uses "Natural Health Pros"; "Holistic Health Educators / HHE" is retained wherever it denotes the school/credential (positioning, "HHE program lead", "graduates of HHE programs"). Historical artifacts (joint-call meeting note, decisions JSON, reconciliation doc, vault project entity filename) retain the "PracticeNear" name as point-in-time references; do not rename them.
 
 **Logo & favicon** (2026-09-29): the mark is the leaf-and-figure symbol (`natural-health-pros-d5-icon-only`). `public/brand/natural-health-pros-mark.svg` (light surfaces) and `…-mark-on-dark.svg` (navy header / OG card — lightens only the dark right leaf for contrast) drive `<Wordmark>`; `src/app/favicon.ico`, `icon.png`, `apple-icon.png` are the favicon set; `src/lib/brand-mark-data.ts` inlines the on-dark mark for the OG card. Masters and variants (SVG/PNG) live in `logo/master/`. This replaced the older node-and-filament glyph.
 
-## Stack (Phase 0 + Block A — live)
+## Stack (live)
 
 - Next.js 14.2.35 (App Router, `src/`, TS strict)
 - **Tailwind 4.3 + shadcn/ui (`new-york` style)** — primitives installed: Avatar, Badge, Button, Card, Separator, Skeleton. Config lives in `src/app/globals.css` via `@theme` (no `tailwind.config.ts`). **Applied brand = CMS Theme D "Midnight Navy"** (midnight navy + rose-magenta + sage), shipped 2026-05-29 — NOT the default shadcn zinc (that base note is historical).
 - Prisma 6.19 + PostgreSQL (Neon via Vercel Marketplace) — **`pg_trgm` extension live** + GIN trigram index on `Practitioner.searchText`
-- NextAuth v5 (Auth.js) + Prisma adapter (no providers wired yet — Phase 0.5)
+- NextAuth v5 (Auth.js) + Prisma adapter, Resend magic-link sign-in
 - Vercel Blob + Vercel KV / Upstash Ratelimit
 - Sentry · Resend
 - **Typesense Cloud** (cluster `vm8gj01ubsi7hyxep`, Server v30.2) + `react-instantsearch` + `react-instantsearch-nextjs` — live, env vars provisioned on Vercel for all 3 scopes. (Original cluster `1rt8fj5i9epv2s6mp` was terminated 2026-06-24 and rebuilt same-day — see `docs/runbooks/typesense-cluster-rebuild.md`.)
 
-**Phase 2A also shipped** (2026-05-25): practitioner authentication via NextAuth + Resend magic-link, invitation system at `/admin/invites`, accept-invite flow → `/onboarding` → `/practitioners/[slug]/edit`. Middleware gates `/admin/*` + `/practitioners/[slug]/edit` + `/onboarding`. `ADMIN_EMAILS` env auto-promotes operator (jgatlit@gmail.com) on first sign-in.
-
-**Phase 2B also shipped** (2026-05-25): practitioner-owned booking URLs (Cal.com / Calendly / SavvyCal / Acuity / etc.). Edit form has booking-link field with provider allowlist; public profile renders real `<a target="_blank">` link.
-
-**Phase 2C UNBLOCKED** (corrected 2026-07-29): operator-locked architecture is Whop Connected Accounts (multi-tenant payment routing). ⚠️ The long-standing "Whop Platforms API is **invite-only**" claim was a **context error** — "Platforms" and "Connected Accounts" are the same **self-serve** product, and `parent_company_id` is a documented optional field on the public `POST /api/v1/companies`. There is nothing to request from `sales@whop.com`; **do not send** the outbound templates in `docs/outbound/` or `docs/demo-prep/`. The actual blocker is an API-key class + scope problem (ours is an *App* key missing `company:create` etc.; the docs require a *Company* API key on `biz_Vpj1G2ryNdPCG0`) — a minutes-long dashboard fix. Validated architecture + unblock sequence: **`docs/PHASE-2C-WHOP-CONNECTED-ACCOUNTS.md`**. `docs/PHASE-2C-WHOP-DESIGN.md` is SUPERSEDED (wrong SDK, wrong call count, nonexistent KYC field, wrong webhook scheme).
-
-**Phase 1 (Block A + B + C) shipped**:
-- `/practitioners/[slug]` — Linktree-style profile, server-rendered (Block A)
-- `/search` — InstantSearchNext + parametric/adaptive facets: keyword + typo tolerance, specialty (multi-select), city/state (single-select scoped), range facet (yearsInPractice), faceted autocomplete, mobile Sheet, URL state, sort
-- Seed data: 18 practitioners across 13 cities (61% GA per operator directive)
-- Typesense schema + indexer + bootstrap/reset/reindex scripts wired
+**Shipped and live** (see `docs/2026-08-18-shipped-and-open-items.md` for the PR-level history):
+- Practitioner authentication (NextAuth + Resend magic link), invitations at `/admin/invites`, `/onboarding` → `/practitioners/[slug]/edit`. Middleware gates `/admin/*`, `/practitioners/[slug]/edit` and `/onboarding`; `ADMIN_EMAILS` auto-promotes operators on first sign-in.
+- Practitioner-owned booking URLs, the booking and checkout flow (`/practitioners/[slug]/book/[token]`), and Whop Connected Accounts for multi-tenant payment routing. Architecture and API notes: `docs/PHASE-2C-WHOP-CONNECTED-ACCOUNTS.md`.
+- `/practitioners/[slug]` (server-rendered profile) and `/search` (InstantSearchNext + Typesense, adaptive facets, URL state).
+- Open sign-up at `/join/<cohort>` (cohort `hhe`) with `/admin/signups`; each practitioner has a `recruiterToken` and a join link.
+- A private "open to outside work" question (`Practitioner.openToOutsideWork`): owner and admin only, never on the public profile, never indexed in Typesense.
+- Custom profile sections (`ProfileSection`) with Blob image and video uploads; the CSP `media-src` in `next.config.mjs` is pinned to the Blob store host.
+- Edit-page left navigation with scroll-spy (`src/components/practitioners/EditSideNav.tsx`, entries in `src/app/practitioners/[slug]/edit/edit-nav.ts`).
+- Rate schedules, referral and affiliate ledgers, and the admin "needs attention" table at `/admin/commercial-settings`. See "Money model" below.
 
 ## Where things are
 
@@ -39,7 +37,7 @@
 | **Local cwd** | `~/projects/HHE/HHE-directory/` (folder unchanged) |
 | **GitHub** | https://github.com/jgatlit/natural-health-pros (public; renamed from `HHE-directory` 2026-06-29, GitHub keeps redirects) |
 | **Vercel project** | `ai-chemist/natural-health-pros` — inspector: https://vercel.com/ai-chemist/natural-health-pros (**renamed** from `hhe-directory` 2026-07-16 as the final launch step; project id `prj_hILUAi7uYNQfCJkcXlX4mG4Kn32E` unchanged, so the local `.vercel` link + deploy hook still resolve). ⚠️ Vercel refreshes the auto `.vercel.app` alias only on the NEXT deployment — `hhe-directory.vercel.app` may keep serving and `natural-health-pros.vercel.app` may 404 until then. Cosmetic; `naturalhealthpros.com` is canonical. |
-| **Production URL** | **`naturalhealthpros.com` — LIVE over HTTPS** (cutover 2026-07-15). Apex `A → 76.76.21.21` (DNS-only, replaced the GoDaddy builder), `www` CNAME → `cname.vercel-dns.com` (DNS-only); Let's Encrypt cert → 2026-10-14; Vercel domain `verified:true`. Zone `naturalhealthpros.com` (id `3ec2cb56dd0ad83824440b2e802ff73c`) lives in **Jonathan's own Cloudflare account**, editable via `ssh vps:~/apps/cloudflare/` (`cfapi` wrapper) — DNS was never gated on Amy's domain-admin auth; that was a phantom blocker. **Auth gates ON** since 2026-07-16 (PR #22): `/admin` needs ADMIN, `/edit` needs sign-in + ownership, `/onboarding` needs a valid invite; `/search` + profiles stay public. |
+| **Production URL** | **`naturalhealthpros.com` — LIVE over HTTPS** (cutover 2026-07-15). Apex `A → 76.76.21.21` (DNS-only, replaced the GoDaddy builder), `www` CNAME → `cname.vercel-dns.com` (DNS-only); Let's Encrypt cert; Vercel domain `verified:true`. Zone `naturalhealthpros.com` (id `3ec2cb56dd0ad83824440b2e802ff73c`) lives in **Jonathan's own Cloudflare account**, editable via `ssh vps:~/apps/cloudflare/` (`cfapi` wrapper) — DNS was never gated on Amy's domain-admin auth; that was a phantom blocker. **Auth gates ON** since 2026-07-16 (PR #22): `/admin` needs ADMIN, `/edit` needs sign-in + ownership, `/onboarding` needs a valid invite; `/search` + profiles stay public. |
 | **Neon DB** | `neondb` @ `ep-plain-bird-ap6zr7b3.c-7.us-east-1.aws.neon.tech` (Marketplace-connected; branching per env) |
 | **Typesense Cloud** | cluster `vm8gj01ubsi7hyxep` (Server v30.2), host `vm8gj01ubsi7hyxep-1.a2.typesense.net`, collection `practitioners`, dashboard https://cloud.typesense.org (rebuilt 2026-06-24; prior cluster `1rt8fj5i9epv2s6mp` terminated) |
 
@@ -90,17 +88,42 @@ After `vercel env pull .env.local`, also `cp .env.local .env` for Prisma CLI to 
   ```
   then match it against the deployment's git SHA via the REST API (`/v13/deployments/<dpl_id>` → `meta.githubCommitSha`). Note `vercel ls --prod` is unreliable for this: it has shown a 6h-old deploy as "newest" while a newer one was live.
 
-## What's next
+## Rates
 
-Phase 1 shipped + verified at https://hhe-directory.vercel.app (commits through `562d1af` + leave-behind `fb58286`). Amy meeting 2026-05-28.
+Rates live only in the database, as immutable content-addressed `RateSchedule` rows. Each practitioner maps to one schedule (`Practitioner.rateScheduleId`, history in `RateScheduleAssignment`). Admins edit schedules at `/admin/commercial-settings`: a save finds or creates a schedule for NEW sign-ups; existing practitioners move only through the audited "migrate cohort" action. There is no rate env var and no literal rate default (`tests/no-rate-literals.test.ts`), and a practitioner with no schedule fails closed at checkout. Never hardcode a price, percentage or term in code or copy; read them from the schedule (`src/lib/pricing-plans.ts` builds copy from one).
 
-**For Phase 2**: see `docs/PHASE-2-PLAN.md` — option space across 5 candidate wedges (auth+invite+claim, booking, payments, real practitioners, search hardening). Default sequence: 2A unlocks everything → 2D real practitioners → 2B booking → 2C payments (gated on Blake) → 2E hardening. Operator-overridable post-Amy meeting.
+Schedule v1 "Go-forward 2026-10" (seeded in migration `20261014150000_rate_schedules_fee_rule_v15`):
 
-**For demo prep**: `docs/DEMO-PREP-5-28.md` — 3-act story + Q&A bank + recovery paths. Leave-behind for Amy: `docs/demo-prep/2026-05-28-amy-leave-behind.md`.
+- Plan A: $39/month plus 10% on NHP-attributed sessions (yearly price derived: $374.40). Plan B: $0 plus 30% on NHP-attributed sessions.
+- Client referral (`nhpr`): 30% in all, 20% to the referring practitioner plus 10% to NHP, for 4 months; then the plan rate until the 8-month lead term ends; then 0%.
+- Recruiter affiliate (`nhpa`): 3% of the gross of every payment of the recruited practitioner, indefinitely.
+- A practitioner's own audience (`?ref`) is 0%. Total fees never exceed 30%.
 
-Phase 1 retrospective lives in `docs/PHASE-1-PLAN.md` (Blocks A/B/C/D all marked done).
+The rule is `resolveSessionFee` in `src/lib/referral-fees.ts`. `nhpa` is captured from the signed cookie of the browser that redeems the sign-in link at `/join/<cohort>?nhpa=<recruiterToken>`; a cross-device sign-up records no recruiter (fix planned, vault task `tsk_7e75bcc931a64749a8fd`).
 
-**Post-Amy-meeting plan (2026-05-28)**: see `docs/2026-05-28-amy-meeting-plan.md` — V1 pilot greenlit (~20 practitioners, booking+payments, ~July 1). Two named priorities: (P1) rich practitioner landing-page redesign + ingest Amy's pilot spreadsheet/image-folder; (P2) consume design system from `cms.chem.dev`. ⚠️ **BRANDING — SHIPPED, do not reopen**: the directory's live brand is CMS **Theme D "Midnight Navy"** (midnight navy + rose-magenta + sage; Inter/Playfair), applied 2026-05-29 via commits `8cf4f17`/`5a23aff`. The "white / forest-green / red-hot-pink" palette floated on 5/28 was **superseded the next day (5/29)** when the team chose "Midnight Navy Option D" and was **never shipped**. Any note saying "apply forest-green / globals.css still zinc" is STALE — ignore it. Canonical meeting record: `~/vault/300 Entities/Meetings/2026-05-28 HHE Ask Zuzu + Holistic Practitioner Directory - Dev & Strategy.md`.
+## Money model
+
+- Every internal NHP, practitioner, referral, affiliate and recruiting fee is computed on the full purchase price and moved by an internal Whop-to-Whop transfer when the client's payment clears. Whop's own payout (withdrawal) fee is each user's matter and appears in no share or ledger figure.
+- The recruiter's 3% is paid immediately with no hold. A refund before the transfer reduces the share; a refund after it becomes a debit netted off that person's next transfer.
+- `referral_hold_days` (90) is only the unclaimed-share window for a payee who cannot yet receive money.
+- Transfers are OFF in production. Flags (`.env.example`): `WHOP_TRANSFERS_ENABLED`, `WHOP_TRANSFERS_ALLOWLIST`, `WHOP_TRANSFERS_IDEMPOTENCE_VERIFIED`, `WHOP_TRANSFERS_LOOKUP_VERIFIED`. Do not enable any before Whop business verification and the canary in `docs/runbooks/transfers-canary.md`.
+- One-page reference with the data model and the file for each rule: `docs/money-model.md`.
+
+## Migrations
+
+- Never point a shadow database, `prisma migrate dev`, `migrate reset` or any destructive Prisma command at the production Neon URL (`.env` is production). A shadow DB is disposable: on 2026-08-27 `prisma migrate diff --shadow-database-url` against production wiped the live database.
+- Generate migrations offline on a local Docker Postgres (schema to schema with `prisma migrate diff --from-schema-datamodel` / `--to-schema-datamodel`), then hand-check the SQL. Every diff proposes `DROP INDEX "Practitioner_searchText_trgm_idx"` (a raw-SQL index the schema cannot express); remove it from the migration.
+- Migrations are expand-only. `npm run build` runs `prisma migrate deploy` against whatever `.env` points at, so run `npx next build` locally.
+- The chain currently ends at `20261015122000_transfer_attention_and_allocations`. The history cannot be replayed on an empty database: migration `20260524141519_pg_trgm_search` references `Practitioner` before `20260524173856_init` creates it. Preview deploys and fresh databases are affected; fixing it is an operator decision (baseline or `migrate resolve`).
+
+## Where the runbooks are
+
+- `docs/money-model.md`: rates, payouts, flags, where each rule is implemented.
+- `docs/runbooks/transfers-canary.md`: enabling transfers safely, resolving ambiguous rows.
+- `docs/runbooks/`: also `auth-middleware-missing-adapter.md`, `notfound-streaming-200.md`, `resend-domain-verification.md`, `typesense-cluster-rebuild.md`.
+- `docs/routes-index.html`: every route, generated from `scripts/routes-meta.ts` by `npm run docs:routes`.
+- `docs/PHASE-2C-WHOP-CONNECTED-ACCOUNTS.md`: Whop Connected Accounts architecture and API notes.
+- `docs/2026-08-18-shipped-and-open-items.md`: shipped history and open items.
 
 ## Reference artifacts (outside repo)
 
@@ -114,17 +137,15 @@ Authoritative source documents kept in the operator's vault / Downloads (vault i
 - **Holistic Health Educators company entity**: `~/vault/300 Entities/Companies/Holistic Health Educators.md`
 - **Project-side memory** (auto-loaded by Claude at this cwd): `~/.claude/projects/-home-jgatlit-projects-HHE-HHE-directory/memory/MEMORY.md` indexes 4 topic files — CSS bootstrap, seed strategy, Typesense/InstantSearch gotchas, Vercel env provisioning
 - **Vault-side memory pointers**: `reference_practicenear_repo_topology` (broad context) + `reference_neon_vercel_prisma_integration` (deployment gotchas)
-- **2026-09-15 triage-context primer** ⭐ **LATEST CONTEXT — fold this into working context at session start**: [`primers/2026-09-15-triage-context.md`](primers/2026-09-15-triage-context.md). It covers the 2026-09-14 Amy call: practitioner pricing moves to a **Plan A (subscription) / Plan B (no fee, larger first-session split)** choice; next build is a 50/50 split-checkout test, then plan choice in onboarding. **Prices and splits are undecided. Don't hardcode them.**
-- **2026-09-03 call primer** (prior context; read after the 09-15 primer): [`primers/2026-09-03 HHE Amy Sarah Jonathan - Booking Flow Live Walkthrough + Practitioner Launch Plan - Primer.md`](primers/2026-09-03%20HHE%20Amy%20Sarah%20Jonathan%20-%20Booking%20Flow%20Live%20Walkthrough%20+%20Practitioner%20Launch%20Plan%20-%20Primer.md) — full call notes, decisions, action items by owner. **Read its 2026-09-04 status banner first**: the primer's body was written pre-merge and its "NOT YET MERGED" / "Not yet built" claims are stale; the banner carries the git-verified corrections.
+- **Primers** (`primers/`): the 2026-09-15 triage-context primer and the 2026-09-03 call primer are point-in-time records of those calls. Each carries a banner naming this file and `docs/money-model.md` as the current source for rates and payouts.
 
-### Current engagement state (durable — updated 2026-09-15)
+### Current engagement state (as of 2026-10-15)
 
-- **⚠️ SUPERSEDES THE FIGURES IN THE NEXT BULLET (v1.5, 2026-10-14): rates live ONLY in the database.** Every price, percentage and term is an immutable `RateSchedule` row a practitioner maps to (`Practitioner.rateScheduleId`), edited at `/admin/commercial-settings` (save = find-by-content-hash or create, for NEW sign-ups only; existing practitioners move only via the audited "migrate cohort" action). The fee rule is `src/lib/referral-fees.ts` (`resolveSessionFee`, spec `art_61900a461c3f47309349` §1): 30% cap, 4-month referrer term (20 referrer + 10 NHP), then the plan rate to the 8-month lead term, plus the recruiting-affiliate overlay. There are **no `PLAN_*_FEE_*` / `XREF_*` env vars and no literal rate defaults** (`tests/no-rate-literals.test.ts` enforces it); a practitioner with no schedule **fails closed at checkout**. Schedule v1 "Go-forward 2026-10" exists only in migration `20261014150000_rate_schedules_fee_rule_v15`; the recruiter id is read through the single seam `src/lib/recruiter.ts`.
-- **Practitioner pricing = Plan A / Plan B practitioner choice** (working structure adopted on the 2026-09-14 Amy call). Plan A is a monthly subscription (price open: $29/$39/$49) with a smaller split (e.g. 80/20). Plan B has no subscription and a larger first-session split (60/40 or 50/50). **Both require a Whop account.** No free listing-only tier for now; paid featured placement is deferred until there's consumer traffic. Marketing targets **consumers**, not practitioner acquisition. Detail: `primers/2026-09-15-triage-context.md`.
-- **Practitioner launch is 2026-09-04 (today, as of this line).** Sarah Schindler announces to the **14** currently-listed directory practitioners — headcount grew from the original 12-practitioner pilot roster. Deliverables owed from Jonathan for that announcement: a short Loom overview + a written getting-started guide.
-- **Shipped 2026-09-03/04 and now on `main`**: booking-link/offering redundancy fix + `/book` description restore (PR #110), Publish + Accept Payments consolidated into one step (PR #111), plain external link to the practitioner's full Whop account (`daaf444`), automatic email to Jonathan/Amy/Sarah on every practitioner-survey submission (PRs #112–#113).
-- **Closed 2026-09-17 (operator directive)**: the "two pink buttons" styling bug and the Whop bank-statement descriptor question are **dropped** — no longer tracked. Production deploy state of the 09-03/04 merges is **verified live** (apex serves `dpl_6A67xkVHEd1bRdWH9uXguNo3axsZ` = `278aa86`, which is ahead of PRs #110-#113).
-- **Verified live 2026-09-17**: the apex serves `dpl_6A67xkVHEd1bRdWH9uXguNo3axsZ` (commit `278aa86`, ready 2026-09-10), so the 09-03/04 merges are in production. Keep applying the "Verify what is actually LIVE" rule (compare `dpl_` ids) before telling Amy or Sarah anything newer is live.
+- Practitioners choose Plan A (subscription plus a lower sourced-session rate) or Plan B (no subscription, higher sourced-session rate). Both require a Whop account. The numbers are in the database (see "Rates").
+- Sarah Schindler announced the directory to the listed practitioners on 2026-09-04. Open sign-up at `/join/hhe` is the current acquisition path; recruiter and referral links carry `nhpa` and `nhpr`.
+- Payout transfers are off in production (see "Money model"). Nothing on the payout side is switched on before Whop business verification of the parent company and the canary.
+- Marketing targets consumers, not practitioner acquisition. There is no free listing-only tier; paid featured placement waits for consumer traffic.
+- Before telling Amy or Sarah that something is live, compare deployment ids as described in "Build + deploy".
 
 ## Working agreements with the operator
 

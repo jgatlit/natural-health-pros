@@ -138,7 +138,7 @@ function buildHtml(routesByAudience: Record<Audience, Array<[string, RouteMeta, 
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>HHE Directory · Route Index</title>
+    <title>Natural Health Pros · Route Index</title>
     <style>
       :root {
         --bg: oklch(0.985 0 0);
@@ -221,7 +221,7 @@ function buildHtml(routesByAudience: Record<Audience, Array<[string, RouteMeta, 
   <body>
     <main>
       <header>
-        <h1>HHE Directory · Route Index</h1>
+        <h1>Natural Health Pros · Route Index</h1>
         <p>
           Auto-generated from src/app/ + scripts/routes-meta.ts. Re-runs on every
           <code>npm run build</code>.
@@ -236,21 +236,17 @@ ${sections}
       <footer>
         <p>
           <strong>Production:</strong>
-          <a href="https://hhe-directory.vercel.app" target="_blank">hhe-directory.vercel.app</a>
+          <a href="https://naturalhealthpros.com" target="_blank">naturalhealthpros.com</a>
           &nbsp;·&nbsp;
           <strong>Repo:</strong>
-          <a href="https://github.com/jgatlit/HHE-directory" target="_blank">github.com/jgatlit/HHE-directory</a>
+          <a href="https://github.com/jgatlit/natural-health-pros" target="_blank">github.com/jgatlit/natural-health-pros</a>
           &nbsp;·&nbsp;
           <strong>Vercel:</strong>
-          <a href="https://vercel.com/ai-chemist/hhe-directory" target="_blank">vercel.com/ai-chemist/hhe-directory</a>
+          <a href="https://vercel.com/ai-chemist/natural-health-pros" target="_blank">vercel.com/ai-chemist/natural-health-pros</a>
         </p>
         <p>
-          Phase status: 1 ✅ · 2A ✅ · 2B ✅ · 2C ⛔ scaffolded (pending Whop Platforms access)
-          · 2D ⏳ pending Amy's curated practitioner list · 2E ⏳ deferred.
-        </p>
-        <p>
-          See <code>docs/PHASE-2-PLAN.md</code>, <code>docs/PHASE-2C-WHOP-DESIGN.md</code>,
-          <code>docs/DEMO-PREP-5-28.md</code>.
+          Rates, payouts and flags: <code>docs/money-model.md</code>. Runbooks: <code>docs/runbooks/</code>.
+          Whop architecture: <code>docs/PHASE-2C-WHOP-CONNECTED-ACCOUNTS.md</code>.
         </p>
         <p>
           To add a new route: create the page.tsx, add a matching entry in
@@ -262,7 +258,7 @@ ${sections}
 
     <script>
       (function () {
-        var PROD = 'https://hhe-directory.vercel.app';
+        var PROD = 'https://naturalhealthpros.com';
         var LOCAL = 'http://localhost:3000';
         var current = PROD;
 

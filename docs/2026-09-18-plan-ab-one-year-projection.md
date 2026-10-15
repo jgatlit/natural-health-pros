@@ -1,5 +1,7 @@
 # Plan A vs Plan B — one-year projection for a single practitioner
 
+> **Point-in-time record, 2026-09-19.** Figures and rules below are as of that date. Current rates, payouts and flags: `docs/money-model.md` and `CLAUDE.md`. To project the current schedule, run `scripts/plan-ab-projection.ts`.
+
 > **Regenerated 2026-09-19 against the RECURRING fee rule. This supersedes the
 > 2026-09-18 version entirely.** That one was computed when Plan B charged its share once per
 > client forever and Plan A charged 20% indefinitely. Both readings were reversed by operator

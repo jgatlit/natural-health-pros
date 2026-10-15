@@ -58,7 +58,7 @@ flowchart TD
     C --> D[/onboarding — AI draft form/]
     D -->|submitOnboarding| E[Profile live at /practitioners/slug]
     E --> F[/practitioners/slug/edit/]
-    F --> G[SubscriptionSection · Layer X<br/>Subscribe $49/mo]
+    F --> G[SubscriptionSection · Layer X<br/>Subscribe (Plan A fee)]
     F --> H[OfferingsEditor<br/>title + price, local only]
     F --> I[PaymentsSection · Layer Y<br/>Set up payments]
     I -->|startWhopOnboarding| J[Whop creates connected company]
@@ -76,7 +76,7 @@ On the edit page the cards render in this order: **Subscribe (Layer X) → Offer
 
 ### 2.2 What's wrong with that ordering
 
-- **The two money conversations sit adjacent and read as one.** "Subscribe · $49/mo" (they pay us) is a few hundred pixels from "Set up payments" (patients pay them). These are opposite directions of cash flow. A practitioner who conflates them either thinks the $49 is a payment-processing fee, or thinks setting up payouts is what they're being billed for.
+- **The two money conversations sit adjacent and read as one.** "Subscribe" with the monthly fee (they pay us) is a few hundred pixels from "Set up payments" (patients pay them). These are opposite directions of cash flow. A practitioner who conflates them either thinks the monthly fee is a payment-processing fee, or thinks setting up payouts is what they're being billed for.
 - **Payment setup is presented as a chore, not a consequence of intent.** It's a card at the bottom of a long form. Nothing connects it to *wanting to sell something*.
 - **The gate is invisible until you hit it.** `publishOffering` hard-gates on `payoutsEnabled`. A practitioner naturally adds offerings first (that card comes first), and only discovers the payout requirement when publishing fails.
 - **The trial is never framed as a clock.** With `trialEndsAt: null` there is no countdown, no conversion moment, and no reason to ever subscribe.
@@ -99,7 +99,7 @@ flowchart TD
     K --> L[Publish → public Buy live]
     F -->|not yet| M[Offering stays listed, unpurchasable<br/>— a first-class state, not an error]
     D --> N[Trial clock starts]
-    N --> O[Day 60/83 warning → subscribe $49/mo]
+    N --> O[Day 60/83 warning → subscribe (Plan A fee)]
     style D fill:#14532d,color:#fff
     style H fill:#1e3a8a,color:#fff
     style L fill:#14532d,color:#fff

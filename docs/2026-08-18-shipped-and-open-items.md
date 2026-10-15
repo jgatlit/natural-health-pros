@@ -1,5 +1,7 @@
 # 2026-08-18 — what shipped, what was decided, what is still open
 
+> **Point-in-time record, 2026-08-18.** Figures and rules below are as of that date. Current rates, payouts and flags: `docs/money-model.md` and `CLAUDE.md`.
+
 Companion to `docs/2026-08-13-booking-checkout-handoff.md`. Written at session close so the
 open-items register survives the conversation that produced it.
 

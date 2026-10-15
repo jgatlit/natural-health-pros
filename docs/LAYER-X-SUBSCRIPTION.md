@@ -1,17 +1,18 @@
-# Layer X — $49/mo platform-listing subscription (LIVE)
+# Layer X — platform-listing subscription (LIVE)
 
 > Practitioners pay **Natural Health Pros** a monthly subscription to be listed in the directory.
 > Practitioner → platform, on **our own** Whop company — **not** connected accounts, so no
 > Whop-for-Platforms gate. Shipped + verified live 2026-07-09 (PR #16 + `bf90730`/`6655422`).
-> (Layer Y = patient → practitioner offerings checkout, still gated on Platforms — see
-> `docs/PHASE-2C-WHOP-DESIGN.md`.)
+> (Layer Y = patient → practitioner offerings checkout through connected accounts, live — see
+> `docs/PHASE-2C-WHOP-CONNECTED-ACCOUNTS.md`.) The monthly fee is the Plan A fee of the practitioner's
+> rate schedule (`docs/money-model.md`); it is never hardcoded.
 
 ## How it works
 
 1. **Portal CTA** — `SubscriptionSection` on `/practitioners/[slug]/edit`:
    - `comped` → "Complimentary" (pilots).
    - `subscriptionStatus === 'ACTIVE'` → "Active".
-   - else → **Subscribe · $49/mo** → links to `WHOP_PLATFORM_CHECKOUT_URL` (or "Coming soon" if unset).
+   - else → **Subscribe · <Plan A monthly fee from the schedule>** → links to `WHOP_PLATFORM_CHECKOUT_URL` (or "Coming soon" if unset).
 2. **Checkout** — the practitioner subscribes on Whop's hosted page.
 3. **Webhook** — `POST /api/whop/webhook` (verified via `@whop/api` `makeWebhookValidator`) flips
    `Practitioner.subscriptionStatus` on `membership.went_valid` / `went_invalid` and re-runs the
@@ -30,9 +31,9 @@ true, set in migration `20260709191242_layer_x_subscription`) · `whopMembership
   Health Network LLC). ⚠️ NOT the school's `biz_FItvmhBTmW02WG` "Holistic Health Educators".
 - App: `naturalhealthpros-01` (`app_eBs2xmM8gba3H4`).
 - Product: **"Pro Practitioner Membership"** `prod_tVk25TdpND5jf`.
-- Plan: `plan_5YdWsNzoCg3Z3` — `plan_type: renewal`, `initial_price: $0.00`, `renewal_price: $49.00`,
+- Plan: `plan_5YdWsNzoCg3Z3` — `plan_type: renewal`, `initial_price: $0.00`, `renewal_price` set to the schedule's Plan A monthly fee (recorded as $39.00 for schedule v1 on 2026-10-14),
   `billing_period: 30 days` (verified against the live Whop API 2026-07-29). **The first billing
-  period is free** — the practitioner is not charged until the second 30-day period; $49/mo starts
+  period is free** — the practitioner is not charged until the second 30-day period; the monthly fee starts
   from there. Nothing else in the product copy currently states this, so treat this doc as the
   source of truth for that behavior.
 - Checkout: `https://whop.com/natural-health-pros/pro-practitioner-membership`.
