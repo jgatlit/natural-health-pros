@@ -247,25 +247,6 @@ describe('spec section 1: the ledger row equals the snapshot share, on every row
     expect(entry!.holdUntil.getTime()).toBe(PAID_AT.getTime());
   });
 
-  it('snapshots the AFFILIATE hold at accrual: affiliateHoldDays sets holdDays and holdUntil = paidAt + days', async () => {
-    const fdb = feeDb(null, false);
-    await resolveBookingFee(fdb as any, {
-      bookingIntentId: 'bi_1',
-      practitionerId: Y,
-      email: EMAIL,
-      plan: 'PLAN_A',
-      priceUsdCents: 10_000,
-      bookingCreatedAt: D(5),
-      transactedAt: D(5),
-      referralTouchId: null,
-    });
-    const db = commitDb(fdb.snapshots[0]);
-    await commit(db, { affiliateHoldDays: 14 });
-    const row = db.affiliate.rows[0];
-    expect(row.holdDays).toBe(14);
-    expect(row.holdUntil.getTime()).toBe(PAID_AT.getTime() + 14 * 86_400_000);
-  });
-
   it('the commit reports which recruiter was credited, so the caller can settle that one row', async () => {
     const { result } = await pipeline({ plan: 'PLAN_A' });
     expect(result.affiliateRecruiterPractitionerId).toBe(R);
@@ -328,7 +309,6 @@ describe('accrual refuses a share the payment could not have funded', () => {
         recruitedPractitionerId: Y,
         whopPaymentId: 'pay_1',
         snapshot,
-        holdDays: 90,
         paidAt: PAID_AT,
       }),
     };
@@ -529,7 +509,6 @@ describe('refunds reverse the affiliate ledger entry, by the same rule as the re
         affiliateShareUsdCents: 300,
         recruiterPractitionerId: R,
       },
-      holdDays: 90,
       paidAt: PAID_AT,
     });
     expect(db.affiliate.rows[0]).toMatchObject({ shareUsdCents: 300, reversedUsdCents: 300, state: 'REVERSED' });
@@ -543,7 +522,6 @@ describe('refunds reverse the affiliate ledger entry, by the same rule as the re
       recruitedPractitionerId: Y,
       whopPaymentId: 'pay_1',
       snapshot: { priceUsdCents: 10_000, applicationFeeUsdCents: 300, nhpFeeUsdCents: 0, affiliateBps: 300, affiliateShareUsdCents: 300, recruiterPractitionerId: R },
-      holdDays: 90,
       paidAt: PAID_AT,
     });
     expect(db.affiliate.rows[0]).toMatchObject({ reversedUsdCents: 150, state: 'ACCRUED' });
@@ -630,15 +608,14 @@ describe('a refund after the share has left: a DEBIT against the recruiter, neve
     expect(db.affiliate.rows[0]).toMatchObject({ state: 'SETTLED', reversedUsdCents: 300 });
   });
 
-  it('SENDING (a transfer is in flight, NOT yet confirmed): the cache rises, no debit yet, never edited into REVERSED', async () => {
-    // The debit for a refund in this window is written when the transfer is CONFIRMED
-    // (`completeAffiliateTransfer`): if Whop refuses it the row returns to ACCRUED and the retry
-    // claims the reduced amount, so a debit now would charge the recruiter twice.
+  it('SENDING (a transfer is in flight): the debit is booked IMMEDIATELY, never edited into REVERSED', async () => {
+    // The claimed amount is fixed, so a refund in this window can only ever be a debit: it is not
+    // deferred to the receipt, and a refused transfer that is retried still sends the claimed amount.
     const db = refundDb(entry({ state: 'SENDING', transferUsdCents: 300, grossShareUsdCents: 300 }));
     const out = await refund(db, 100);
     expect(out.affiliateReversedUsdCents).toBe(300);
-    expect(out.affiliateDebitRecordedUsdCents).toBe(0);
-    expect(db.affiliate.adjustments).toHaveLength(0);
+    expect(out.affiliateDebitRecordedUsdCents).toBe(300);
+    expect(debitsOf(db)).toHaveLength(1);
     expect(db.affiliate.rows[0].state).toBe('SENDING');
     expect(db.affiliate.rows[0].reversedUsdCents).toBe(300);
   });
@@ -665,11 +642,12 @@ describe('a refund after the share has left: a DEBIT against the recruiter, neve
     expect(db.affiliate.rows[0].state).toBe('REVERSED');
   });
 
-  it('a fully reversed ACCRUED row that already has debt relief applied is NOT flipped to REVERSED (the sweep re-opens the relief)', async () => {
-    const db = refundDb(entry({ state: 'ACCRUED', adjustmentAppliedUsdCents: 120 }));
-    await refund(db, 100);
+  it('a claimed ACCRUED row (a failed attempt waiting to retry) fully refunded is NOT flipped to REVERSED: its fixed amount is still sent, and the refund is a debit', async () => {
+    const db = refundDb(entry({ state: 'ACCRUED', transferUsdCents: 180, adjustmentAppliedUsdCents: 120, transferAttempts: 1 }));
+    const out = await refund(db, 100);
     expect(db.affiliate.rows[0].state).toBe('ACCRUED');
     expect(db.affiliate.rows[0].reversedUsdCents).toBe(300);
+    expect(out.affiliateDebitRecordedUsdCents).toBe(300);
   });
 
   it('the cache raise and its debit are ONE transaction: a failing debit write rolls the raise back', async () => {
@@ -760,7 +738,7 @@ describe('E2E: refund first, retried payment.succeeded second, settle sends noth
         practitioners: { [R]: { whopCompanyId: 'biz_R', whopPayoutsEnabled: true } },
         entries: [db.affiliate.rows[0]],
       });
-      await settleAffiliateShares(live as any, { transfer, at: new Date(Date.UTC(2030, 0, 1)) });
+      await settleAffiliateShares(live as any, { transfer, lookup: async () => null, at: new Date(Date.UTC(2030, 0, 1)) });
       expect(transfer).not.toHaveBeenCalled();
     } finally {
       delete process.env.WHOP_TRANSFERS_ENABLED;
@@ -843,7 +821,6 @@ describe('the funding guard follows the spec: NHP’s fee when NHP charged one, 
         recruiterPractitionerId: R,
         ...over,
       } as any,
-      holdDays: 90,
       paidAt: PAID_AT,
     } as any);
 

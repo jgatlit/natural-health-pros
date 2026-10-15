@@ -1,5 +1,7 @@
-import { describe, it, expect, beforeAll, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterEach, vi } from 'vitest';
 import type { NextRequest } from 'next/server';
+
+import { fakeLedgerDb } from './helpers/fake-ledger-db';
 
 type Row = {
   id: string;
@@ -16,47 +18,48 @@ const mocks = vi.hoisted(() => ({
   getIdentityProfile: vi.fn(),
   getPayoutStatus: vi.fn(),
   isWhopPlatformsReady: vi.fn<() => boolean>(),
-  ledgerFindMany: vi.fn<(args?: unknown) => Promise<unknown[]>>(),
-  ledgerUpdateMany: vi.fn<(args?: unknown) => Promise<{ count: number }>>(),
-  ledgerUpdate: vi.fn<(args?: unknown) => Promise<unknown>>(),
   feeUpsert: vi.fn<(args?: unknown) => Promise<unknown>>(),
-  feeUpdateMany: vi.fn<(args?: unknown) => Promise<{ count: number }>>(),
-  createTransfer: vi.fn<(args?: unknown) => Promise<{ transferId: string }>>(),  feeFindMany: vi.fn<(args?: unknown) => Promise<unknown[]>>(),
+  createTransfer: vi.fn<(args?: unknown) => Promise<{ transferId: string }>>(),
+  findTransfer: vi.fn<(args?: unknown) => Promise<{ transferId: string; amountUsdDollars: number } | null>>(),
+  feeFindMany: vi.fn<(args?: unknown) => Promise<unknown[]>>(),
   getPaymentFees: vi.fn<(id: string) => Promise<Array<{ origin: string; amount: number }>>>(),
-  affiliateFindMany: vi.fn<(args?: unknown) => Promise<unknown[]>>(),
-  affiliateUpdateMany: vi.fn<(args?: unknown) => Promise<{ count: number }>>(),
+  /** The two payout ledgers: replaced per test with an in-memory fake that keeps the guarded-update semantics. */
+  ledger: { db: null as any }, // eslint-disable-line @typescript-eslint/no-explicit-any
 }));
 
 vi.mock('@/lib/prisma', () => ({
   prisma: {
     practitioner: { findMany: mocks.findMany, update: mocks.update },
-    // The referrer-settlement pass (spec §6.2). Stubbed rather than omitted: a model the route
-    // reads but the mock lacks throws inside the handler, and the route's per-step catch would
-    // then report it as a settlement error — a plausible-looking failure instead of an obvious
-    // one.
-    referralLedgerEntry: {
-      findMany: mocks.ledgerFindMany,
-      updateMany: mocks.ledgerUpdateMany,
-      update: mocks.ledgerUpdate,
+    // The payout ledgers (referral and recruiter): a real in-memory fake, not call-recording stubs,
+    // so the settle claims, the netting transactions and the alert query all run for real.
+    get referralLedgerEntry() {
+      return mocks.ledger.db.referralLedgerEntry;
     },
-    affiliateLedgerEntry: {
-      findMany: mocks.affiliateFindMany,
-      updateMany: mocks.affiliateUpdateMany,
+    get referralBalanceAdjustment() {
+      return mocks.ledger.db.referralBalanceAdjustment;
     },
+    get affiliateLedgerEntry() {
+      return mocks.ledger.db.affiliateLedgerEntry;
+    },
+    get affiliateBalanceAdjustment() {
+      return mocks.ledger.db.affiliateBalanceAdjustment;
+    },
+    $transaction: (fn: (tx: unknown) => Promise<unknown>) => mocks.ledger.db.$transaction(fn),
     feeLedgerEntry: {
       upsert: mocks.feeUpsert,
-      updateMany: mocks.feeUpdateMany,
       findMany: mocks.feeFindMany,
     },
   },
 }));
 
 vi.mock('@/lib/whop', () => ({
+  WhopNotConfigured: class WhopNotConfigured extends Error {},
   getIdentityProfile: mocks.getIdentityProfile,
   getPayoutStatus: mocks.getPayoutStatus,
   isWhopPlatformsReady: mocks.isWhopPlatformsReady,
   // ⚠️ NEVER the real one. This test must not be one refactor away from posting a live transfer.
   createTransfer: mocks.createTransfer,
+  findTransferForLedgerEntry: mocks.findTransfer,
   getPaymentFees: mocks.getPaymentFees,
 }));
 
@@ -90,14 +93,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   delete process.env.CRON_SECRET;
   mocks.isWhopPlatformsReady.mockReturnValue(true);
-  mocks.affiliateFindMany.mockResolvedValue([]);
-  mocks.affiliateUpdateMany.mockResolvedValue({ count: 0 });
-  mocks.ledgerFindMany.mockResolvedValue([]);
-  mocks.ledgerUpdateMany.mockResolvedValue({ count: 0 });
-  mocks.ledgerUpdate.mockResolvedValue({});
+  mocks.ledger.db = fakeLedgerDb();
   mocks.feeUpsert.mockResolvedValue({});
-  mocks.feeUpdateMany.mockResolvedValue({ count: 0 });
   mocks.createTransfer.mockResolvedValue({ transferId: 'tr_test' });
+  mocks.findTransfer.mockResolvedValue(null);
   mocks.feeFindMany.mockResolvedValue([]);
   mocks.getPaymentFees.mockResolvedValue([]);
   mocks.update.mockResolvedValue({});
@@ -265,131 +264,6 @@ describe('whop-reconcile — honest reporting', () => {
   });
 });
 
-describe('referrer settlement pass (spec v1.4 §6.2, rulings 6 and 7)', () => {
-  /**
-   * ⚠️ The ledger mocks default to EMPTY in `beforeEach`, so every other test in this file passes
-   * whether or not the settlement pass does anything at all. These exercise it directly.
-   */
-
-  const payable = {
-    id: 'led_1',
-    referrerShareUsdCents: 2_000,
-    referrerPractitionerId: 'prac_x',
-    referrerPractitioner: { whopCompanyId: 'biz_x', whopPayoutsEnabled: true },
-  };
-
-  it('does NOT call Whop while payouts are blocked, and says why in the response', async () => {
-    delete process.env.WHOP_TRANSFERS_ENABLED;
-    mocks.ledgerFindMany.mockImplementation(async (args) => {
-      const where = (args as { where?: { state?: string } })?.where;
-      return where?.state === 'PAYABLE' ? [payable] : [];
-    });
-
-    const res = await GET(req());
-    const body = (await res.json()) as { referrals: { blocked: string | null; settled: number } };
-
-    expect(mocks.createTransfer).not.toHaveBeenCalled();
-    expect(body.referrals.blocked).toMatch(/verif/i);
-    expect(body.referrals.settled).toBe(0);
-  });
-
-  it('records the blocked debt rather than leaving it merely unpaid', async () => {
-    delete process.env.WHOP_TRANSFERS_ENABLED;
-    mocks.ledgerFindMany.mockImplementation(async (args) => {
-      const where = (args as { where?: { state?: string } })?.where;
-      return where?.state === 'PAYABLE' ? [payable] : [];
-    });
-
-    await GET(req());
-
-    const upsert = mocks.feeUpsert.mock.calls[0]?.[0] as { create: Record<string, unknown> };
-    expect(upsert.create).toMatchObject({
-      kind: 'REFERRER_TRANSFER',
-      status: 'BLOCKED',
-      amountUsdCents: 2_000,
-    });
-  });
-
-  it('transfers in DOLLARS once the operator switches payouts on', async () => {
-    process.env.WHOP_TRANSFERS_ENABLED = 'true';
-    process.env.WHOP_PARENT_COMPANY_ID = 'biz_parent';
-    process.env.WHOP_COMPANY_API_KEY = 'apik_x';
-    process.env.WHOP_TRANSFER_FEE_BPS = '0';
-    mocks.ledgerFindMany.mockImplementation(async (args) => {
-      const where = (args as { where?: { state?: string } })?.where;
-      return where?.state === 'PAYABLE' ? [payable] : [];
-    });
-    // Claim-then-call: the conditional write must report a claim or nothing is sent.
-    mocks.feeUpdateMany.mockResolvedValue({ count: 1 });
-
-    const res = await GET(req());
-    const body = (await res.json()) as { referrals: { settled: number } };
-
-    // 20, not 2000. `application_fee_amount` next door is in CENTS; this endpoint is in DOLLARS.
-    expect(mocks.createTransfer).toHaveBeenCalledWith({
-      originId: 'biz_parent',
-      destinationId: 'biz_x',
-      amountUsdDollars: 20,
-    });
-    expect(body.referrals.settled).toBe(1);
-
-    delete process.env.WHOP_TRANSFERS_ENABLED;
-    delete process.env.WHOP_PARENT_COMPANY_ID;
-    delete process.env.WHOP_COMPANY_API_KEY;
-    delete process.env.WHOP_TRANSFER_FEE_BPS;
-  });
-});
-
-describe('stuck recruiter payouts are LOUD (lane L2b)', () => {
-  const stuckRow = (over: Record<string, unknown> = {}) => ({
-    id: 'afl_stuck',
-    state: 'SENDING',
-    recruiterPractitionerId: 'prac_R',
-    shareUsdCents: 300,
-    reversedUsdCents: 0,
-    transferUsdCents: 300,
-    lastError: null,
-    updatedAt: new Date('2026-12-01T00:00:00Z'),
-    ...over,
-  });
-
-  it('a clean ledger leaves ok true and reports no stuck rows', async () => {
-    const res = await GET(req());
-    const body = (await res.json()) as { ok: boolean; affiliatesStuck: string[] };
-    expect(res.status).toBe(200);
-    expect(body.affiliatesStuck).toEqual([]);
-  });
-
-  it('a stuck SENDING row makes the cron fail (207, ok false) and names the row id', async () => {
-    mocks.affiliateFindMany.mockImplementation(async (args) => {
-      const w = (args as { where?: { OR?: unknown } })?.where;
-      return w?.OR ? [stuckRow()] : [];
-    });
-    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
-    const res = await GET(req());
-    const body = (await res.json()) as { ok: boolean; errors: string[]; affiliatesStuck: string[] };
-    expect(res.status).toBe(207);
-    expect(body.ok).toBe(false);
-    expect(body.affiliatesStuck).toEqual(['afl_stuck']);
-    expect(body.errors.join(' ')).toContain('afl_stuck');
-    expect(spy).toHaveBeenCalledWith(expect.stringContaining('AFFILIATE PAYOUTS STUCK'), expect.stringContaining('afl_stuck'));
-    spy.mockRestore();
-  });
-
-  it('is reported even while payouts are switched off', async () => {
-    delete process.env.WHOP_TRANSFERS_ENABLED;
-    mocks.affiliateFindMany.mockImplementation(async (args) =>
-      (args as { where?: { OR?: unknown } })?.where?.OR ? [stuckRow({ state: 'HELD', lastError: 'fetch failed' })] : [],
-    );
-    vi.spyOn(console, 'error').mockImplementation(() => {});
-    const res = await GET(req());
-    const body = (await res.json()) as { ok: boolean; errors: string[] };
-    expect(body.ok).toBe(false);
-    expect(body.errors.join(' ')).toMatch(/HELD/);
-    vi.restoreAllMocks();
-  });
-});
-
 describe('fee reconciliation (spec §7)', () => {
   it('agrees when Whop’s application_fee matches what we recorded collecting', async () => {
     mocks.feeFindMany.mockResolvedValue([
@@ -432,5 +306,179 @@ describe('fee reconciliation (spec §7)', () => {
     const body = (await res.json()) as { feeMismatches: { observedUsdCents: number }[] };
 
     expect(body.feeMismatches[0]?.observedUsdCents).toBe(0);
+  });
+});
+
+const OLD = new Date(Date.UTC(2026, 0, 1)); // far outside the 30-minute window
+const ENVS = ['WHOP_TRANSFERS_ENABLED', 'WHOP_TRANSFERS_ALLOWLIST', 'WHOP_PARENT_COMPANY_ID', 'WHOP_COMPANY_API_KEY'];
+const enableTransfers = () => {
+  process.env.WHOP_TRANSFERS_ENABLED = 'true';
+  process.env.WHOP_PARENT_COMPANY_ID = 'biz_parent';
+  process.env.WHOP_COMPANY_API_KEY = 'apik_x';
+};
+const referralRow = (over: Record<string, unknown> = {}) => ({
+  id: 'led_1',
+  bookingIntentId: 'bi_1',
+  referrerPractitionerId: 'prac_x',
+  servingPractitionerId: 'prac_y',
+  grossUsdCents: 10_000,
+  referrerShareUsdCents: 2_000,
+  createdAt: OLD,
+  ...over,
+});
+const affiliateRow = (over: Record<string, unknown> = {}) => ({
+  id: 'afl_1',
+  bookingIntentId: 'bi_2',
+  recruiterPractitionerId: 'prac_R',
+  recruitedPractitionerId: 'prac_y',
+  grossUsdCents: 10_000,
+  bps: 300,
+  shareUsdCents: 300,
+  holdDays: 0,
+  holdUntil: OLD,
+  createdAt: OLD,
+  ...over,
+});
+const wallets = {
+  prac_x: { whopCompanyId: 'biz_x', whopPayoutsEnabled: true },
+  prac_R: { whopCompanyId: 'biz_R', whopPayoutsEnabled: true },
+};
+
+describe('share transfers: the hourly sweep is the RETRY BACKSTOP (spec v1.4 §6.2, v1.5 §5)', () => {
+  beforeEach(() => {
+    for (const k of ENVS) delete process.env[k];
+  });
+  afterEach(() => {
+    for (const k of ENVS) delete process.env[k];
+    vi.restoreAllMocks();
+  });
+
+  it('does NOT call Whop while payouts are switched off, and says why in the response; nothing is alerted either', async () => {
+    mocks.ledger.db = fakeLedgerDb({ practitioners: wallets, referral: { entries: [referralRow()] }, affiliate: { entries: [affiliateRow()] } });
+
+    const res = await GET(req());
+    const body = (await res.json()) as {
+      ok: boolean;
+      referrals: { blocked: string | null; settled: number };
+      affiliates: { blocked: string | null };
+      transfersUnconfirmed: unknown[];
+    };
+
+    expect(mocks.createTransfer).not.toHaveBeenCalled();
+    expect(body.referrals.blocked).toBe('skipped: transfers disabled');
+    expect(body.affiliates.blocked).toBe('skipped: transfers disabled');
+    expect(body.referrals.settled).toBe(0);
+    expect(body.transfersUnconfirmed).toEqual([]);
+    expect(res.status).toBe(200);
+  });
+
+  it('transfers in DOLLARS, in full, once the operator switches payouts on (both ledgers)', async () => {
+    enableTransfers();
+    mocks.ledger.db = fakeLedgerDb({ practitioners: wallets, referral: { entries: [referralRow()] }, affiliate: { entries: [affiliateRow()] } });
+
+    const res = await GET(req());
+    const body = (await res.json()) as { ok: boolean; referrals: { settled: number }; affiliates: { settled: number } };
+
+    // 20 and 3, not 2000 and 300. `application_fee_amount` next door is in CENTS; this endpoint is in DOLLARS.
+    expect(mocks.createTransfer).toHaveBeenCalledWith({
+      originId: 'biz_parent',
+      destinationId: 'biz_x',
+      amountUsdDollars: 20,
+      metadata: { kind: 'referral', ledger_entry_id: 'led_1', booking_intent_id: 'bi_1' },
+      idempotenceKey: 'led_1',
+    });
+    expect(mocks.createTransfer).toHaveBeenCalledWith({
+      originId: 'biz_parent',
+      destinationId: 'biz_R',
+      amountUsdDollars: 3,
+      metadata: { kind: 'affiliate', ledger_entry_id: 'afl_1', booking_intent_id: 'bi_2' },
+      idempotenceKey: 'afl_1',
+    });
+    expect(body.referrals.settled).toBe(1);
+    expect(body.affiliates.settled).toBe(1);
+    expect(body.ok).toBe(true);
+    expect(res.status).toBe(200);
+  });
+
+  it('a row whose payee became payable later is settled by the sweep (the backstop for rows the webhook could not pay)', async () => {
+    enableTransfers();
+    const w = { prac_R: { whopCompanyId: null as string | null, whopPayoutsEnabled: false } };
+    mocks.ledger.db = fakeLedgerDb({ practitioners: w, affiliate: { entries: [affiliateRow()] } });
+    await GET(req());
+    expect(mocks.createTransfer).not.toHaveBeenCalled();
+    w.prac_R = { whopCompanyId: 'biz_R', whopPayoutsEnabled: true };
+    await GET(req());
+    expect(mocks.createTransfer).toHaveBeenCalledTimes(1);
+  });
+
+  it('a transfer that fails leaves the row unconfirmed: the cron returns 207, names the row id and logs it loudly', async () => {
+    enableTransfers();
+    mocks.createTransfer.mockRejectedValue(new Error('fetch failed'));
+    mocks.ledger.db = fakeLedgerDb({ practitioners: wallets, affiliate: { entries: [affiliateRow()] } });
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+
+    const res = await GET(req());
+    const body = (await res.json()) as { ok: boolean; errors: string[]; transfersUnconfirmed: Array<{ ledger: string; id: string }> };
+
+    expect(res.status).toBe(207);
+    expect(body.ok).toBe(false);
+    expect(body.transfersUnconfirmed).toEqual([{ ledger: 'affiliate', id: 'afl_1' }]);
+    expect(body.errors.join(' ')).toContain('afl_1');
+    expect(body.errors.join(' ')).toMatch(/no confirmed receipt 30\+ minutes/);
+    expect(spy).toHaveBeenCalledWith(expect.stringContaining('SHARE TRANSFERS WITHOUT A CONFIRMED RECEIPT'), expect.stringContaining('afl_1'));
+  });
+
+  it('a row that is only minutes old is not an alert yet', async () => {
+    enableTransfers();
+    mocks.createTransfer.mockRejectedValue(new Error('fetch failed'));
+    mocks.ledger.db = fakeLedgerDb({ practitioners: wallets, referral: { entries: [referralRow({ createdAt: new Date() })] } });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    const res = await GET(req());
+    const body = (await res.json()) as { transfersUnconfirmed: unknown[] };
+    expect(body.transfersUnconfirmed).toEqual([]);
+    expect(res.status).toBe(200);
+  });
+
+  it('a payee who cannot receive money yet is not an alert (the unclaimed-share window is not a failure)', async () => {
+    enableTransfers();
+    mocks.ledger.db = fakeLedgerDb({
+      practitioners: { prac_x: { whopCompanyId: null, whopPayoutsEnabled: false } },
+      referral: { entries: [referralRow({ state: 'HELD' }), referralRow({ id: 'led_2', bookingIntentId: 'bi_9' })] },
+    });
+    const res = await GET(req());
+    const body = (await res.json()) as { transfersUnconfirmed: unknown[] };
+    expect(body.transfersUnconfirmed).toEqual([]);
+    expect(res.status).toBe(200);
+  });
+
+  it('the allowlist is honoured by the sweep: a payee outside it is neither paid nor alerted', async () => {
+    enableTransfers();
+    process.env.WHOP_TRANSFERS_ALLOWLIST = 'prac_R';
+    mocks.ledger.db = fakeLedgerDb({ practitioners: wallets, referral: { entries: [referralRow()] }, affiliate: { entries: [affiliateRow()] } });
+    const res = await GET(req());
+    const body = (await res.json()) as { transfersUnconfirmed: unknown[] };
+    expect(mocks.createTransfer).toHaveBeenCalledTimes(1);
+    expect(mocks.createTransfer).toHaveBeenCalledWith(expect.objectContaining({ destinationId: 'biz_R' }));
+    expect(body.transfersUnconfirmed).toEqual([]);
+  });
+
+  it('an ambiguous attempt is looked up in Whop on the next run and settled from the found transfer', async () => {
+    enableTransfers();
+    mocks.createTransfer.mockRejectedValueOnce(new Error('The operation was aborted due to timeout'));
+    mocks.ledger.db = fakeLedgerDb({ practitioners: wallets, affiliate: { entries: [affiliateRow({ createdAt: new Date() })] } });
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    await GET(req());
+    expect(mocks.ledger.db.affiliateRows[0]).toMatchObject({ state: 'ACCRUED', transferAttempts: 1 });
+
+    mocks.findTransfer.mockResolvedValue({ transferId: 'tr_found', amountUsdDollars: 3 });
+    mocks.ledger.db.affiliateRows[0].nextAttemptAt = new Date(0); // the backoff has passed
+    await GET(req());
+    expect(mocks.createTransfer).toHaveBeenCalledTimes(1);
+    expect(mocks.ledger.db.affiliateRows[0]).toMatchObject({ state: 'SETTLED', whopTransferId: 'tr_found' });
+  });
+
+  it('exports maxDuration so a sweep of transfers is not cut off', async () => {
+    const mod = await import('@/app/api/cron/whop-reconcile/route');
+    expect(mod.maxDuration).toBeGreaterThanOrEqual(60);
   });
 });

@@ -33,7 +33,6 @@ const Z = 'prac_Z'; // recruited by someone else
 const OTHER = 'prac_other';
 const NOW = new Date(Date.UTC(2026, 11, 1));
 const PAST = new Date(Date.UTC(2026, 10, 1));
-const FUTURE = new Date(Date.UTC(2027, 1, 1));
 
 type P = { id: string; displayName: string; slug: string; recruitedById: string | null; recruitedAt: Date | null; archivedAt: Date | null; listed: boolean; email: string };
 const PEOPLE: P[] = [
@@ -138,7 +137,7 @@ afterEach(() => {
 
 async function section(practitionerId: string, isOwner: boolean) {
   const { RecruitedPractitionersSection } = await import('@/components/practitioners/RecruitedPractitionersSection');
-  const el = await RecruitedPractitionersSection({ practitionerId, isOwner, db: state.db, now: NOW });
+  const el = await RecruitedPractitionersSection({ practitionerId, isOwner, db: state.db });
   return el === null ? null : renderToStaticMarkup(el);
 }
 
@@ -163,40 +162,42 @@ describe('"Practitioners you brought in" — the recruiter’s card', () => {
     expect(html).not.toContain('Rae Recruiter');
   });
 
-  it('shows pending / accrued / paid exactly as the ledger records them, net of refunds', async () => {
+  it('shows accrued / paid exactly as the ledger records them, net of refunds; there is no pending (hold) figure', async () => {
     LEDGER = [
-      row({ state: 'ACCRUED', holdUntil: FUTURE, shareUsdCents: 300 }), // pending $3.00
-      row({ state: 'ACCRUED', holdUntil: PAST, shareUsdCents: 300, reversedUsdCents: 99 }), // accrued $2.01
-      row({ state: 'HELD', shareUsdCents: 300 }), // accrued $3.00
+      row({ state: 'ACCRUED', shareUsdCents: 300 }), // accrued $3.00
+      row({ state: 'ACCRUED', shareUsdCents: 300, reversedUsdCents: 99 }), // accrued $2.01
+      row({ state: 'SENDING', shareUsdCents: 300, transferUsdCents: 300 }), // in flight: still accrued $3.00
       row({ state: 'SETTLED', shareUsdCents: 300, transferUsdCents: 300 }), // paid $3.00
       row({ state: 'REVERSED', shareUsdCents: 300, reversedUsdCents: 300 }), // nothing
     ];
     const html = (await section(R, true))!;
-    expect(html).toMatch(/data-testid="affiliate-pending">\$3\.00</);
-    expect(html).toMatch(/data-testid="affiliate-accrued">\$5\.01</);
+    expect(html).toMatch(/data-testid="affiliate-accrued">\$8\.01</);
     expect(html).toMatch(/data-testid="affiliate-settled">\$3\.00</);
+    expect(html).not.toContain('affiliate-pending');
+    expect(html).not.toMatch(/>Pending</);
   });
 
-  it('L2a: always says payouts are net of Whop’s transfer fee, and shows gross / fee / net only when recorded', async () => {
+  it('says the share is credited to the Whop balance as each payment clears, and mentions NO transfer fee anywhere', async () => {
     LEDGER = [row({ state: 'SETTLED', shareUsdCents: 300, transferUsdCents: 300 })];
     let html = (await section(R, true))!;
-    expect(html).toContain('Payouts are net of Whop&#x27;s transfer fee.');
+    expect(html).toContain('credited to your Whop balance as each client payment clears');
+    expect(html).toContain('Withdrawing from your Whop balance is subject to Whop&#x27;s own terms');
+    expect(html).not.toMatch(/transfer fee|net of whop|affiliate-fee-note|affiliate-paid-fee/i);
     expect(html).not.toContain('affiliate-paid-breakdown');
 
     LEDGER = [
       row({
         state: 'SETTLED',
         shareUsdCents: 1234,
-        transferUsdCents: 1198,
+        transferUsdCents: 1234,
         grossShareUsdCents: 1234,
-        transferFeeUsdCents: 36,
-        netPaidUsdCents: 1198,
+        netPaidUsdCents: 1234,
       }),
     ];
     html = (await section(R, true))!;
     expect(html).toMatch(/data-testid="affiliate-paid-gross">\$12\.34</);
-    expect(html).toMatch(/data-testid="affiliate-paid-fee">\$0\.36</);
-    expect(html).toMatch(/data-testid="affiliate-paid-net">\$11\.98</);
+    expect(html).toMatch(/data-testid="affiliate-paid-net">\$12\.34</);
+    expect(html).not.toMatch(/transfer fee/i);
   });
 
   it('says payouts are not active while WHOP_TRANSFERS_ENABLED is not true, and stops saying it when it is', async () => {
@@ -208,10 +209,10 @@ describe('"Practitioners you brought in" — the recruiter’s card', () => {
     expect(await section(R, true)).not.toContain('payouts are not active');
   });
 
-  it('lane R2: says recruiters are paid as client payments come in, with NO 90-day / hold-period wording', async () => {
+  it('says recruiters are paid as client payments clear, with NO 90-day / hold-period wording', async () => {
     LEDGER = [row({})];
     const html = (await section(R, true))!;
-    expect(html).toMatch(/data-testid="affiliate-timing-note">[^<]*paid as client payments come in once payouts are live/);
+    expect(html).toMatch(/data-testid="affiliate-timing-note">[^<]*credited to your Whop balance as each client payment clears/);
     expect(html).not.toMatch(/hold period|90 days|90-day|inside the hold/i);
   });
 
@@ -247,24 +248,22 @@ describe('"Practitioners you brought in" — the recruiter’s card', () => {
     expect(html).toMatch(/data-testid="affiliate-refund-open">\$1\.20</);
   });
 
-  it('lane R2: the paid breakdown shows gross, adjusted-for-a-refund, fee and net, and they add up', async () => {
+  it('the paid breakdown shows the share, what a refund took off it, and what was credited; they add up', async () => {
     LEDGER = [
       row({
         state: 'SETTLED',
         shareUsdCents: 300,
-        transferUsdCents: 174,
+        transferUsdCents: 180,
         grossShareUsdCents: 300,
         adjustmentAppliedUsdCents: 120,
-        transferFeeUsdCents: 6,
-        netPaidUsdCents: 174,
+        netPaidUsdCents: 180,
       }),
     ];
     const html = (await section(R, true))!;
     expect(html).toMatch(/data-testid="affiliate-paid-gross">\$3\.00</);
     expect(html).toMatch(/data-testid="affiliate-paid-adjusted">\$1\.20</);
-    expect(html).toMatch(/data-testid="affiliate-paid-fee">\$0\.06</);
-    expect(html).toMatch(/data-testid="affiliate-paid-net">\$1\.74</);
-    expect(300 - 120 - 6).toBe(174);
+    expect(html).toMatch(/data-testid="affiliate-paid-net">\$1\.80</);
+    expect(300 - 120).toBe(180);
   });
 
   it('is the owner’s alone: an admin looking at somebody else’s page gets nothing, and no query runs', async () => {
@@ -316,12 +315,12 @@ describe('the RECRUITED practitioner’s dashboard exposes no affiliate amounts 
     PEOPLE.push({ id: 'prac_Z2', displayName: 'Zoe Two', slug: 'zoe-two', recruitedById: Y, recruitedAt: NOW, archivedAt: null, listed: true, email: 'zoe@private.test' });
     LEDGER = [
       row({ recruiterPractitionerId: R, recruitedPractitionerId: Y, shareUsdCents: 700 }), // generated BY Y: R's money
-      row({ recruiterPractitionerId: Y, recruitedPractitionerId: 'prac_Z2', shareUsdCents: 300, holdUntil: FUTURE }),
+      row({ recruiterPractitionerId: Y, recruitedPractitionerId: 'prac_Z2', shareUsdCents: 300 }),
     ];
     try {
       const html = (await section(Y, true))!;
       expect(html).toContain('Zoe Two');
-      expect(html).toMatch(/data-testid="affiliate-pending">\$3\.00</);
+      expect(html).toMatch(/data-testid="affiliate-accrued">\$3\.00</);
       expect(html).not.toContain('7.00');
       expect(html).not.toMatch(/recruited you|brought you in/i);
     } finally {
@@ -346,31 +345,32 @@ describe('the RECRUITED practitioner’s dashboard exposes no affiliate amounts 
 
 describe('summarizeEntries', () => {
   const e = (over: Partial<L> & Record<string, unknown>) => ({ ...row({}), ...over });
-  it('breaks out HELD; a refund of an already-paid share is NOT an "owed back" figure on the row (it is a debit)', () => {
-    const t = summarizeEntries(
-      [
-        e({ state: 'SETTLED', transferUsdCents: 300, reversedUsdCents: 150 }),
-        e({ state: 'HELD', shareUsdCents: 300 }),
-        e({ state: 'SENDING', transferUsdCents: 300, reversedUsdCents: 100 }),
-      ],
-      NOW,
-    );
+  it('a SENDING row is accrued at its claimed amount; a refund of an already-paid share is NOT an "owed back" figure on the row (it is a debit)', () => {
+    const t = summarizeEntries([
+      e({ state: 'SETTLED', transferUsdCents: 300, reversedUsdCents: 150 }),
+      e({ state: 'ACCRUED', shareUsdCents: 300 }),
+      e({ state: 'SENDING', transferUsdCents: 300, reversedUsdCents: 100 }),
+    ]);
     expect(t.settledUsdCents).toBe(300);
-    expect(t.heldUsdCents).toBe(300);
-    expect(t.accruedUsdCents).toBe(300 + 200);
+    expect(t.accruedUsdCents).toBe(300 + 300);
     expect('recoveryOwedUsdCents' in t).toBe(false);
+    expect('pendingUsdCents' in t).toBe(false);
+    expect('heldUsdCents' in t).toBe(false);
   });
 
-  it('lane R2: debt relief already netted against an unpaid row is not shown as still owed', () => {
-    const t = summarizeEntries([e({ state: 'ACCRUED', holdUntil: PAST, shareUsdCents: 300, adjustmentAppliedUsdCents: 120 })], NOW);
+  it('a claimed row waiting to retry is accrued at its fixed amount, after the debt relief already netted', () => {
+    const t = summarizeEntries([e({ state: 'ACCRUED', shareUsdCents: 300, transferUsdCents: 180, adjustmentAppliedUsdCents: 120 })]);
     expect(t.accruedUsdCents).toBe(180);
-    expect(t.pendingUsdCents).toBe(0);
+  });
+
+  it('an unclaimed row nets nothing off: the share after refunds is what is owed', () => {
+    const t = summarizeEntries([e({ state: 'ACCRUED', shareUsdCents: 300, reversedUsdCents: 120 })]);
+    expect(t.accruedUsdCents).toBe(180);
   });
 
   it('lane R2: a share swallowed whole by debits is SETTLED with nothing transferred', () => {
     const t = summarizeEntries(
-      [e({ state: 'SETTLED', transferUsdCents: 0, grossShareUsdCents: 300, adjustmentAppliedUsdCents: 300, transferFeeUsdCents: 0, netPaidUsdCents: 0 })],
-      NOW,
+      [e({ state: 'SETTLED', transferUsdCents: 0, grossShareUsdCents: 300, adjustmentAppliedUsdCents: 300, netPaidUsdCents: 0 })],
     );
     expect(t.settledUsdCents).toBe(0);
     expect(t.paidGrossUsdCents).toBe(300);
@@ -401,7 +401,7 @@ describe('admin: read-only recruiter links and affiliate totals per recruiter', 
       },
       affiliateLedgerEntry: {
         findMany: async () => [
-          row({ state: 'ACCRUED', holdUntil: FUTURE }),
+          row({ state: 'ACCRUED' }),
           row({ state: 'SETTLED', transferUsdCents: 300 }),
           row({ state: 'SETTLED', transferUsdCents: 300, reversedUsdCents: 100 }),
         ],
@@ -414,13 +414,15 @@ describe('admin: read-only recruiter links and affiliate totals per recruiter', 
       },
     };
     const { AffiliateLedgerSection } = await import('@/app/admin/commercial-settings/AffiliateLedgerSection');
-    const html = renderToStaticMarkup(await AffiliateLedgerSection({ now: NOW }));
+    const html = renderToStaticMarkup(await AffiliateLedgerSection());
     expect(html).toContain('Recruiting affiliates');
     expect(html).toContain('Rae Recruiter');
     expect(html).toContain('Payouts are off');
     // R brought in Y, W and the archived one (3); OTHER brought in Z (1).
     expect(html).toMatch(/Rae Recruiter[\s\S]*?<td[^>]*>3<\/td>/);
-    expect(html).toContain('$3.00'); // pending
+    expect(html).toContain('$3.00'); // accrued
+    expect(html).not.toMatch(/>Pending<|>Held</);
+    expect(html).not.toMatch(/transfer fee/i);
     expect(html).toContain('$6.00'); // paid
     expect(html).toContain('Refund balance (open)');
     expect(html).toMatch(/data-testid="affiliate-refund-balance-total"[^>]*>[^<]*<strong>\$1\.00<\/strong>/); // read-only total
@@ -429,35 +431,11 @@ describe('admin: read-only recruiter links and affiliate totals per recruiter', 
     expect(html).not.toMatch(/<form|<button|<input/);
   });
 
-  it('lists stuck payout rows (HELD, SENDING for over an hour) with the reconcile warning', async () => {
-    const old = new Date(NOW.getTime() - 3 * 3_600_000);
-    state.db = {
-      practitioner: {
-        findMany: async (args: any) =>
-          args.where.id
-            ? PEOPLE.filter((p) => args.where.id.in.includes(p.id)).map((p) => ({ id: p.id, displayName: p.displayName, slug: p.slug }))
-            : [],
-      },
-      affiliateLedgerEntry: {
-        findMany: async () => [
-          { ...row({ state: 'SENDING', transferUsdCents: 300 }), id: 'afl_old', updatedAt: old, lastError: null },
-          { ...row({ state: 'SENDING', transferUsdCents: 300 }), id: 'afl_fresh', updatedAt: NOW, lastError: null },
-          { ...row({ state: 'HELD' }), id: 'afl_held', updatedAt: old, lastError: 'fetch failed' },
-          { ...row({ state: 'ACCRUED' }), id: 'afl_fine', updatedAt: old, lastError: null },
-        ],
-      },
-      affiliateBalanceAdjustment: { findMany: async () => [] },
-    };
-    const { AffiliateLedgerSection } = await import('@/app/admin/commercial-settings/AffiliateLedgerSection');
-    const html = renderToStaticMarkup(await AffiliateLedgerSection({ now: NOW }));
-    expect(html).toContain('2 payout rows need a person');
-    expect(html).toContain('afl_old');
-    expect(html).toContain('afl_held');
-    expect(html).toContain('fetch failed');
-    expect(html).not.toContain('afl_fresh');
-    expect(html).not.toContain('afl_fine');
-    expect(html).toContain('affiliate_ledger_entry_id');
-    expect(html).not.toMatch(/<form|<button|<input/);
+  it('the share-transfer alerts are a separate section, listed from the shared finder (see tests/ledger-transfer.test.ts)', () => {
+    const sec = readFileSync(join(__dirname, '..', 'src/app/admin/commercial-settings/AffiliateLedgerSection.tsx'), 'utf8');
+    expect(sec).not.toMatch(/SENDING|HELD|STUCK_SENDING/);
+    const page = readFileSync(join(__dirname, '..', 'src/app/admin/commercial-settings/page.tsx'), 'utf8');
+    expect(page).toMatch(/<TransfersNeedingAttention \/>/);
   });
 
   it('is rendered only inside the ADMIN-gated page, and carries no write path of its own', () => {

@@ -449,6 +449,7 @@ describe('referral notices (spec v1.4 §5.5 / R10, operator ruling 7 / R15)', ()
       state: 'HELD',
       notifiedAt: null,
       referrerShareUsdCents: 2_000,
+      reversedUsdCents: 0,
       holdExpiresAt: new Date('2026-04-01T00:00:00Z'),
       referrerPractitioner: { slug: 'dr-x', user: { email: 'x@example.com' } },
       servingPractitioner: { displayName: 'Dr Y' },

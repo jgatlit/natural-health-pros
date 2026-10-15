@@ -60,7 +60,13 @@ const mocks = vi.hoisted(() => ({
   intentFindFirst: vi.fn<(args: unknown) => Promise<unknown>>(),
   touchFindMany: vi.fn<(args: unknown) => Promise<unknown[]>>(),
   ledgerFindFirst: vi.fn<(args: unknown) => Promise<unknown>>(),
-  ledgerUpdate: vi.fn<(args: unknown) => Promise<unknown>>(),
+  // The referral ledger's guarded claim / reversal delegates, and its refund-debit table.
+  referralFindUnique: vi.fn<(args: unknown) => Promise<unknown>>(),
+  referralFindMany: vi.fn<(args: unknown) => Promise<unknown[]>>(),
+  referralUpdateMany: vi.fn<(args: unknown) => Promise<{ count: number }>>(),
+  refAdjCreateMany: vi.fn<(args: unknown) => Promise<{ count: number }>>(),
+  refAdjFindMany: vi.fn<(args: unknown) => Promise<unknown[]>>(),
+  refAdjUpdateMany: vi.fn<(args: unknown) => Promise<{ count: number }>>(),
   // Spec v1.5 section 5: the recruiting-affiliate ledger (lane L2b). Present for the reason above.
   affiliateUpsert: vi.fn<(args: unknown) => Promise<unknown>>(),
   affiliateFindUnique: vi.fn<(args: unknown) => Promise<unknown>>(),
@@ -116,7 +122,14 @@ vi.mock('@/lib/prisma', () => {
     referralLedgerEntry: {
       upsert: mocks.referralLedgerUpsert,
       findFirst: mocks.ledgerFindFirst,
-      update: mocks.ledgerUpdate,
+      findUnique: mocks.referralFindUnique,
+      findMany: mocks.referralFindMany,
+      updateMany: mocks.referralUpdateMany,
+    },
+    referralBalanceAdjustment: {
+      createMany: mocks.refAdjCreateMany,
+      findMany: mocks.refAdjFindMany,
+      updateMany: mocks.refAdjUpdateMany,
     },
     affiliateLedgerEntry: {
       upsert: mocks.affiliateUpsert,
@@ -205,7 +218,12 @@ beforeEach(() => {
   mocks.intentFindFirst.mockResolvedValue(null);
   mocks.touchFindMany.mockResolvedValue([]);
   mocks.ledgerFindFirst.mockResolvedValue(null);
-  mocks.ledgerUpdate.mockResolvedValue({});
+  mocks.referralFindUnique.mockResolvedValue(null);
+  mocks.referralFindMany.mockResolvedValue([]);
+  mocks.referralUpdateMany.mockResolvedValue({ count: 1 });
+  mocks.refAdjCreateMany.mockResolvedValue({ count: 1 });
+  mocks.refAdjFindMany.mockResolvedValue([]);
+  mocks.refAdjUpdateMany.mockResolvedValue({ count: 1 });
   mocks.affiliateUpsert.mockResolvedValue(undefined);
   mocks.affiliateFindUnique.mockResolvedValue(null);
   mocks.affiliateUpdateMany.mockResolvedValue({ count: 1 });
@@ -1064,20 +1082,20 @@ describe('payment.succeeded — the referral ledger (stage 3)', () => {
       shareUsdCents: 300,
       state: 'ACCRUED',
       whopPaymentId: 'pay_1',
-      // Lane R2: the recruiter's row takes the AFFILIATE hold (default 0), never the 90-day referral hold.
+      // No hold: the recruiter's row is payable at once, never after the 90-day referral hold.
       holdDays: 0,
     });
-    // ...and with a 0-day hold the row is payable at the instant of payment, not 90 days later.
+    // ...so it is payable at the instant of payment, not 90 days later.
     expect(Math.abs((args.create.holdUntil as Date).getTime() - Date.now())).toBeLessThan(60_000);
     // CREATE-ONLY: a redelivery cannot reset the hold clock or un-settle a paid row.
     expect(args.update).toEqual({});
     expect(errorRecordedOnEvent()).toBe(false);
   });
 
-  it('lane R2: the affiliate hold comes from affiliate_hold_days, the referral hold from referral_hold_days, independently', async () => {
+  it('the recruiter row has NO hold whatever settings say; the referral hold applies only to an unpayable referrer’s HELD row', async () => {
     mocks.settingFindMany.mockResolvedValue([
       { key: 'referral_hold_days', value: '45' },
-      { key: 'affiliate_hold_days', value: '7' },
+      { key: 'affiliate_hold_days', value: '7' }, // a row nothing reads: inert
     ]);
     mocks.feeSnapshotFindUnique.mockResolvedValue({
       attributionOwner: 'NHP',
@@ -1101,11 +1119,11 @@ describe('payment.succeeded — the referral ledger (stage 3)', () => {
 
     const aff = (mocks.affiliateUpsert.mock.calls[0]?.[0] as { create: Record<string, unknown> }).create;
     const ref = (mocks.referralLedgerUpsert.mock.calls[0]?.[0] as { create: Record<string, unknown> }).create;
-    expect(aff.holdDays).toBe(7);
-    expect(ref.holdDays).toBe(45);
+    expect(aff.holdDays).toBe(0);
+    expect(ref).toMatchObject({ state: 'HELD', holdDays: 45 });
   });
 
-  describe('lane R2: the immediate, best-effort settle after accrual', () => {
+  describe('the transfer at clearing: an immediate, best-effort settle after the accrual', () => {
     const recruitedSnapshot = {
       attributionOwner: 'PRACTITIONER',
       isCrossReferral: false,
@@ -1195,7 +1213,52 @@ describe('payment.succeeded — the referral ledger (stage 3)', () => {
       process.env.WHOP_TRANSFERS_ENABLED = 'true';
       await deliver();
       await deliver();
-      await vi.waitFor(() => expect(mocks.affiliateFindMany).toHaveBeenCalledTimes(2));
+      // Each settle reads its due rows and its stale SENDING rows, always scoped to the one row.
+      await vi.waitFor(() => expect(mocks.affiliateFindMany).toHaveBeenCalledTimes(4));
+      for (const call of mocks.affiliateFindMany.mock.calls) {
+        expect((call[0] as { where: Record<string, unknown> }).where).toMatchObject({
+          bookingIntentId: 'int_1',
+          recruiterPractitionerId: 'prac_R',
+        });
+      }
+    });
+
+    it('FLAG ON: a PAYABLE referrer share is settled in the same run too, scoped to the booking and referrer; a HELD one is not', async () => {
+      process.env.WHOP_TRANSFERS_ENABLED = 'true';
+      const referred = {
+        ...recruitedSnapshot,
+        attributionOwner: 'NHP',
+        isCrossReferral: true,
+        nhpFeeUsdCents: 2_000,
+        referrerFeeBps: 2_000,
+        referrerShareUsdCents: 2_000,
+        referrerPractitionerId: 'prac_X',
+        applicationFeeUsdCents: 4_300,
+      };
+      mocks.feeSnapshotFindUnique.mockResolvedValue(referred);
+      mocks.findUnique.mockImplementation(async (args) =>
+        args.where.id === 'prac_X' ? fakePractitioner({ id: 'prac_X', whopCompanyId: 'biz_x', whopPayoutsEnabled: true }) : null,
+      );
+      await deliver();
+      await vi.waitFor(() => expect(mocks.referralFindMany).toHaveBeenCalled());
+      expect((mocks.referralFindMany.mock.calls[0]?.[0] as { where: Record<string, unknown> }).where).toMatchObject({
+        bookingIntentId: 'int_1',
+        referrerPractitionerId: 'prac_X',
+        state: 'PAYABLE',
+      });
+
+      mocks.referralFindMany.mockClear();
+      mocks.findUnique.mockImplementation(async (args) =>
+        args.where.id === 'prac_X' ? fakePractitioner({ id: 'prac_X', whopCompanyId: null }) : null,
+      );
+      await deliver();
+      await new Promise((r) => setTimeout(r, 20));
+      expect(mocks.referralFindMany).not.toHaveBeenCalled();
+    });
+
+    it('the route declares maxDuration, so the platform keeps the function alive for the post-ack transfer', async () => {
+      const mod = await import('@/app/api/whop/webhook/v1/route');
+      expect(mod.maxDuration).toBeGreaterThanOrEqual(30);
     });
   });
 
@@ -1309,31 +1372,54 @@ describe('refund.created — §9 test 17', () => {
 
   it('reverses an unpaid referrer share proportionally and reports no failure', async () => {
     mocks.ledgerFindFirst.mockResolvedValue(unpaidShare);
+    mocks.feeLedgerFindMany.mockResolvedValueOnce([]).mockResolvedValueOnce([{ amountUsdCents: -2_000 }]);
+    mocks.referralFindUnique
+      .mockResolvedValueOnce({ id: 'led_1', state: 'PAYABLE', referrerShareUsdCents: 2_000, reversedUsdCents: 0, transferUsdCents: null })
+      .mockResolvedValueOnce({ id: 'led_1', state: 'PAYABLE', referrerShareUsdCents: 2_000, reversedUsdCents: 2_000, transferUsdCents: null });
 
     const res = await refund();
 
     expect(res.status).toBe(200);
-    expect(mocks.ledgerUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'led_1' }, data: { referrerShareUsdCents: 0 } }),
+    // The stored share is never edited; the compare-and-swap names the state, the total it read and the (absent) claim.
+    expect(mocks.referralUpdateMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { id: 'led_1', state: 'PAYABLE', reversedUsdCents: 0, transferUsdCents: null },
+        data: { reversedUsdCents: 2_000 },
+      }),
     );
+    expect(mocks.refAdjCreateMany).not.toHaveBeenCalled();
     expect(errorRecordedOnEvent()).toBe(false);
   });
 
-  it('REPORTS LOUDLY when the share was already paid out — nothing is clawed back automatically', async () => {
-    mocks.ledgerFindFirst.mockResolvedValue({ ...unpaidShare, state: 'SETTLED' });
+  it('a referrer share whose transfer was already claimed becomes a recorded DEBIT, not a failure for a human', async () => {
+    mocks.ledgerFindFirst.mockResolvedValue({ ...unpaidShare, bookingIntentId: 'int_1', state: 'SETTLED' });
+    mocks.feeLedgerFindMany.mockResolvedValueOnce([]).mockResolvedValueOnce([{ amountUsdCents: -2_000 }]);
+    mocks.referralFindUnique
+      .mockResolvedValueOnce({ id: 'led_1', state: 'SETTLED', referrerShareUsdCents: 2_000, reversedUsdCents: 0, transferUsdCents: 2_000 })
+      .mockResolvedValueOnce({ id: 'led_1', state: 'SETTLED', referrerShareUsdCents: 2_000, reversedUsdCents: 2_000, transferUsdCents: 2_000 });
+    mocks.refAdjFindMany.mockResolvedValue([{ amountUsdCents: 2_000 }]);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
     const res = await refund();
 
     expect(res.status).toBe(200);
-    // Not merely logged: recovering money already sitting in a third party's Whop account needs a
-    // human, so it has to reach /admin/whop-webhooks rather than a console line nobody reads.
-    expect(mocks.ledgerUpdate).not.toHaveBeenCalled();
-    expect(
-      mocks.eventUpdate.mock.calls.some((c) => JSON.stringify(c[0]).includes('ALREADY PAID OUT')),
-    ).toBe(true);
+    const debit = mocks.refAdjCreateMany.mock.calls[0]?.[0] as { data: Record<string, unknown>[]; skipDuplicates: boolean };
+    expect(debit.skipDuplicates).toBe(true);
+    expect(debit.data[0]).toMatchObject({
+      referrerPractitionerId: 'prac_X',
+      sourceLedgerEntryId: 'led_1',
+      amountUsdCents: 2_000,
+      appliedUsdCents: 0,
+      state: 'OPEN',
+      reason: 'REFUND',
+      dedupeKey: 'REFERRAL_REFUND:led_1:2000',
+    });
+    // Handled by policy, so NOT stamped red on /admin/whop-webhooks; but findable in the log.
+    expect(errorRecordedOnEvent()).toBe(false);
+    expect(warn.mock.calls.some((c) => String(c[0]).includes("referrer's transfer was claimed; 2000 cents recorded as a debit"))).toBe(true);
   });
 
-  it('lane R2: a recruiter share already PAID OUT becomes a recorded DEBIT in the same transaction, not a failure for a human', async () => {
+  it('a recruiter share whose transfer was already claimed becomes a recorded DEBIT in the same transaction, not a failure for a human', async () => {
     mocks.feeLedgerFindFirst.mockResolvedValue({ bookingIntentId: 'int_1' });
     mocks.feeSnapshotFindUnique.mockResolvedValue({
       bookingIntentId: 'int_1',
@@ -1344,13 +1430,13 @@ describe('refund.created — §9 test 17', () => {
     // 1st read: the markers that PRECEDE this refund; 2nd: the full set once its own marker is in.
     mocks.feeLedgerFindMany.mockResolvedValueOnce([]).mockResolvedValueOnce([{ amountUsdCents: -300 }]);
     mocks.affiliateFindUnique
-      .mockResolvedValueOnce({ id: 'afl_1', state: 'SETTLED', shareUsdCents: 300, reversedUsdCents: 0 })
+      .mockResolvedValueOnce({ id: 'afl_1', state: 'SETTLED', shareUsdCents: 300, reversedUsdCents: 0, transferUsdCents: 300 })
       .mockResolvedValueOnce({
         id: 'afl_1',
         state: 'SETTLED',
         shareUsdCents: 300,
         reversedUsdCents: 300,
-        adjustmentAppliedUsdCents: null,
+        transferUsdCents: 300,
       });
     mocks.adjFindMany.mockResolvedValue([{ amountUsdCents: 300 }]);
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
@@ -1358,14 +1444,14 @@ describe('refund.created — §9 test 17', () => {
     const res = await refund();
 
     expect(res.status).toBe(200);
-    // The compare-and-swap names the state AND the total it read.
+    // The compare-and-swap names the state, the total it read AND the claim.
     expect(mocks.affiliateUpdateMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { id: 'afl_1', state: 'SETTLED', reversedUsdCents: 0 },
+        where: { id: 'afl_1', state: 'SETTLED', reversedUsdCents: 0, transferUsdCents: 300 },
         data: { reversedUsdCents: 300 },
       }),
     );
-    const debit = (mocks.adjCreateMany.mock.calls[0]?.[0] as { data: Record<string, unknown>[]; skipDuplicates: boolean });
+    const debit = mocks.adjCreateMany.mock.calls[0]?.[0] as { data: Record<string, unknown>[]; skipDuplicates: boolean };
     expect(debit.skipDuplicates).toBe(true);
     expect(debit.data[0]).toMatchObject({
       recruiterPractitionerId: 'prac_R',
@@ -1376,12 +1462,11 @@ describe('refund.created — §9 test 17', () => {
       reason: 'REFUND',
       dedupeKey: 'REFUND:afl_1:300',
     });
-    // Handled by policy, so NOT stamped red on /admin/whop-webhooks; but findable in the log.
     expect(errorRecordedOnEvent()).toBe(false);
     expect(warn.mock.calls.some((c) => String(c[0]).includes('300 cents recorded as a debit'))).toBe(true);
   });
 
-  it('an unpaid affiliate share is reversed quietly: no debit, no failure on the event row', async () => {
+  it('an unclaimed affiliate share is reversed quietly: no debit, no failure on the event row', async () => {
     mocks.feeLedgerFindFirst.mockResolvedValue({ bookingIntentId: 'int_1' });
     mocks.feeSnapshotFindUnique.mockResolvedValue({
       bookingIntentId: 'int_1',
@@ -1391,20 +1476,23 @@ describe('refund.created — §9 test 17', () => {
     });
     mocks.feeLedgerFindMany.mockResolvedValueOnce([]).mockResolvedValueOnce([{ amountUsdCents: -300 }]);
     mocks.affiliateFindUnique
-      .mockResolvedValueOnce({ id: 'afl_1', state: 'ACCRUED', shareUsdCents: 300, reversedUsdCents: 0 })
+      .mockResolvedValueOnce({ id: 'afl_1', state: 'ACCRUED', shareUsdCents: 300, reversedUsdCents: 0, transferUsdCents: null })
       .mockResolvedValueOnce({
         id: 'afl_1',
         state: 'ACCRUED',
         shareUsdCents: 300,
         reversedUsdCents: 300,
-        adjustmentAppliedUsdCents: null,
+        transferUsdCents: null,
       });
 
     await refund();
 
     expect(mocks.adjCreateMany).not.toHaveBeenCalled();
     expect(mocks.affiliateUpdateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { id: 'afl_1', state: { in: ['ACCRUED', 'HELD'] } }, data: { state: 'REVERSED' } }),
+      expect.objectContaining({
+        where: { id: 'afl_1', state: { in: ['ACCRUED', 'HELD'] }, transferUsdCents: null, reversedUsdCents: 300 },
+        data: { state: 'REVERSED' },
+      }),
     );
     expect(errorRecordedOnEvent()).toBe(false);
   });
@@ -1414,7 +1502,7 @@ describe('refund.created — §9 test 17', () => {
 
     await refund();
 
-    expect(mocks.ledgerUpdate).not.toHaveBeenCalled();
+    expect(mocks.referralUpdateMany).not.toHaveBeenCalled();
     expect(errorRecordedOnEvent()).toBe(false);
   });
 

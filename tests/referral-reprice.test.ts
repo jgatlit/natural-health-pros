@@ -82,16 +82,23 @@ describe('repriceReferralRow', () => {
     expect(d).toMatchObject({ v15ChargeUsdCents: 0, nhpExcessUsdCents: 4000, practitionerOverchargedUsdCents: 4000 });
   });
 
-  it('SKIPS a row whose transfer entry is in flight, failed or settled; PENDING / BLOCKED / none are fine', () => {
-    for (const transferStatus of ['SENDING', 'FAILED', 'SETTLED']) {
+  it('SKIPS a row whose transfer is in flight or failed; PENDING / BLOCKED / SETTLED receipts / none are fine', () => {
+    for (const transferStatus of ['SENDING', 'FAILED']) {
       expect(repriceReferralRow(base({ referrerShareUsdCents: 2500, transferStatus }))).toMatchObject({
         action: 'SKIP',
         reason: expect.stringMatching(/IN_FLIGHT_TRANSFER/),
       });
     }
-    for (const transferStatus of ['PENDING', 'BLOCKED', null]) {
+    for (const transferStatus of ['PENDING', 'BLOCKED', 'SETTLED', null]) {
       expect(repriceReferralRow(base({ referrerShareUsdCents: 2500, transferStatus })).action).toBe('REPRICE');
     }
+  });
+
+  it('SKIPS a ledger row that is itself SENDING: a transfer may have left', () => {
+    expect(repriceReferralRow(base({ state: 'SENDING', referrerShareUsdCents: 2500 }))).toMatchObject({
+      action: 'SKIP',
+      reason: expect.stringMatching(/IN_FLIGHT_TRANSFER: the ledger row is SENDING/),
+    });
   });
 
   it('the referrer term end is EXCLUSIVE: exactly anchor + 4 months is outside, one ms before is inside', () => {
@@ -109,6 +116,14 @@ describe('repriceReferralRow', () => {
     const d = repriceReferralRow(base({ state: 'SETTLED', paidAt: new Date(Date.UTC(2027, 1, 1)) }));
     expect(d).toMatchObject({ action: 'FLAG_SETTLED', deltaUsdCents: -2000 });
     expect((d as { reason: string }).reason).toMatch(/2000c already paid/);
+  });
+
+  it('a SETTLED row\u2019s share was already paid out: NHP retains collected minus what was paid, never collected minus a zeroed share', () => {
+    const settled = repriceReferralRow(base({ state: 'SETTLED', paidAt: new Date(Date.UTC(2027, 1, 1)) }));
+    const unpaid = repriceReferralRow(base({ state: 'PAYABLE', paidAt: new Date(Date.UTC(2027, 1, 1)) }));
+    // Past the referrer term, collected 4000, v1.5 would charge 3000 (Plan B) and NHP would keep 3000.
+    expect(settled).toMatchObject({ action: 'FLAG_SETTLED', nhpRetainsUsdCents: 2000, nhpExcessUsdCents: 0 });
+    expect(unpaid).toMatchObject({ action: 'REPRICE', nhpRetainsUsdCents: 4000, nhpExcessUsdCents: 1000 });
   });
 
   it('HELD and EXPIRED_UNCLAIMED rows are re-priced like PAYABLE', () => {

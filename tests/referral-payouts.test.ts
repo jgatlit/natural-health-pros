@@ -4,31 +4,21 @@ import {
   expireLapsedHolds,
   payoutsGuard,
   promoteHeldToPayable,
-  settlePayableShares,
   toTransferDollars,
 } from '@/lib/referral-payouts';
 
 /**
- * PAYING REFERRERS (spec v1.4 §6.2, operator rulings 6 and 7).
- *
- * 🚧 BUILT AND DELIBERATELY NOT ACTIVE. The parent company `biz_Vpj1G2ryNdPCG0` is not
- * business-verified, and Whop refuses every transfer from it with "Please verify your business
- * before transferring funds" (probed 2026-09-19, by rejection, no transfer created). That is an
- * operator/dashboard action, not a code fix, so this ships behind a guard that FAILS CLOSED and
- * names the reason — the moment verification clears it is a switch, not a build.
+ * THE REFERRER PAYOUT GUARD, THE UNIT BOUNDARY AND THE UNCLAIMED-SHARE WINDOW
+ * (spec v1.4 §6.2, operator rulings 6 and 7). The transfer routine itself is exercised for both
+ * ledgers in tests/ledger-transfer.test.ts.
  *
  * ⚠️ THE 100× TRAP. Whop takes DOLLARS everywhere; what differs is where OUR code converts.
  * `createBookingCheckoutConfig` accepts CENTS and divides at the boundary; `createTransfer`
  * accepts DOLLARS and divides nowhere. Both are plain `number`, so reading one signature and
  * assuming the other is off by 100× with no type error — hence a named, tested conversion.
- *
- * ⚠️ WHAT IS STILL UNKNOWN. Transfers to a NON-PARENT destination carry a measured 3% surcharge;
- * child → parent carries none. Whether parent → sibling carries it cannot be measured until the
- * parent is verified. Nothing here assumes either way — the requested amount is recorded so the
- * net can be reconciled against Whop once a real transfer exists.
  */
 
-const ENV = ['WHOP_TRANSFERS_ENABLED', 'WHOP_COMPANY_API_KEY', 'WHOP_PARENT_COMPANY_ID', 'WHOP_TRANSFER_FEE_BPS', 'WHOP_TRANSFER_FEE_MODE'];
+const ENV = ['WHOP_TRANSFERS_ENABLED', 'WHOP_COMPANY_API_KEY', 'WHOP_PARENT_COMPANY_ID'];
 let saved: Record<string, string | undefined>;
 
 beforeEach(() => {
@@ -205,135 +195,6 @@ function fakeDb(seed: {
   };
 }
 
-const payableRow = (over: Record<string, unknown> = {}) => ({
-  id: 'led_1',
-  state: 'PAYABLE',
-  referrerShareUsdCents: 2_000,
-  whopTransferId: null,
-  settledAt: null,
-  referrerPractitionerId: 'payable-ref',
-  referrerPractitioner: { id: 'payable-ref', whopCompanyId: 'biz_ok', whopPayoutsEnabled: true },
-  ...over,
-});
-
-describe('settlePayableShares — blocked', () => {
-  // Whop IS configured here. The block under test is the unverified parent company, not a missing
-  // key — those are different reasons pointing at different fixes, which is why the guard returns
-  // a string rather than a boolean.
-  beforeEach(() => {
-    process.env.WHOP_COMPANY_API_KEY = 'apik_x';
-    process.env.WHOP_PARENT_COMPANY_ID = 'biz_parent';
-  });
-
-  it('does NOT transfer, and reports the blocking reason rather than failing silently', async () => {
-    const db = fakeDb({ payable: [payableRow()] });
-    let called = 0;
-
-    const result = await settlePayableShares(db, {
-      transfer: async () => {
-        called += 1;
-        return { transferId: 'tr_1' };
-      },
-      at: new Date(),
-    });
-
-    expect(called).toBe(0);
-    expect(result.blocked).toBeTruthy();
-    expect(result.blocked).toMatch(/verif/i);
-    expect(result.settled).toBe(0);
-    // The row is untouched — a blocked payout is still owed.
-    expect(db.ledger.get('led_1')!.state).toBe('PAYABLE');
-  });
-
-  it('records the block on the fee ledger so the debt is visible, not merely unpaid', async () => {
-    const db = fakeDb({ payable: [payableRow()] });
-
-    await settlePayableShares(db, { transfer: async () => ({ transferId: 'x' }), at: new Date() });
-
-    const entry = Array.from(db.feeLedger.values())[0];
-    expect(entry).toMatchObject({ kind: 'REFERRER_TRANSFER', status: 'BLOCKED', amountUsdCents: 2_000 });
-    expect(String(entry!.note)).toMatch(/verif/i);
-  });
-});
-
-describe('settlePayableShares — unblocked', () => {
-  beforeEach(() => {
-    process.env.WHOP_TRANSFER_FEE_BPS = '0';
-    process.env.WHOP_TRANSFERS_ENABLED = 'true';
-    process.env.WHOP_COMPANY_API_KEY = 'apik_x';
-    process.env.WHOP_PARENT_COMPANY_ID = 'biz_parent';
-  });
-
-  it('transfers in DOLLARS, from the parent to the referrer’s own company', async () => {
-    const db = fakeDb({ payable: [payableRow()] });
-    const calls: { originId: string; destinationId: string; amountUsdDollars: number }[] = [];
-
-    await settlePayableShares(db, {
-      transfer: async (args) => {
-        calls.push(args);
-        return { transferId: 'tr_1' };
-      },
-      at: new Date(),
-    });
-
-    expect(calls).toEqual([
-      { originId: 'biz_parent', destinationId: 'biz_ok', amountUsdDollars: 20 },
-    ]);
-    expect(db.ledger.get('led_1')).toMatchObject({ state: 'SETTLED', whopTransferId: 'tr_1' });
-  });
-
-  it('CLAIMS the row before calling Whop, so a concurrent run cannot pay twice', async () => {
-    const db = fakeDb({ payable: [payableRow()] });
-
-    await settlePayableShares(db, { transfer: async () => ({ transferId: 'tr_1' }), at: new Date() });
-
-    // The claim is a conditional write filtered on the CURRENT status — an already-claimed row
-    // matches nothing. `POST /transfers` has no observed idempotency key, so this ordering is the
-    // only guard there is.
-    const claimed = Array.from(db.feeLedger.values())[0];
-    expect(claimed!.status).toBe('SETTLED');
-    const claimCall = (db.feeLedger.size > 0);
-    expect(claimCall).toBe(true);
-  });
-
-  it('leaves the row PAYABLE and records FAILED when the transfer throws — never optimistically settled', async () => {
-    const db = fakeDb({ payable: [payableRow()] });
-
-    const result = await settlePayableShares(db, {
-      transfer: async () => {
-        throw new Error('insufficient balance');
-      },
-      at: new Date(),
-    });
-
-    expect(result.failed).toBe(1);
-    expect(db.ledger.get('led_1')!.state).toBe('PAYABLE');
-    expect(Array.from(db.feeLedger.values())[0]).toMatchObject({ status: 'FAILED' });
-  });
-
-  it('skips a referrer with no connected company rather than transferring into the void', async () => {
-    const db = fakeDb({
-      payable: [
-        payableRow({
-          referrerPractitioner: { id: 'x', whopCompanyId: null, whopPayoutsEnabled: false },
-        }),
-      ],
-    });
-    let called = 0;
-
-    const result = await settlePayableShares(db, {
-      transfer: async () => {
-        called += 1;
-        return { transferId: 'tr_1' };
-      },
-      at: new Date(),
-    });
-
-    expect(called).toBe(0);
-    expect(result.settled).toBe(0);
-  });
-});
-
 describe('promoteHeldToPayable — ruling 6’s retroactive settlement', () => {
   it('flips a HELD share to PAYABLE once its referrer can receive funds', async () => {
     const db = fakeDb({
@@ -423,162 +284,5 @@ describe('expireLapsedHolds — ruling 7 §4, and what it must NOT do', () => {
 
     expect(await expireLapsedHolds(db, { at: now })).toBe(0);
     expect(db.ledger.get('led_h')!.state).toBe('HELD');
-  });
-});
-
-describe('L2a: payee absorbs the transfer fee (referral path, mocked /transfers)', () => {
-  beforeEach(() => {
-    process.env.WHOP_TRANSFERS_ENABLED = 'true';
-    process.env.WHOP_COMPANY_API_KEY = 'apik_x';
-    process.env.WHOP_PARENT_COMPANY_ID = 'biz_parent';
-    delete process.env.WHOP_TRANSFER_FEE_BPS;
-    delete process.env.WHOP_TRANSFER_FEE_MODE;
-  });
-  const run = (db: ReturnType<typeof fakeDb>) => {
-    const calls: { amountUsdDollars: number }[] = [];
-    const transfer = async (args: { amountUsdDollars: number }) => {
-      calls.push(args);
-      return { transferId: 'tr_1' };
-    };
-    return { calls, go: () => settlePayableShares(db, { transfer: transfer as never, at: new Date() }) };
-  };
-
-  it('charged-to-sender (the default): 2,000c sends 19.41 dollars and records gross/fee/net on the row', async () => {
-    const db = fakeDb({ payable: [payableRow()] });
-    const { calls, go } = run(db);
-    await go();
-    expect(calls).toEqual([expect.objectContaining({ amountUsdDollars: 19.41 })]);
-    expect(db.ledger.get('led_1')).toMatchObject({
-      state: 'SETTLED',
-      grossShareUsdCents: 2000,
-      transferFeeUsdCents: 59,
-      netPaidUsdCents: 1941,
-    });
-  });
-
-  it('deducted-from-recipient: sends the whole 20 dollars; the payee-borne fee is recorded', async () => {
-    process.env.WHOP_TRANSFER_FEE_MODE = 'deducted-from-recipient';
-    const db = fakeDb({ payable: [payableRow()] });
-    const { calls, go } = run(db);
-    await go();
-    expect(calls).toEqual([expect.objectContaining({ amountUsdDollars: 20 })]);
-    expect(db.ledger.get('led_1')).toMatchObject({
-      grossShareUsdCents: 2000,
-      transferFeeUsdCents: 60,
-      netPaidUsdCents: 1940,
-    });
-  });
-
-  it('a share below the fee is not sent and is recorded with its reason', async () => {
-    const db = fakeDb({ payable: [payableRow({ referrerShareUsdCents: 1 })] });
-    const { calls, go } = run(db);
-    await go();
-    expect(calls).toEqual([]);
-    expect(db.ledger.get('led_1')).toMatchObject({ state: 'PAYABLE' });
-    const fee = Array.from(db.feeLedger.values())[0];
-    expect(fee).toMatchObject({ status: 'BLOCKED' });
-    expect(String(fee!.note)).toMatch(/BELOW_TRANSFER_FEE/);
-  });
-
-  it('rows parked BLOCKED while payouts were off ARE claimed once payouts are on (regression: claim matched PENDING only)', async () => {
-    const db = fakeDb({ payable: [payableRow()] });
-    delete process.env.WHOP_TRANSFERS_ENABLED;
-    await settlePayableShares(db, { transfer: async () => ({ transferId: 'never' }), at: new Date() });
-    expect(Array.from(db.feeLedger.values())[0]).toMatchObject({ status: 'BLOCKED' });
-    process.env.WHOP_TRANSFERS_ENABLED = 'true';
-    const { calls, go } = run(db);
-    await go();
-    expect(calls).toHaveLength(1);
-    expect(db.ledger.get('led_1')).toMatchObject({ state: 'SETTLED' });
-  });
-
-  it('a FAILED transfer row is never re-claimed (no double pay): it needs a human', async () => {
-    const db = fakeDb({ payable: [payableRow()] });
-    await settlePayableShares(db, {
-      transfer: async () => {
-        throw new Error('socket hang up');
-      },
-      at: new Date(),
-    });
-    const { calls, go } = run(db);
-    await go();
-    expect(calls).toEqual([]);
-    expect(db.ledger.get('led_1')).toMatchObject({ state: 'PAYABLE' });
-  });
-
-  it('MAJOR 1 sequence: flag on, ambiguous failure, flag off, flag on -> NO second transfer', async () => {
-    const db = fakeDb({ payable: [payableRow()] });
-    await settlePayableShares(db, {
-      transfer: async () => {
-        throw new Error('timeout after server accepted');
-      },
-      at: new Date(),
-    });
-    expect(Array.from(db.feeLedger.values())[0]).toMatchObject({ status: 'FAILED' });
-
-    delete process.env.WHOP_TRANSFERS_ENABLED; // the guard flaps closed: the park write runs
-    await settlePayableShares(db, { transfer: async () => ({ transferId: 'never' }), at: new Date() });
-    expect(Array.from(db.feeLedger.values())[0]).toMatchObject({ status: 'FAILED' }); // NOT downgraded
-
-    process.env.WHOP_TRANSFERS_ENABLED = 'true';
-    const { calls, go } = run(db);
-    await go();
-    expect(calls).toEqual([]);
-  });
-
-  it('a SENDING (crashed mid-transfer) or SETTLED fee row survives the park write, then is never re-claimed', async () => {
-    for (const status of ['SENDING', 'SETTLED']) {
-      const db = fakeDb({ payable: [payableRow()] });
-      db.feeLedger.set('REFERRER_TRANSFER:led_1', {
-        dedupeKey: 'REFERRER_TRANSFER:led_1',
-        kind: 'REFERRER_TRANSFER',
-        status,
-        amountUsdCents: 2000,
-      });
-      delete process.env.WHOP_TRANSFERS_ENABLED;
-      await settlePayableShares(db, { transfer: async () => ({ transferId: 'never' }), at: new Date() });
-      expect(db.feeLedger.get('REFERRER_TRANSFER:led_1')).toMatchObject({ status });
-      process.env.WHOP_TRANSFERS_ENABLED = 'true';
-      const { calls, go } = run(db);
-      await go();
-      expect(calls).toEqual([]);
-    }
-  });
-
-  it('a tiny-share park cannot downgrade a FAILED row either', async () => {
-    const db = fakeDb({ payable: [payableRow({ referrerShareUsdCents: 1 })] });
-    db.feeLedger.set('REFERRER_TRANSFER:led_1', {
-      dedupeKey: 'REFERRER_TRANSFER:led_1',
-      kind: 'REFERRER_TRANSFER',
-      status: 'FAILED',
-      amountUsdCents: 1,
-    });
-    const { go } = run(db);
-    await go();
-    expect(db.feeLedger.get('REFERRER_TRANSFER:led_1')).toMatchObject({ status: 'FAILED' });
-  });
-
-  it('in-loop guard: an unsendable share that slips past the query filter is neither claimed nor sent', async () => {
-    const db = fakeDb({ payable: [payableRow({ referrerShareUsdCents: 1 })] });
-    // A fake that ignores the share filter, so the row reaches the loop (a refund racing the query).
-    const all = Array.from(db.ledger.values());
-    db.referralLedgerEntry.findMany = async (args: { where?: { state?: string } }) =>
-      all.filter((r) => !args.where?.state || r.state === args.where.state);
-    const { calls, go } = run(db);
-    const res = await go();
-    expect(calls).toEqual([]);
-    expect(res.skipped).toBe(1);
-    // Parked by the tiny-share pass, never claimed: still BLOCKED, never SENDING.
-    expect(Array.from(db.feeLedger.values()).map((r) => r.status)).toEqual(['BLOCKED']);
-  });
-
-  it('flag false: no transfer is made and a bad fee config is never read', async () => {
-    delete process.env.WHOP_TRANSFERS_ENABLED;
-    process.env.WHOP_TRANSFER_FEE_BPS = 'garbage';
-    const db = fakeDb({ payable: [payableRow()] });
-    const { calls, go } = run(db);
-    const res = await go();
-    expect(calls).toEqual([]);
-    expect(res.blocked).toMatch(/verif/i);
   });
 });

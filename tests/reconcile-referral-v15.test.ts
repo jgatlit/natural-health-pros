@@ -132,6 +132,24 @@ describe('reconcile script: DRY RUN (the default)', () => {
     expect(f.markers.size).toBe(0);
   });
 
+  it('does not overstate NHP\u2019s excess for an already-SETTLED row: its referrer was paid, so the share cannot be zeroed', async () => {
+    const f = fakeClient();
+    f.initial[1]!.state = 'SETTLED'; // led_term: past the term, 2000c already paid out
+    const { log } = collect();
+    const summary = await runReconcile(f.client, { log });
+    expect(summary).toMatchObject({
+      reprice: 1,
+      flaggedSettled: 1,
+      // led_over: collected 4500, retains 2500 (share 2000 after the clamp). led_term: collected 4000,
+      // the referrer keeps the 2000 already paid, so NHP retains 2000, not 4000.
+      nhpRetainsUsdCents: 2500 + 2000,
+      // led_over would have kept 1000 and retains 2500 (excess 1500). led_term would have kept 3000 (the
+      // Plan B rate after the referrer term) and retains 2000: no excess. It used to read 4000 - 3000 = 1000.
+      nhpExcessUsdCents: 1500,
+      referrerSharesZeroedUsdCents: 0,
+    });
+  });
+
   it('logs one JSON line per row decision, plus a summary', async () => {
     const f = fakeClient();
     const { lines, log } = collect();

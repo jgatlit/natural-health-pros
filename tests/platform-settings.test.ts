@@ -1,6 +1,6 @@
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
 
-import { loadSettings, saveSetting, settingFromEnv, SETTING_KEYS } from '@/lib/platform-settings';
+import { loadSettings, saveSetting, settingFromEnv, SETTING_DEFS, SETTING_KEYS } from '@/lib/platform-settings';
 
 function fakeDb(seed: Array<{ key: string; value: string }> = []) {
   const rows = new Map(seed.map((r) => [r.key, r.value]));
@@ -54,7 +54,7 @@ describe('operator-editable commercial settings', () => {
     // This default IS the operator ruling of 2026-09-18. An empty database must behave per the
     // ruling rather than hold for zero days or forever.
     expect(settingFromEnv('referralHoldDays')).toBe(90);
-    await expect(loadSettings(fakeDb())).resolves.toEqual({ referralHoldDays: 90, affiliateHoldDays: 0 });
+    await expect(loadSettings(fakeDb())).resolves.toEqual({ referralHoldDays: 90 });
   });
 
   it('prefers the stored value over the environment', async () => {
@@ -68,8 +68,8 @@ describe('operator-editable commercial settings', () => {
     // row or env var must not resurrect it on the fee path.
     process.env.LEAD_ATTRIBUTION_TERM_MONTHS = '3';
     const db = fakeDb([{ key: 'lead_attribution_term_months', value: '3' }]);
-    expect(Object.keys(SETTING_KEYS)).toEqual(['referralHoldDays', 'affiliateHoldDays']);
-    await expect(loadSettings(db)).resolves.toEqual({ referralHoldDays: 90, affiliateHoldDays: 0 });
+    expect(Object.keys(SETTING_KEYS)).toEqual(['referralHoldDays']);
+    await expect(loadSettings(db)).resolves.toEqual({ referralHoldDays: 90 });
     delete process.env.LEAD_ATTRIBUTION_TERM_MONTHS;
   });
 
@@ -150,88 +150,23 @@ describe('saveSetting — the §1.1 change log', () => {
   });
 });
 
-describe('affiliate_hold_days — the recruiter payout hold (lane R2)', () => {
-  let saved: string | undefined;
-  beforeEach(() => {
-    saved = process.env.AFFILIATE_HOLD_DAYS;
-    delete process.env.AFFILIATE_HOLD_DAYS;
-  });
-  afterEach(() => {
-    if (saved === undefined) delete process.env.AFFILIATE_HOLD_DAYS;
-    else process.env.AFFILIATE_HOLD_DAYS = saved;
+describe('the recruiter payout hold does not exist', () => {
+  it('is not a setting: recruiters are paid as each client payment clears', () => {
+    expect(Object.keys(SETTING_KEYS)).toEqual(['referralHoldDays']);
+    expect(Object.keys(SETTING_DEFS)).toEqual(['referralHoldDays']);
   });
 
-  it('is its own key and defaults to 0: recruiters are paid as client payments come in', async () => {
-    expect(SETTING_KEYS.affiliateHoldDays).toBe('affiliate_hold_days');
-    expect(settingFromEnv('affiliateHoldDays')).toBe(0);
-    await expect(loadSettings(fakeDb())).resolves.toMatchObject({ affiliateHoldDays: 0 });
-  });
-
-  it('does not touch the referral hold, in either direction', async () => {
-    const db = fakeDb([{ key: 'affiliate_hold_days', value: '7' }]);
-    await expect(loadSettings(db)).resolves.toEqual({ referralHoldDays: 90, affiliateHoldDays: 7 });
-    const db2 = fakeDb([{ key: 'referral_hold_days', value: '30' }]);
-    await expect(loadSettings(db2)).resolves.toEqual({ referralHoldDays: 30, affiliateHoldDays: 0 });
-  });
-
-  it('resolves database row, then env, then the default; a corrupt value falls back to 0', async () => {
-    process.env.AFFILIATE_HOLD_DAYS = '5';
-    await expect(loadSettings(fakeDb())).resolves.toMatchObject({ affiliateHoldDays: 5 });
-    await expect(
-      loadSettings(fakeDb([{ key: 'affiliate_hold_days', value: '9' }])),
-    ).resolves.toMatchObject({ affiliateHoldDays: 9 });
-    delete process.env.AFFILIATE_HOLD_DAYS;
-    await expect(
-      loadSettings(fakeDb([{ key: 'affiliate_hold_days', value: 'soon' }])),
-    ).resolves.toMatchObject({ affiliateHoldDays: 0 });
-    await expect(
-      loadSettings(fakeDb([{ key: 'affiliate_hold_days', value: '-3' }])),
-    ).resolves.toMatchObject({ affiliateHoldDays: 0 });
-  });
-
-  it('accepts 0, refuses negative, fractional and absurd values, and logs nothing for a refusal', async () => {
-    const db = fakeDb();
-    await saveSetting(db, { name: 'affiliateHoldDays', value: 0, updatedByUserId: 'u', reason: 'confirm default' });
-    expect(db.changes).toHaveLength(1);
-    for (const bad of [-1, 1.5, 366, 10_000]) {
-      await expect(
-        saveSetting(db, { name: 'affiliateHoldDays', value: bad, updatedByUserId: 'u', reason: 'valid reason' }),
-      ).rejects.toThrow(/Recruiter Payout Hold/);
+  it('a stray affiliate_hold_days row (or env var) is inert: it is neither read nor returned', async () => {
+    process.env.AFFILIATE_HOLD_DAYS = '30';
+    try {
+      const db = fakeDb([{ key: 'affiliate_hold_days', value: '7' }]);
+      await expect(loadSettings(db)).resolves.toEqual({ referralHoldDays: 90 });
+    } finally {
+      delete process.env.AFFILIATE_HOLD_DAYS;
     }
-    expect(db.changes).toHaveLength(1);
   });
 
-  it('REQUIRES a reason: no reason, no write, no audit row', async () => {
-    const db = fakeDb();
-    for (const reason of [undefined, null, '', '   ', 'ab']) {
-      await expect(
-        saveSetting(db, { name: 'affiliateHoldDays', value: 14, updatedByUserId: 'u', reason }),
-      ).rejects.toThrow(/needs a reason/);
-    }
-    expect(db.changes).toEqual([]);
-    expect(db.rows.has('affiliate_hold_days')).toBe(false);
-  });
-
-  it('records the reason, the admin, and both values on the audit row', async () => {
-    const db = fakeDb([{ key: 'affiliate_hold_days', value: '0' }]);
-    await saveSetting(db, {
-      name: 'affiliateHoldDays',
-      value: 14,
-      updatedByUserId: 'usr_admin',
-      reason: '  fraud review  ',
-    });
-    expect(db.changes).toEqual([
-      {
-        key: 'affiliate_hold_days',
-        oldValue: '0',
-        newValue: '14',
-        changedByUserId: 'usr_admin',
-        reason: 'fraud review',
-      },
-    ]);
-  });
-
-  it('the referral hold still does not demand a reason (its behaviour is unchanged)', async () => {
+  it('the referral hold does not demand a reason', async () => {
     const db = fakeDb();
     await expect(
       saveSetting(db, { name: 'referralHoldDays', value: 45, updatedByUserId: 'u' }),
