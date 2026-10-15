@@ -59,6 +59,8 @@ function commitDb(snapshot: Record<string, any> | null, affiliate = fakeAffiliat
     feeLedger,
     referralLedger,
     affiliateLedgerEntry: affiliate.affiliateLedgerEntry,
+    affiliateBalanceAdjustment: affiliate.affiliateBalanceAdjustment,
+    $transaction: affiliate.$transaction,
     bookingFeeSnapshot: { findUnique: async () => snapshot },
     practitioner: { findUnique: async () => ({ id: X, whopCompanyId: 'biz_x', whopPayoutsEnabled: true }) },
     attributedClient: {
@@ -238,10 +240,37 @@ describe('spec section 1: the ledger row equals the snapshot share, on every row
     expect(result.affiliateShareUsdCents).toBe(0);
   });
 
-  it('snapshots the hold at accrual: holdDays and holdUntil = paidAt + holdDays', async () => {
+  it('lane R2: a recruiter row is payable AT PAYMENT by default (holdDays 0, holdUntil = paidAt), NOT after the 90-day referral hold', async () => {
+    // `commit()` still passes the referral hold (holdDays: 90); the affiliate row must ignore it.
     const { entry } = await pipeline({ plan: 'PLAN_A' });
-    expect(entry!.holdDays).toBe(90);
-    expect(entry!.holdUntil.getTime()).toBe(PAID_AT.getTime() + 90 * 86_400_000);
+    expect(entry!.holdDays).toBe(0);
+    expect(entry!.holdUntil.getTime()).toBe(PAID_AT.getTime());
+  });
+
+  it('snapshots the AFFILIATE hold at accrual: affiliateHoldDays sets holdDays and holdUntil = paidAt + days', async () => {
+    const fdb = feeDb(null, false);
+    await resolveBookingFee(fdb as any, {
+      bookingIntentId: 'bi_1',
+      practitionerId: Y,
+      email: EMAIL,
+      plan: 'PLAN_A',
+      priceUsdCents: 10_000,
+      bookingCreatedAt: D(5),
+      transactedAt: D(5),
+      referralTouchId: null,
+    });
+    const db = commitDb(fdb.snapshots[0]);
+    await commit(db, { affiliateHoldDays: 14 });
+    const row = db.affiliate.rows[0];
+    expect(row.holdDays).toBe(14);
+    expect(row.holdUntil.getTime()).toBe(PAID_AT.getTime() + 14 * 86_400_000);
+  });
+
+  it('the commit reports which recruiter was credited, so the caller can settle that one row', async () => {
+    const { result } = await pipeline({ plan: 'PLAN_A' });
+    expect(result.affiliateRecruiterPractitionerId).toBe(R);
+    const none = await pipeline({ plan: 'PLAN_A', recruited: false });
+    expect(none.result.affiliateRecruiterPractitionerId).toBeNull();
   });
 
   it('the ledger is written from the SNAPSHOT: a later schedule change cannot reprice it', async () => {
@@ -352,6 +381,8 @@ function refundDb(entry: Record<string, any> | null, snapshotShare = 300) {
     affiliate,
     ledger,
     affiliateLedgerEntry: affiliate.affiliateLedgerEntry,
+    affiliateBalanceAdjustment: affiliate.affiliateBalanceAdjustment,
+    $transaction: affiliate.$transaction,
     bookingFeeSnapshot: {
       findUnique: async () => ({
         bookingIntentId: 'bi_1',
@@ -481,7 +512,7 @@ describe('refunds reverse the affiliate ledger entry, by the same rule as the re
     const db = refundDb(null);
     const out = await refund(db, 100);
     expect(out.affiliateReversedUsdCents).toBe(300);
-    expect(out.affiliateRecoveryOwedUsdCents).toBe(0);
+    expect(out.affiliateDebitRecordedUsdCents).toBe(0);
     expect(db.ledger.filter((l) => l.kind === 'AFFILIATE_REFUND_REVERSAL')).toHaveLength(1);
     expect(db.affiliate.rows).toHaveLength(0);
 
@@ -528,31 +559,56 @@ describe('refunds reverse the affiliate ledger entry, by the same rule as the re
   it('a booking with no affiliate share reverses nothing', async () => {
     const db = refundDb(null, 0);
     const out = await refund(db, 100);
-    expect(out).toMatchObject({ affiliateReversedUsdCents: 0, affiliateRecoveryOwedUsdCents: 0 });
+    expect(out).toMatchObject({ affiliateReversedUsdCents: 0, affiliateDebitRecordedUsdCents: 0 });
   });
 });
 
-describe('a refund after the share has left: recorded and flagged, never clawed back', () => {
-  it('SETTLED: the amount paid beyond what is now owed is returned as recovery owed; state stays SETTLED', async () => {
+describe('a refund after the share has left: a DEBIT against the recruiter, never a clawback (lane R2)', () => {
+  const debitsOf = (db: ReturnType<typeof refundDb>) => db.affiliate.adjustments;
+
+  it('SETTLED: a $40 refund of a $100 payment records an OPEN debit of exactly $1.20; the row stays SETTLED', async () => {
     const db = refundDb(entry({ state: 'SETTLED', transferUsdCents: 300, whopTransferId: 'tr_1' }));
-    const out = await refund(db, 50);
-    expect(out.affiliateReversedUsdCents).toBe(150);
-    expect(out.affiliateRecoveryOwedUsdCents).toBe(150);
-    expect(db.affiliate.rows[0]).toMatchObject({ state: 'SETTLED', reversedUsdCents: 150, whopTransferId: 'tr_1' });
+    const out = await refund(db, 40);
+    expect(out.affiliateReversedUsdCents).toBe(120);
+    expect(out.affiliateDebitRecordedUsdCents).toBe(120);
+    expect(db.affiliate.rows[0]).toMatchObject({ state: 'SETTLED', reversedUsdCents: 120, whopTransferId: 'tr_1' });
+    expect(debitsOf(db)).toHaveLength(1);
+    expect(debitsOf(db)[0]).toMatchObject({
+      recruiterPractitionerId: R,
+      sourceLedgerEntryId: 'afl_1',
+      amountUsdCents: 120,
+      appliedUsdCents: 0,
+      state: 'OPEN',
+      reason: 'REFUND',
+    });
   });
 
-  it('a redelivery reports the same recovery owed and does not double it', async () => {
+  it('a redelivery of the same refund neither doubles nor changes the debit', async () => {
     const db = refundDb(entry({ state: 'SETTLED', transferUsdCents: 300 }));
     const a = await refund(db, 50);
     const b = await refund(db, 50);
-    expect(a.affiliateRecoveryOwedUsdCents).toBe(150);
-    expect(b.affiliateRecoveryOwedUsdCents).toBe(150);
+    const c = await refund(db, 50);
+    expect(a.affiliateDebitRecordedUsdCents).toBe(150);
+    expect(b.affiliateDebitRecordedUsdCents).toBe(150);
+    expect(c.affiliateDebitRecordedUsdCents).toBe(150);
     expect(db.affiliate.rows[0].reversedUsdCents).toBe(150);
+    expect(debitsOf(db)).toHaveLength(1);
+    expect(debitsOf(db)[0].amountUsdCents).toBe(150);
   });
 
-  it('SETTLED after an earlier reversal already netted the transfer: only the NEW excess is owed back', async () => {
-    // 100 was reversed BEFORE the claim, so the transfer was 200. A further 100 reversal now
-    // means the recruiter should have had 100 and holds 200: 100 comes back.
+  it('two partial refunds after the payout record two debits that add up to the reversal, each exactly once', async () => {
+    const db = refundDb(entry({ state: 'SETTLED', transferUsdCents: 300 }));
+    await refund(db, 40, 'r1'); // 120
+    await refund(db, 40, 'r2'); // 120 more
+    await refund(db, 40, 'r1'); // redelivery of the first
+    expect(db.affiliate.rows[0].reversedUsdCents).toBe(240);
+    expect(debitsOf(db).map((d) => d.amountUsdCents)).toEqual([120, 120]);
+    expect(new Set(debitsOf(db).map((d) => d.dedupeKey)).size).toBe(2);
+  });
+
+  it('SETTLED after an earlier reversal already shrank the claim: only the NEW reversal becomes a debit', async () => {
+    // 100 was reversed BEFORE the claim, so the transfer was already reduced. A further 100 now is
+    // the only part of the money that has actually left and must come back.
     const db = refundDb(entry({ state: 'SETTLED', transferUsdCents: 200, reversedUsdCents: 100 }));
     db.ledger.push({
       kind: 'AFFILIATE_REFUND_REVERSAL',
@@ -562,36 +618,44 @@ describe('a refund after the share has left: recorded and flagged, never clawed 
     });
     const out = await refund(db, 33.34, 'r1'); // floor(300 * 3334 / 10000) = 100
     expect(out.affiliateReversedUsdCents).toBe(100);
-    expect(out.affiliateRecoveryOwedUsdCents).toBe(100);
+    expect(out.affiliateDebitRecordedUsdCents).toBe(100);
     expect(db.affiliate.rows[0].reversedUsdCents).toBe(200);
+    expect(debitsOf(db).map((d) => d.amountUsdCents)).toEqual([100]);
   });
 
-  it('a refund that only touches what was never transferred owes nothing back', async () => {
-    const db = refundDb(entry({ state: 'SETTLED', transferUsdCents: 200, reversedUsdCents: 100 }));
-    db.ledger.push({
-      kind: 'AFFILIATE_REFUND_REVERSAL',
-      dedupeKey: 'AFFILIATE_REFUND_REVERSAL:r0:bi_1',
-      bookingIntentId: 'bi_1',
-      amountUsdCents: -100,
-    });
-    const out = await refund(db, 10, 'r1'); // floor(30) = 30 more: owed 170, holds 200 -> 30
-    expect(out.affiliateRecoveryOwedUsdCents).toBe(30);
-  });
-
-  it('SENDING (a transfer is in flight): treated like SETTLED, never edited into REVERSED', async () => {
-    const db = refundDb(entry({ state: 'SENDING', transferUsdCents: 300 }));
+  it('a FULL refund after payout debits the whole reversal (the share), and the row is NOT flipped to REVERSED', async () => {
+    const db = refundDb(entry({ state: 'SETTLED', transferUsdCents: 291 }));
     const out = await refund(db, 100);
-    expect(out.affiliateRecoveryOwedUsdCents).toBe(300);
+    expect(out.affiliateDebitRecordedUsdCents).toBe(300);
+    expect(db.affiliate.rows[0]).toMatchObject({ state: 'SETTLED', reversedUsdCents: 300 });
+  });
+
+  it('SENDING (a transfer is in flight, NOT yet confirmed): the cache rises, no debit yet, never edited into REVERSED', async () => {
+    // The debit for a refund in this window is written when the transfer is CONFIRMED
+    // (`completeAffiliateTransfer`): if Whop refuses it the row returns to ACCRUED and the retry
+    // claims the reduced amount, so a debit now would charge the recruiter twice.
+    const db = refundDb(entry({ state: 'SENDING', transferUsdCents: 300, grossShareUsdCents: 300 }));
+    const out = await refund(db, 100);
+    expect(out.affiliateReversedUsdCents).toBe(300);
+    expect(out.affiliateDebitRecordedUsdCents).toBe(0);
+    expect(db.affiliate.adjustments).toHaveLength(0);
     expect(db.affiliate.rows[0].state).toBe('SENDING');
     expect(db.affiliate.rows[0].reversedUsdCents).toBe(300);
   });
 
-  it('HELD and ACCRUED rows owe nothing back: nothing left the building', async () => {
+  it('a row whose whole share was already netted against earlier debits (transfer 0) still debits on a later refund', async () => {
+    const db = refundDb(entry({ state: 'SETTLED', transferUsdCents: 0, adjustmentAppliedUsdCents: 300 }));
+    const out = await refund(db, 20);
+    expect(out.affiliateDebitRecordedUsdCents).toBe(60);
+  });
+
+  it('HELD and ACCRUED rows record no debit: nothing left the building', async () => {
     for (const state of ['ACCRUED', 'HELD']) {
       const db = refundDb(entry({ state }));
       const out = await refund(db, 50);
-      expect(out.affiliateRecoveryOwedUsdCents).toBe(0);
+      expect(out.affiliateDebitRecordedUsdCents).toBe(0);
       expect(db.affiliate.rows[0].reversedUsdCents).toBe(150);
+      expect(debitsOf(db)).toHaveLength(0);
     }
   });
 
@@ -599,6 +663,75 @@ describe('a refund after the share has left: recorded and flagged, never clawed 
     const db = refundDb(entry({ state: 'HELD' }));
     await refund(db, 100);
     expect(db.affiliate.rows[0].state).toBe('REVERSED');
+  });
+
+  it('a fully reversed ACCRUED row that already has debt relief applied is NOT flipped to REVERSED (the sweep re-opens the relief)', async () => {
+    const db = refundDb(entry({ state: 'ACCRUED', adjustmentAppliedUsdCents: 120 }));
+    await refund(db, 100);
+    expect(db.affiliate.rows[0].state).toBe('ACCRUED');
+    expect(db.affiliate.rows[0].reversedUsdCents).toBe(300);
+  });
+
+  it('the cache raise and its debit are ONE transaction: a failing debit write rolls the raise back', async () => {
+    const db = refundDb(entry({ state: 'SETTLED', transferUsdCents: 300 }));
+    db.affiliate.affiliateBalanceAdjustment.createMany = async () => {
+      throw new Error('db down');
+    };
+    await expect(refund(db, 40)).rejects.toThrow('db down');
+    expect(db.affiliate.rows[0].reversedUsdCents).toBe(0);
+    expect(debitsOf(db)).toHaveLength(0);
+  });
+
+  it('after such a failure the redelivered refund completes it: the debit lands once', async () => {
+    const db = refundDb(entry({ state: 'SETTLED', transferUsdCents: 300 }));
+    const real = db.affiliate.affiliateBalanceAdjustment.createMany;
+    let fail = true;
+    db.affiliate.affiliateBalanceAdjustment.createMany = async (args: any) => {
+      if (fail) throw new Error('db down');
+      return real(args);
+    };
+    await expect(refund(db, 40)).rejects.toThrow('db down');
+    fail = false;
+    await refund(db, 40);
+    expect(db.affiliate.rows[0].reversedUsdCents).toBe(120);
+    expect(debitsOf(db).map((d) => d.amountUsdCents)).toEqual([120]);
+  });
+
+  it('the dedupe key is unique per row and cumulative total: even a forced replay of the same transition writes nothing new', async () => {
+    const db = refundDb(entry({ state: 'SETTLED', transferUsdCents: 300 }));
+    await refund(db, 40);
+    const key = debitsOf(db)[0].dedupeKey;
+    expect(key).toBe('REFUND:afl_1:120');
+    const res = await db.affiliate.affiliateBalanceAdjustment.createMany({
+      data: [{ ...debitsOf(db)[0], id: undefined }],
+      skipDuplicates: true,
+    });
+    expect(res.count).toBe(0);
+    expect(debitsOf(db)).toHaveLength(1);
+  });
+});
+
+describe('concurrent refunds after payout: exactly one debit per cache transition', () => {
+  it('two refunds in flight together debit the total reversal once, however they interleave', async () => {
+    const db = refundDb(entry({ state: 'SETTLED', transferUsdCents: 300 }));
+    await Promise.all([refund(db, 40, 'r1'), refund(db, 40, 'r2')]);
+    const total = db.affiliate.adjustments.reduce((s, d) => s + d.amountUsdCents, 0);
+    expect(db.affiliate.rows[0].reversedUsdCents).toBe(240);
+    expect(total).toBe(240);
+  });
+
+  it('three refunds plus redeliveries of each in parallel never debit more than the share', async () => {
+    const db = refundDb(entry({ state: 'SETTLED', transferUsdCents: 300 }));
+    await Promise.all([
+      refund(db, 60, 'r1'),
+      refund(db, 60, 'r2'),
+      refund(db, 60, 'r3'),
+      refund(db, 60, 'r1'),
+      refund(db, 60, 'r2'),
+    ]);
+    const total = db.affiliate.adjustments.reduce((s, d) => s + d.amountUsdCents, 0);
+    expect(db.affiliate.rows[0].reversedUsdCents).toBeLessThanOrEqual(300);
+    expect(total).toBe(db.affiliate.rows[0].reversedUsdCents);
   });
 });
 

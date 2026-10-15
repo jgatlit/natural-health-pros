@@ -27,6 +27,10 @@ const joined = (d: Date | null) =>
  *
  * Amounts are the ledger's, as recorded; payouts are not active yet while
  * `WHOP_TRANSFERS_ENABLED` is not 'true', and the card says so.
+ *
+ * TIMING: a recruiter is paid as client payments come in once payouts are live; there is no
+ * standing hold. A refund that arrives AFTER a share was paid is shown here as an "adjusted for a
+ * refund" line: an open balance netted off the next payouts, and what has already been netted.
  */
 export async function RecruitedPractitionersSection({
   practitionerId,
@@ -42,7 +46,8 @@ export async function RecruitedPractitionersSection({
   if (!isOwner) return null;
 
   const earnings = await loadRecruiterEarnings(db, practitionerId, now, listedWhere());
-  const total = earnings.pendingUsdCents + earnings.accruedUsdCents + earnings.settledUsdCents;
+  const total =
+    earnings.pendingUsdCents + earnings.accruedUsdCents + earnings.settledUsdCents + earnings.refundBalanceOpenUsdCents;
   if (earnings.recruits.length === 0 && total === 0) return null;
 
   const payoutsActive = process.env.WHOP_TRANSFERS_ENABLED === 'true';
@@ -75,20 +80,59 @@ export async function RecruitedPractitionersSection({
           </dd>
         </div>
       </dl>
-      <p className="text-[11px] leading-relaxed text-muted-foreground">
-        Pending is still inside the hold period; accrued is owed to you and waits for a payout run and a verified
-        Whop account.
+      <p className="text-[11px] leading-relaxed text-muted-foreground" data-testid="affiliate-timing-note">
+        You are paid as client payments come in once payouts are live. Accrued is owed to you and is paid out once
+        payouts are live and your Whop account is verified.
         {!payoutsActive && ' (payouts are not active yet)'}
       </p>
+      {(earnings.refundBalanceOpenUsdCents > 0 || earnings.refundAdjustments.length > 0) && (
+        <div className="space-y-2 rounded-md border p-3" data-testid="affiliate-refund-adjustments">
+          <h3 className="text-xs font-semibold">Adjusted for a refund</h3>
+          <p className="text-[11px] leading-relaxed text-muted-foreground">
+            When a client payment is refunded after your share of it was paid, that amount is taken off your next
+            payouts rather than collected from you.
+          </p>
+          <dl className="grid grid-cols-2 gap-2 text-center">
+            <div className="rounded-md border p-2">
+              <dt className="text-[11px] text-muted-foreground">Still to be taken off</dt>
+              <dd className="text-sm font-semibold" data-testid="affiliate-refund-open">
+                {usd(earnings.refundBalanceOpenUsdCents)}
+              </dd>
+            </div>
+            <div className="rounded-md border p-2">
+              <dt className="text-[11px] text-muted-foreground">Already taken off</dt>
+              <dd className="text-sm font-semibold" data-testid="affiliate-refund-applied">
+                {usd(earnings.refundAdjustedUsdCents)}
+              </dd>
+            </div>
+          </dl>
+          <ul className="divide-y rounded-md border text-[11px]">
+            {earnings.refundAdjustments.map((a, i) => (
+              <li key={i} className="flex items-center justify-between gap-3 px-3 py-1.5">
+                <span>{joined(a.createdAt)}: refund adjustment {usd(a.amountUsdCents)}</span>
+                <span className="text-muted-foreground">
+                  {a.state === 'APPLIED' ? 'fully taken off' : `${usd(a.appliedUsdCents)} taken off so far`}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
       <p className="text-[11px] leading-relaxed text-muted-foreground" data-testid="affiliate-fee-note">
         Payouts are net of Whop&apos;s transfer fee.
       </p>
       {earnings.paidWithFeeRecordCount > 0 && (
-        <dl className="grid grid-cols-3 gap-2 text-center" data-testid="affiliate-paid-breakdown">
+        <dl className="grid grid-cols-2 gap-2 text-center sm:grid-cols-4" data-testid="affiliate-paid-breakdown">
           <div className="rounded-md border p-2">
             <dt className="text-[11px] text-muted-foreground">Gross</dt>
             <dd className="text-sm font-semibold" data-testid="affiliate-paid-gross">
               {usd(earnings.paidGrossUsdCents)}
+            </dd>
+          </div>
+          <div className="rounded-md border p-2">
+            <dt className="text-[11px] text-muted-foreground">Adjusted for a refund</dt>
+            <dd className="text-sm font-semibold" data-testid="affiliate-paid-adjusted">
+              {usd(earnings.paidAdjustedUsdCents)}
             </dd>
           </div>
           <div className="rounded-md border p-2">

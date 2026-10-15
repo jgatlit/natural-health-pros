@@ -4,7 +4,7 @@ import { createElement as h } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { summarizeEntries } from '@/lib/affiliate-earnings';
+import { summarizeAdjustments, summarizeEntries } from '@/lib/affiliate-earnings';
 import { RECRUITER_DISCLOSURE } from '@/lib/recruiter';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
@@ -47,7 +47,10 @@ const PEOPLE: P[] = [
 type L = { recruiterPractitionerId: string; recruitedPractitionerId: string; state: string; shareUsdCents: number; reversedUsdCents: number; transferUsdCents: number | null; holdUntil: Date; clientEmail?: string };
 let LEDGER: L[] = [];
 
-const calls: { practitioner: any[]; ledger: any[] } = { practitioner: [], ledger: [] };
+type A = { recruiterPractitionerId: string; sourceLedgerEntryId: string; amountUsdCents: number; appliedUsdCents: number; state: 'OPEN' | 'APPLIED'; createdAt: Date };
+let ADJ: A[] = [];
+
+const calls: { practitioner: any[]; ledger: any[]; adjustments: any[] } = { practitioner: [], ledger: [], adjustments: [] };
 
 /** Honours the `where` keys the code uses. An unrecognised key throws so a new filter can't be ignored. */
 function fakeEarningsDb() {
@@ -86,6 +89,21 @@ function fakeEarningsDb() {
         });
       },
     },
+    affiliateBalanceAdjustment: {
+      findMany: async (args: any) => {
+        calls.adjustments.push(args);
+        return ADJ.filter((a) =>
+          Object.entries(args.where ?? {}).every(([k, v]) => {
+            if (k === 'recruiterPractitionerId') return a.recruiterPractitionerId === v;
+            throw new Error(`fake does not understand where.${k}`);
+          }),
+        ).map((a) => {
+          const out: any = {};
+          for (const key of Object.keys(args.select)) out[key] = (a as any)[key];
+          return out;
+        });
+      },
+    },
   };
 }
 
@@ -109,7 +127,9 @@ beforeEach(() => {
   state.db = fakeEarningsDb();
   calls.practitioner = [];
   calls.ledger = [];
+  calls.adjustments = [];
   LEDGER = [];
+  ADJ = [];
 });
 afterEach(() => {
   if (savedEnv === undefined) delete process.env[ENV];
@@ -188,11 +208,71 @@ describe('"Practitioners you brought in" — the recruiter’s card', () => {
     expect(await section(R, true)).not.toContain('payouts are not active');
   });
 
+  it('lane R2: says recruiters are paid as client payments come in, with NO 90-day / hold-period wording', async () => {
+    LEDGER = [row({})];
+    const html = (await section(R, true))!;
+    expect(html).toMatch(/data-testid="affiliate-timing-note">[^<]*paid as client payments come in once payouts are live/);
+    expect(html).not.toMatch(/hold period|90 days|90-day|inside the hold/i);
+  });
+
+  it('lane R2: shows the open refund balance and what was already taken off, owner only', async () => {
+    LEDGER = [row({})];
+    ADJ = [
+      { recruiterPractitionerId: R, sourceLedgerEntryId: 'afl_x', amountUsdCents: 120, appliedUsdCents: 120, state: 'APPLIED', createdAt: new Date(Date.UTC(2026, 9, 20)) },
+      { recruiterPractitionerId: R, sourceLedgerEntryId: 'afl_y', amountUsdCents: 300, appliedUsdCents: 100, state: 'OPEN', createdAt: new Date(Date.UTC(2026, 9, 22)) },
+      { recruiterPractitionerId: OTHER, sourceLedgerEntryId: 'afl_z', amountUsdCents: 9_900, appliedUsdCents: 0, state: 'OPEN', createdAt: new Date(Date.UTC(2026, 9, 22)) },
+    ];
+    const html = (await section(R, true))!;
+    expect(html).toContain('Adjusted for a refund');
+    expect(html).toMatch(/data-testid="affiliate-refund-open">\$2\.00</);
+    expect(html).toMatch(/data-testid="affiliate-refund-applied">\$2\.20</);
+    expect(html).toContain('fully taken off');
+    expect(html).toContain('$1.00 taken off so far');
+    expect(html).not.toContain('99.00'); // another recruiter's debt is never summed in
+    expect(calls.adjustments[0].where).toEqual({ recruiterPractitionerId: R });
+    // amounts, state and date only: never the source row, so never a client or a booking
+    expect(Object.keys(calls.adjustments[0].select).sort()).toEqual(['amountUsdCents', 'appliedUsdCents', 'createdAt', 'state']);
+    expect(await section(R, false)).toBeNull();
+  });
+
+  it('lane R2: no refund block at all when there is no refund adjustment', async () => {
+    LEDGER = [row({})];
+    const html = (await section(R, true))!;
+    expect(html).not.toContain('affiliate-refund-adjustments');
+  });
+
+  it('lane R2: a recruiter whose only activity is an open refund balance still sees the card', async () => {
+    ADJ = [{ recruiterPractitionerId: Z, sourceLedgerEntryId: 'afl_x', amountUsdCents: 120, appliedUsdCents: 0, state: 'OPEN', createdAt: NOW }];
+    const html = (await section(Z, true))!;
+    expect(html).toMatch(/data-testid="affiliate-refund-open">\$1\.20</);
+  });
+
+  it('lane R2: the paid breakdown shows gross, adjusted-for-a-refund, fee and net, and they add up', async () => {
+    LEDGER = [
+      row({
+        state: 'SETTLED',
+        shareUsdCents: 300,
+        transferUsdCents: 174,
+        grossShareUsdCents: 300,
+        adjustmentAppliedUsdCents: 120,
+        transferFeeUsdCents: 6,
+        netPaidUsdCents: 174,
+      }),
+    ];
+    const html = (await section(R, true))!;
+    expect(html).toMatch(/data-testid="affiliate-paid-gross">\$3\.00</);
+    expect(html).toMatch(/data-testid="affiliate-paid-adjusted">\$1\.20</);
+    expect(html).toMatch(/data-testid="affiliate-paid-fee">\$0\.06</);
+    expect(html).toMatch(/data-testid="affiliate-paid-net">\$1\.74</);
+    expect(300 - 120 - 6).toBe(174);
+  });
+
   it('is the owner’s alone: an admin looking at somebody else’s page gets nothing, and no query runs', async () => {
     LEDGER = [row({})];
     expect(await section(R, false)).toBeNull();
     expect(calls.practitioner).toHaveLength(0);
     expect(calls.ledger).toHaveLength(0);
+    expect(calls.adjustments).toHaveLength(0);
   });
 
   it('renders nothing for a practitioner who has brought nobody in and earned nothing', async () => {
@@ -265,8 +345,8 @@ describe('the RECRUITED practitioner’s dashboard exposes no affiliate amounts 
 });
 
 describe('summarizeEntries', () => {
-  const e = (over: Partial<L>) => ({ ...row({}), ...over });
-  it('breaks out HELD and the amount owed back after a refund of an already-paid share', () => {
+  const e = (over: Partial<L> & Record<string, unknown>) => ({ ...row({}), ...over });
+  it('breaks out HELD; a refund of an already-paid share is NOT an "owed back" figure on the row (it is a debit)', () => {
     const t = summarizeEntries(
       [
         e({ state: 'SETTLED', transferUsdCents: 300, reversedUsdCents: 150 }),
@@ -277,8 +357,36 @@ describe('summarizeEntries', () => {
     );
     expect(t.settledUsdCents).toBe(300);
     expect(t.heldUsdCents).toBe(300);
-    expect(t.recoveryOwedUsdCents).toBe(150 + 100);
     expect(t.accruedUsdCents).toBe(300 + 200);
+    expect('recoveryOwedUsdCents' in t).toBe(false);
+  });
+
+  it('lane R2: debt relief already netted against an unpaid row is not shown as still owed', () => {
+    const t = summarizeEntries([e({ state: 'ACCRUED', holdUntil: PAST, shareUsdCents: 300, adjustmentAppliedUsdCents: 120 })], NOW);
+    expect(t.accruedUsdCents).toBe(180);
+    expect(t.pendingUsdCents).toBe(0);
+  });
+
+  it('lane R2: a share swallowed whole by debits is SETTLED with nothing transferred', () => {
+    const t = summarizeEntries(
+      [e({ state: 'SETTLED', transferUsdCents: 0, grossShareUsdCents: 300, adjustmentAppliedUsdCents: 300, transferFeeUsdCents: 0, netPaidUsdCents: 0 })],
+      NOW,
+    );
+    expect(t.settledUsdCents).toBe(0);
+    expect(t.paidGrossUsdCents).toBe(300);
+    expect(t.paidAdjustedUsdCents).toBe(300);
+    expect(t.paidNetUsdCents).toBe(0);
+  });
+
+  it('lane R2: summarizeAdjustments adds up the open balance (never negative) and what was applied', () => {
+    expect(
+      summarizeAdjustments([
+        { amountUsdCents: 120, appliedUsdCents: 120 },
+        { amountUsdCents: 300, appliedUsdCents: 100 },
+        { amountUsdCents: 50, appliedUsdCents: 60 }, // corrupt over-application never goes negative
+      ]),
+    ).toEqual({ openBalanceUsdCents: 200, appliedUsdCents: 280 });
+    expect(summarizeAdjustments([])).toEqual({ openBalanceUsdCents: 0, appliedUsdCents: 0 });
   });
 });
 
@@ -298,6 +406,12 @@ describe('admin: read-only recruiter links and affiliate totals per recruiter', 
           row({ state: 'SETTLED', transferUsdCents: 300, reversedUsdCents: 100 }),
         ],
       },
+      affiliateBalanceAdjustment: {
+        findMany: async () => [
+          { recruiterPractitionerId: R, amountUsdCents: 100, appliedUsdCents: 0 },
+          { recruiterPractitionerId: R, amountUsdCents: 250, appliedUsdCents: 250 },
+        ],
+      },
     };
     const { AffiliateLedgerSection } = await import('@/app/admin/commercial-settings/AffiliateLedgerSection');
     const html = renderToStaticMarkup(await AffiliateLedgerSection({ now: NOW }));
@@ -308,7 +422,10 @@ describe('admin: read-only recruiter links and affiliate totals per recruiter', 
     expect(html).toMatch(/Rae Recruiter[\s\S]*?<td[^>]*>3<\/td>/);
     expect(html).toContain('$3.00'); // pending
     expect(html).toContain('$6.00'); // paid
-    expect(html).toContain('$1.00'); // owed back
+    expect(html).toContain('Refund balance (open)');
+    expect(html).toMatch(/data-testid="affiliate-refund-balance-total"[^>]*>[^<]*<strong>\$1\.00<\/strong>/); // read-only total
+    expect(html).not.toContain('Owed back');
+    expect(html).not.toMatch(/hold period|90 days|90-day/i);
     expect(html).not.toMatch(/<form|<button|<input/);
   });
 
@@ -329,6 +446,7 @@ describe('admin: read-only recruiter links and affiliate totals per recruiter', 
           { ...row({ state: 'ACCRUED' }), id: 'afl_fine', updatedAt: old, lastError: null },
         ],
       },
+      affiliateBalanceAdjustment: { findMany: async () => [] },
     };
     const { AffiliateLedgerSection } = await import('@/app/admin/commercial-settings/AffiliateLedgerSection');
     const html = renderToStaticMarkup(await AffiliateLedgerSection({ now: NOW }));

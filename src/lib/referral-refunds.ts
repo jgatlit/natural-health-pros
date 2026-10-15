@@ -29,9 +29,15 @@
  *      double-count.
  *
  * The snapshot and the ledger's `shareUsdCents` are never edited: they are the record of what was
- * decided at mint. A row already SENDING / SETTLED is only recorded: whatever the recruiter holds
- * beyond what they are now owed comes back as `affiliateRecoveryOwedUsdCents` and the webhook
- * flags it. NOTHING is clawed back automatically, same as the referrer path.
+ * decided at mint.
+ *
+ * A REFUND AFTER THE RECRUITER WAS PAID (lane R2, operator ruling 2026-10-14) is NOT a flag for a
+ * human any more: the row is already SETTLED, so the reversal is recorded in the same
+ * transaction as an `AffiliateBalanceAdjustment` DEBIT against the recruiter (for a transfer still
+ * in flight, the debit is booked when it is confirmed), which the payout
+ * sweep nets off their next payable shares (NHP is never out of pocket, nothing is clawed back by
+ * transfer, and the recruiter sees an "adjusted for a refund" line). The referrer path below is
+ * unchanged: it still only records and flags.
  *
  * ⚠️ WHOP SENDS REFUND AMOUNTS IN DOLLARS. The SDK's own type says so in as many words: "The
  * refunded amount as a decimal in the specified currency, such as 10.43 for $10.43 USD"
@@ -72,8 +78,12 @@ export type RefundOutcome = {
   matched: boolean;
   /** The recruiter's share reversed by this refund (spec v1.5). 0 when none was owed. */
   affiliateReversedUsdCents: number;
-  /** Of the recruiter's share, what had ALREADY been paid out and is now owed back. Never clawed. */
-  affiliateRecoveryOwedUsdCents: number;
+  /**
+   * Of the recruiter's share, what had ALREADY been paid out: the total debit now recorded against
+   * the recruiter for this booking. Netted off their next payouts, never clawed back. Stable across
+   * redeliveries.
+   */
+  affiliateDebitRecordedUsdCents: number;
 };
 
 /**
@@ -105,8 +115,8 @@ export async function reverseReferralOnRefund(
 async function reverseAffiliateShare(
   db: RefundDb,
   input: { whopPaymentId: string; refundAmountUsdDollars: number; refundId: string },
-): Promise<{ affiliateReversedUsdCents: number; affiliateRecoveryOwedUsdCents: number }> {
-  const none = { affiliateReversedUsdCents: 0, affiliateRecoveryOwedUsdCents: 0 };
+): Promise<{ affiliateReversedUsdCents: number; affiliateDebitRecordedUsdCents: number }> {
+  const none = { affiliateReversedUsdCents: 0, affiliateDebitRecordedUsdCents: 0 };
   if (!(input.refundAmountUsdDollars > 0)) return none;
 
   const fee = (await db.feeLedgerEntry.findFirst({
@@ -185,7 +195,7 @@ async function reverseAffiliateShare(
   });
   return {
     affiliateReversedUsdCents: reversal,
-    affiliateRecoveryOwedUsdCents: applied.recoveryOwedUsdCents,
+    affiliateDebitRecordedUsdCents: applied.debitRecordedUsdCents,
   };
 }
 
@@ -198,7 +208,7 @@ async function reverseReferrerShare(
     refundId: string;
     at: Date;
   },
-): Promise<Omit<RefundOutcome, 'affiliateReversedUsdCents' | 'affiliateRecoveryOwedUsdCents'>> {
+): Promise<Omit<RefundOutcome, 'affiliateReversedUsdCents' | 'affiliateDebitRecordedUsdCents'>> {
   const none = { reversedUsdCents: 0, recoveryOwedUsdCents: 0, matched: false };
   if (!(input.refundAmountUsdDollars > 0)) return none;
 
