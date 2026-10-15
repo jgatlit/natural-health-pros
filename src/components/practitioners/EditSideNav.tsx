@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ChevronDown } from 'lucide-react';
 import { cn } from '@/lib/utils';
 
@@ -14,8 +14,16 @@ export type EditSideNavEntry = {
 // Matches the scroll-mt-24 every anchor carries, so a clicked target sits exactly on the line.
 const READING_LINE = 96;
 const SETTLE_MS = 150;
-const USER_SCROLL_PX = 24;
+const USER_SCROLL_PX = 4;
+const RECENT_INPUT_MS = 1000;
+const LATE_TARGET_RETRY_MS = 250;
+const LATE_TARGET_TRIES = 40;
 const SCROLL_KEYS = new Set(['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' ']);
+const INTERACTIVE =
+  'input, textarea, select, button, summary, a[href], [contenteditable], ' +
+  '[role="button"], [role="link"], [role="menuitem"], [role="tab"], [role="option"], [role="listbox"], ' +
+  '[role="slider"], [role="combobox"], [role="textbox"], [role="radio"], [role="checkbox"], ' +
+  '[role="switch"], [role="spinbutton"]';
 
 function flatten(entries: readonly EditSideNavEntry[]): EditSideNavEntry[] {
   return entries.flatMap((e) => [e, ...(e.children ? flatten(e.children) : [])]);
@@ -63,20 +71,30 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
   const holdRef = useRef<(id: string) => void>(() => {});
   const orderRef = useRef<string[]>([]);
   const scheduleRef = useRef<() => void>(() => {});
+  const entriesRef = useRef(entries);
+  entriesRef.current = entries;
+  // The hash entry, kept until a real user scroll releases it. A ref (not state, not consumed on
+  // read) so it survives StrictMode's mount/unmount/mount and is set before its target exists.
+  const hashHold = useRef<string | null>(null);
   const hashApplied = useRef(false);
-  const initialHold = useRef<string | null>(null);
+
+  const measurePresent = useCallback(() => {
+    const found = new Set<string>();
+    for (const e of flatten(entriesRef.current)) if (document.getElementById(e.id)) found.add(e.id);
+    setPresent(found);
+  }, []);
 
   useEffect(() => {
-    const found = new Set<string>();
-    for (const e of flatten(entries)) if (document.getElementById(e.id)) found.add(e.id);
-    setPresent(found);
+    measurePresent();
+    if (hashApplied.current) return;
+    hashApplied.current = true;
     const fromHash = decodeURIComponent(window.location.hash.slice(1));
-    if (fromHash && found.has(fromHash) && !hashApplied.current) {
-      hashApplied.current = true;
+    if (fromHash && flatten(entries).some((e) => e.id === fromHash)) {
+      hashHold.current = fromHash;
       setActive(fromHash);
-      initialHold.current = fromHash;
+      setPresent((prev) => new Set(prev).add(fromHash));
     }
-  }, [entries]);
+  }, [entries, measurePresent]);
 
   const visible = useMemo(() => {
     if (!present) return entries.filter((e) => !e.deferred);
@@ -98,6 +116,7 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
       if (jumpToSection(id)) {
         e.preventDefault();
         setActive(id);
+        hashHold.current = null;
         holdRef.current(id);
         if (detailsRef.current) detailsRef.current.open = false;
       }
@@ -111,87 +130,129 @@ export function EditSideNav({ entries }: { entries: readonly EditSideNavEntry[] 
   // line, so a gap keeps the previous entry, the page bottom belongs to the last one, and above the
   // first anchor the first entry is active rather than a stale one.
   //
-  // A clicked (or hash-loaded) entry is HELD until the user scrolls on their own: a target near the
-  // page bottom can never reach the line, so no timer can stand in for "the user moved on". The
-  // programmatic scroll is told apart from the user's by waiting for it to settle, then releasing
-  // on wheel, touch, scroll keys, or a drift past USER_SCROLL_PX from the settled position.
+  // A clicked or hash-loaded entry is HELD until the user scrolls on their own: a target near the
+  // page bottom can never reach the line, so no timer can stand in for "the user moved on". Wheel,
+  // touch, scroll keys and pointer-down only mark recent input; the hold is released when the page
+  // then really moves (>= USER_SCROLL_PX from the position it settled at after the jump). A late
+  // layout shift with no input behind it does not release it, and a held section that disappears
+  // does.
   orderRef.current = order;
   useEffect(() => scheduleRef.current(), [order]);
 
   useEffect(() => {
     let frame = 0;
     let settleTimer = 0;
-    let held: { id: string; settledY: number | null } | null = null;
+    let retryTimer = 0;
+    let retries = 0;
+    let lastInputAt = -Infinity;
+    let pointerDown = false;
+    let held: { id: string; since: number; baseline: number | null; seen: boolean } | null = null;
+
     const settle = () => {
-      if (held) held.settledY = window.scrollY;
+      if (held) held.baseline = window.scrollY;
     };
     const release = () => {
       held = null;
+      hashHold.current = null;
       window.clearTimeout(settleTimer);
+      window.clearTimeout(retryTimer);
     };
     const compute = () => {
       frame = 0;
-      if (held) return;
+      if (held) {
+        const present = document.getElementById(held.id) !== null;
+        if (present && !held.seen) {
+          held.seen = true;
+          measurePresent();
+        } else if (!present && held.seen) {
+          release();
+        } else if (!present && retries++ < LATE_TARGET_TRIES) {
+          window.clearTimeout(retryTimer);
+          retryTimer = window.setTimeout(schedule, LATE_TARGET_RETRY_MS);
+        } else if (!present) {
+          release();
+          measurePresent();
+        }
+        if (held) return;
+      }
       const next = readActive(orderRef.current) ?? orderRef.current[0] ?? null;
       if (next) setActive(next);
     };
-    const schedule = () => {
+    function schedule() {
       if (!frame) frame = window.requestAnimationFrame(compute);
-    };
+    }
     scheduleRef.current = schedule;
-    holdRef.current = (id) => {
-      held = { id, settledY: null };
+    const hold = (id: string) => {
+      held = { id, since: Date.now(), baseline: null, seen: document.getElementById(id) !== null };
+      retries = 0;
       window.clearTimeout(settleTimer);
       settleTimer = window.setTimeout(settle, SETTLE_MS);
     };
+    holdRef.current = hold;
+
     const onScroll = () => {
       if (held) {
-        if (held.settledY === null) {
+        if (held.baseline === null) {
           window.clearTimeout(settleTimer);
           settleTimer = window.setTimeout(settle, SETTLE_MS);
-        } else if (Math.abs(window.scrollY - held.settledY) > USER_SCROLL_PX) {
+        } else if (
+          Math.abs(window.scrollY - held.baseline) >= USER_SCROLL_PX &&
+          (pointerDown || Date.now() - lastInputAt < RECENT_INPUT_MS)
+        ) {
           release();
         }
       }
       schedule();
     };
-    const onUserInput = () => {
-      release();
-      schedule();
+    const markInput = () => {
+      // Momentum from a gesture that began before the click is not the user moving on.
+      if (held && Date.now() - held.since < SETTLE_MS) return;
+      lastInputAt = Date.now();
     };
-    const onKeyScroll = (e: KeyboardEvent) => {
+    const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
-      if (!SCROLL_KEYS.has(e.key) || t?.closest?.('input, textarea, select, [contenteditable]')) return;
-      onUserInput();
+      if (!SCROLL_KEYS.has(e.key) || t?.closest?.(INTERACTIVE)) return;
+      markInput();
+    };
+    const onPointerDown = () => {
+      pointerDown = true;
+    };
+    const onPointerUp = () => {
+      pointerDown = false;
     };
     const onScrollEnd = () => {
       window.clearTimeout(settleTimer);
-      settle();
+      if (held && held.baseline === null) settle();
     };
+
     window.addEventListener('scroll', onScroll, { passive: true });
     window.addEventListener('resize', schedule);
     window.addEventListener('scrollend', onScrollEnd);
-    window.addEventListener('wheel', onUserInput, { passive: true });
-    window.addEventListener('touchmove', onUserInput, { passive: true });
-    window.addEventListener('keydown', onKeyScroll);
-    if (initialHold.current) {
-      holdRef.current(initialHold.current);
-      initialHold.current = null;
-    }
+    window.addEventListener('wheel', markInput, { passive: true });
+    window.addEventListener('touchmove', markInput, { passive: true });
+    window.addEventListener('keydown', onKey);
+    window.addEventListener('pointerdown', onPointerDown, true);
+    window.addEventListener('pointerup', onPointerUp, true);
+    window.addEventListener('pointercancel', onPointerUp, true);
+    if (hashHold.current) hold(hashHold.current);
     schedule();
     return () => {
       window.removeEventListener('scroll', onScroll);
       window.removeEventListener('resize', schedule);
       window.removeEventListener('scrollend', onScrollEnd);
-      window.removeEventListener('wheel', onUserInput);
-      window.removeEventListener('touchmove', onUserInput);
-      window.removeEventListener('keydown', onKeyScroll);
+      window.removeEventListener('wheel', markInput);
+      window.removeEventListener('touchmove', markInput);
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('pointerdown', onPointerDown, true);
+      window.removeEventListener('pointerup', onPointerUp, true);
+      window.removeEventListener('pointercancel', onPointerUp, true);
       window.cancelAnimationFrame(frame);
       window.clearTimeout(settleTimer);
+      window.clearTimeout(retryTimer);
       scheduleRef.current = () => {};
       holdRef.current = () => {};
     };
-  }, []);
+  }, [measurePresent]);
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {

@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act } from 'react-dom/test-utils';
 import { createRoot, type Root } from 'react-dom/client';
+import { StrictMode } from 'react';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { EditSideNav, type EditSideNavEntry } from '@/components/practitioners/EditSideNav';
 
@@ -58,6 +59,12 @@ const scrollTo = (y: number) => {
     window.dispatchEvent(new Event('scroll'));
     vi.advanceTimersByTime(20);
   });
+};
+const userScrollTo = (y: number) => {
+  act(() => {
+    window.dispatchEvent(new Event('wheel'));
+  });
+  scrollTo(y);
 };
 const currentIds = () =>
   Array.from(document.querySelectorAll('[data-edit-nav="desktop"] [aria-current="location"]')).map((a) =>
@@ -137,7 +144,8 @@ describe('EditSideNav reading-line scroll-spy', () => {
     act(() => {
       window.dispatchEvent(new Event('scrollend'));
     });
-    scrollTo(PAGE_TOPS['profile-qualifications']! - 90);
+    wait(300);
+    userScrollTo(PAGE_TOPS['profile-qualifications']! - 90);
     expect(currentIds()).toEqual(['#profile-qualifications']);
   });
 
@@ -178,13 +186,13 @@ describe('EditSideNav reading-line scroll-spy', () => {
     });
     scrollTo(scrollY + 10);
     expect(currentIds()).toEqual(['#share-signup']);
-    scrollTo(MAX - 300);
+    userScrollTo(MAX - 300);
     expect(currentIds()).toEqual(['#sections']);
     scrollTo(MAX);
     expect(currentIds()).toEqual(['#account']);
   });
 
-  it.each(['wheel', 'touchmove'])('releases the hold on %s', (type) => {
+  it.each(['wheel', 'touchmove'])('does not release on %s when the page does not move', (type) => {
     mount();
     clickShareSignup();
     wait(1000);
@@ -192,36 +200,123 @@ describe('EditSideNav reading-line scroll-spy', () => {
       window.dispatchEvent(new Event(type));
     });
     wait(20);
-    expect(currentIds()).toEqual(['#account']);
+    scrollTo(scrollY);
+    expect(currentIds()).toEqual(['#share-signup']);
   });
 
-  it('releases the hold on a scroll key but not on typing in a field', () => {
+  it.each(['wheel', 'touchmove'])('releases on %s that really moves the page', (type) => {
     mount();
     clickShareSignup();
     wait(1000);
-    const input = document.createElement('input');
-    document.body.appendChild(input);
     act(() => {
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'ArrowDown', bubbles: true }));
+      window.dispatchEvent(new Event(type));
     });
-    scrollTo(scrollY);
+    scrollTo(scrollY - 30);
+    expect(currentIds()).toEqual(['#sections']);
+  });
+
+  it('ignores input right after a click (momentum), then honours it', () => {
+    mount();
+    clickShareSignup();
+    act(() => {
+      window.dispatchEvent(new Event('wheel'));
+    });
+    wait(1000);
+    scrollTo(scrollY - 30);
+    expect(currentIds()).toEqual(['#share-signup']);
+  });
+
+  it('releases on a scrollbar drag (pointer down plus movement) without any wheel', () => {
+    mount();
+    clickShareSignup();
+    wait(1000);
+    act(() => {
+      window.dispatchEvent(new Event('pointerdown'));
+    });
+    wait(3000);
+    scrollTo(scrollY - 200);
+    expect(currentIds()).toEqual(['#sections']);
+  });
+
+  it('a late layout shift with no input does not release the hold', () => {
+    mount();
+    clickShareSignup();
+    wait(1000);
+    scrollTo(scrollY - 200);
+    expect(currentIds()).toEqual(['#share-signup']);
+  });
+
+  it('a scroll key releases only when focus is not in an interactive control', () => {
+    mount();
+    clickShareSignup();
+    wait(1000);
+    const button = document.createElement('button');
+    document.body.appendChild(button);
+    act(() => {
+      button.dispatchEvent(new KeyboardEvent('keydown', { key: ' ', bubbles: true }));
+    });
+    scrollTo(scrollY - 30);
     expect(currentIds()).toEqual(['#share-signup']);
     act(() => {
       document.body.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageUp', bubbles: true }));
     });
-    wait(20);
+    scrollTo(scrollY - 30);
+    expect(currentIds()).toEqual(['#sections']);
+  });
+
+  it('clears the hold when the held section is removed', () => {
+    mount();
+    clickShareSignup();
+    wait(1000);
+    document.getElementById('share-signup')!.remove();
+    scrollTo(scrollY);
     expect(currentIds()).toEqual(['#account']);
   });
 
-  it.each(['share-signup', 'account'])('a hash load of #%s keeps its own entry at max scroll', (id) => {
+  it.each(['share-signup', 'account'])('a hash load of #%s keeps its own entry at max scroll for 3s', (id) => {
     window.history.replaceState(null, '', `/practitioners/x/edit#${id}`);
     scrollY = MAX;
     mount();
-    wait(2000);
+    wait(3000);
     scrollTo(MAX);
     expect(currentIds()).toEqual([`#${id}`]);
-    scrollTo(MAX - 200);
+    userScrollTo(MAX - 200);
     expect(currentIds()).not.toEqual([`#${id}`]);
+  });
+
+  it('a hash target that mounts AFTER the first effect run is still held', () => {
+    window.history.replaceState(null, '', '/practitioners/x/edit#share-signup');
+    scrollY = MAX;
+    document.getElementById('share-signup')!.remove();
+    mount();
+    scrollTo(MAX);
+    wait(1000);
+    expect(currentIds()).toEqual(['#share-signup']);
+    const late = document.createElement('div');
+    late.id = 'share-signup';
+    late.getBoundingClientRect = () => ({ top: PAGE_TOPS['share-signup']! - scrollY }) as DOMRect;
+    document.body.insertBefore(late, document.getElementById('account'));
+    wait(500);
+    scrollTo(MAX);
+    wait(3000);
+    expect(currentIds()).toEqual(['#share-signup']);
+    expect(link('share-signup')).not.toBeNull();
+  });
+
+  it('keeps the hash hold under StrictMode double mount', () => {
+    window.history.replaceState(null, '', '/practitioners/x/edit#share-signup');
+    scrollY = MAX;
+    root = createRoot(host);
+    act(() =>
+      root.render(
+        <StrictMode>
+          <EditSideNav entries={ENTRIES} />
+        </StrictMode>,
+      ),
+    );
+    wait(3000);
+    scrollTo(MAX);
+    expect(currentIds()).toEqual(['#share-signup']);
   });
 
   it('never keeps a stale highlight above the first anchor', () => {
