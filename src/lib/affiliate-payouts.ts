@@ -36,7 +36,9 @@
  *
  * REFUND NETTING (lane R2). A refund that arrives AFTER a recruiter's share was paid is recorded
  * as an `AffiliateBalanceAdjustment` debit (see `applyAffiliateReversal`); nothing is clawed back
- * by transfer. Settling a recruiter's NEXT payable share first nets their open debits against it,
+ * by transfer. A refund that lands while the transfer is still in flight (SENDING) is booked as a
+ * debit at the moment the transfer is CONFIRMED (`completeAffiliateTransfer`), not before, so a
+ * transfer Whop refuses can never charge the recruiter twice. Settling a recruiter's NEXT payable share first nets their open debits against it,
  * oldest debit first:
  *
  *   gross share (share - reversed)  -  debit applied  =  amount that goes through the fee helper
@@ -84,6 +86,8 @@ export type AffiliatePayoutsTx = {
   affiliateLedgerEntry: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     updateMany(args: any): Promise<{ count: number }>;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    findUnique(args: any): Promise<any>;
   };
   affiliateBalanceAdjustment: {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -525,17 +529,14 @@ export async function settleAffiliateShares(
     // The money has moved. If recording it fails, the row stays SENDING (never re-selected), so
     // the worst case is a missing receipt, not a second payment; say so loudly with the id.
     try {
-      const done = await db.affiliateLedgerEntry.updateMany({
-        where: { id: row.id, state: 'SENDING' },
-        data: {
-          state: 'SETTLED',
-          settledAt: opts.at,
-          whopTransferId: transferId,
-          netPaidUsdCents: plan.netCents,
-          lastError: null,
-        },
+      const done = await completeAffiliateTransfer(db, {
+        entryId: row.id,
+        recruiterPractitionerId: row.recruiterPractitionerId,
+        transferId,
+        netPaidUsdCents: plan.netCents,
+        at: opts.at,
       });
-      if (done.count === 0) {
+      if (!done) {
         console.error(
           '[affiliate-payouts] TRANSFER SENT BUT ROW NOT SENDING',
           JSON.stringify({ entryId: row.id, transferId }),
@@ -554,6 +555,90 @@ export async function settleAffiliateShares(
   }
 
   return summary;
+}
+
+/**
+ * RECORD THAT A CLAIMED TRANSFER WENT OUT: SENDING -> SETTLED, and any refund that landed WHILE it
+ * was in flight becomes a debit in the same transaction.
+ *
+ * Why the debit is created HERE and not by the refund (see `applyAffiliateReversal`): while a row is
+ * SENDING nobody knows yet whether the money left. If the refund recorded a debit and Whop then
+ * REFUSED the transfer (HTTP 4xx, row back to ACCRUED), the recruiter would be charged twice: once
+ * by the smaller claim the retry makes, once by the debit. Deferring to confirmation makes the
+ * refund count exactly once either way. The refund's cache raise and this completion are both
+ * compare-and-swaps on (state, reversedUsdCents), so one of them always sees the other:
+ *
+ *   - refund first: the completion re-reads the larger total and debits the difference;
+ *   - completion first: the row is SETTLED, so the refund's swap misses on state and it debits itself.
+ *
+ * The amount the claim already deducted is `share - grossShareUsdCents` (the claim records the
+ * gross payable at claim time), so the debit is `reversed now - reversed at claim`. Exported because
+ * an operator who resolves a HELD row as "it did go out" (lane R4) must book the same debit.
+ *
+ * Returns false when the row is no longer SENDING (the caller logs it loudly); throws on a database
+ * failure (the caller logs "TRANSFER SENT BUT NOT RECORDED" and the row stays SENDING, never re-sent).
+ */
+export async function completeAffiliateTransfer(
+  db: Pick<AffiliatePayoutsDb, '$transaction'>,
+  input: {
+    entryId: string;
+    recruiterPractitionerId: string;
+    transferId: string;
+    netPaidUsdCents: number;
+    at: Date;
+  },
+): Promise<boolean> {
+  for (let attempt = 0; attempt < MAX_NETTING_ATTEMPTS * 2; attempt += 1) {
+    const outcome = await db.$transaction(async (tx) => {
+      const cur = (await tx.affiliateLedgerEntry.findUnique({
+        where: { id: input.entryId },
+        select: { state: true, shareUsdCents: true, reversedUsdCents: true, grossShareUsdCents: true },
+      })) as {
+        state: string;
+        shareUsdCents: number;
+        reversedUsdCents: number;
+        grossShareUsdCents: number | null;
+      } | null;
+      if (!cur || cur.state !== 'SENDING') return 'NOT_SENDING' as const;
+
+      const reversedAtClaim = cur.shareUsdCents - (cur.grossShareUsdCents ?? cur.shareUsdCents);
+      const postClaimRefund = Math.max(0, cur.reversedUsdCents - reversedAtClaim);
+
+      const done = await tx.affiliateLedgerEntry.updateMany({
+        // Names the total we read: a refund that raised it since makes this miss, and we re-read.
+        where: { id: input.entryId, state: 'SENDING', reversedUsdCents: cur.reversedUsdCents },
+        data: {
+          state: 'SETTLED',
+          settledAt: input.at,
+          whopTransferId: input.transferId,
+          netPaidUsdCents: input.netPaidUsdCents,
+          lastError: null,
+        },
+      });
+      if (done.count === 0) return 'RETRY' as const;
+
+      if (postClaimRefund > 0) {
+        await tx.affiliateBalanceAdjustment.createMany({
+          data: [
+            {
+              recruiterPractitionerId: input.recruiterPractitionerId,
+              sourceLedgerEntryId: input.entryId,
+              amountUsdCents: postClaimRefund,
+              appliedUsdCents: 0,
+              state: 'OPEN',
+              reason: 'REFUND',
+              dedupeKey: `REFUND:${input.entryId}:${cur.reversedUsdCents}`,
+            },
+          ],
+          skipDuplicates: true,
+        });
+      }
+      return 'DONE' as const;
+    });
+    if (outcome === 'DONE') return true;
+    if (outcome === 'NOT_SENDING') return false;
+  }
+  throw new Error(`could not complete the transfer for ledger row ${input.entryId}: it kept losing its compare-and-swap`);
 }
 
 /**

@@ -211,9 +211,11 @@ const MAX_REVERSAL_ATTEMPTS = 8;
  * the retry) harmless, and what keeps two interleaved refunds from losing one.
  *
  * REFUND AFTER PAYOUT = A DEBIT, NOT A FLAG (lane R2). The cache raise is a compare-and-swap on
- * (state, reversedUsdCents) inside a transaction. If the row is SENDING or SETTLED at that instant
- * the money has already left (or is leaving), so the SAME transaction records an
- * `AffiliateBalanceAdjustment` of exactly the amount the cache rose by. Why this shape:
+ * (state, reversedUsdCents) inside a transaction. If the row is SETTLED at that instant the money
+ * has left, so the SAME transaction records an `AffiliateBalanceAdjustment` of exactly the amount
+ * the cache rose by. (A row that is SENDING is not yet confirmed paid; the debit for a refund that
+ * lands in that window is written by `completeAffiliateTransfer` when the transfer is confirmed.)
+ * Why this shape:
  *
  *   - ONE DEBIT PER TRANSITION. Every cache transition is won by exactly one writer (the CAS), so
  *     two concurrent refunds, or a refund racing a redelivery, can neither both debit the same
@@ -256,9 +258,13 @@ export async function applyAffiliateReversal(
     if (total <= row.reversedUsdCents) break;
 
     const delta = total - row.reversedUsdCents;
-    // SENDING counts as paid: the transfer may already be on the wire, and an in-flight transfer
-    // cannot be shrunk. SETTLED includes a row whose whole share was netted against earlier debits.
-    const paidOut = row.state === 'SENDING' || row.state === 'SETTLED';
+    // Only SETTLED is CONFIRMED paid (it includes a row whose whole share was netted against earlier
+    // debits). A SENDING row is in doubt: if Whop then refuses the transfer the row returns to
+    // ACCRUED and the retry claims the reduced amount, so a debit written now would charge the
+    // recruiter twice. The refund is still captured: it raises the cache here, and
+    // `completeAffiliateTransfer` turns whatever rose since the claim into a debit the moment the
+    // transfer is confirmed.
+    const paidOut = row.state === 'SETTLED';
 
     const won = await db.$transaction(async (tx) => {
       const moved = await tx.affiliateLedgerEntry.updateMany({

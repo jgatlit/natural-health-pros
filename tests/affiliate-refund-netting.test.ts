@@ -516,31 +516,126 @@ describe('concurrency: the same cents are never netted or paid twice', () => {
     expect(world.fake.adjustments).toHaveLength(0);
   });
 
-  it('CLAIM beats the refund: the refund finds the row SENDING and becomes a DEBIT, never lost', async () => {
-    enable();
-    const world = refundWorld([{ id: 'bi_1', share: 300 }]);
-    await world.accrue('bi_1');
+  /** A transfer that stays in flight until `finish()` / `fail()`; `atTransfer` resolves once it is on the wire. */
+  function slowTransfer() {
     let inFlight!: () => void;
     const atTransfer = new Promise<void>((r) => (inFlight = r));
     let finish!: () => void;
-    const gate = new Promise<void>((r) => (finish = r));
-    const transfer = vi.fn(async () => {
+    let fail!: () => void;
+    const gate = new Promise<'ok' | 'refused'>((r) => {
+      finish = () => r('ok');
+      fail = () => r('refused');
+    });
+    const transfer = vi.fn(async (args: any) => {
+      void args;
       inFlight();
-      await gate;
+      if ((await gate) === 'refused') throw new Error('Whop /transfers failed (422): amount invalid');
       return { transferId: 'tr_slow' };
     });
+    return { transfer, atTransfer, finish, fail };
+  }
 
-    const running = settle(world.db, transfer);
-    await atTransfer; // the row is SENDING; the money is on the wire
+  it('CLAIM beats the refund: the refund lands while SENDING; the DEBIT is written when the transfer is confirmed, never lost', async () => {
+    enable();
+    const world = refundWorld([{ id: 'bi_1', share: 300 }]);
+    await world.accrue('bi_1');
+    const slow = slowTransfer();
+
+    const running = settle(world.db, slow.transfer);
+    await slow.atTransfer; // the row is SENDING; the money is on the wire
     expect(world.fake.rows[0].state).toBe('SENDING');
     const out = await world.refund('bi_1', 40, 'r1');
-    expect(out.affiliateDebitRecordedUsdCents).toBe(120);
-    finish();
+    expect(out.affiliateReversedUsdCents).toBe(120);
+    expect(out.affiliateDebitRecordedUsdCents).toBe(0); // not confirmed paid yet: no debit yet
+    expect(world.fake.adjustments).toHaveLength(0);
+    slow.finish();
     await running;
 
-    expect(world.fake.rows[0]).toMatchObject({ state: 'SETTLED', reversedUsdCents: 120, transferUsdCents: 300 });
+    expect(world.fake.rows[0]).toMatchObject({ state: 'SETTLED', reversedUsdCents: 120, transferUsdCents: 300, grossShareUsdCents: 300 });
     expect(world.fake.adjustments).toHaveLength(1);
-    expect(world.fake.adjustments[0]).toMatchObject({ amountUsdCents: 120, state: 'OPEN' });
+    expect(world.fake.adjustments[0]).toMatchObject({
+      amountUsdCents: 120,
+      appliedUsdCents: 0,
+      state: 'OPEN',
+      sourceLedgerEntryId: world.fake.rows[0].id,
+      dedupeKey: `REFUND:${world.fake.rows[0].id}:120`,
+    });
+  });
+
+  it('two refunds while SENDING become ONE debit for their total at confirmation', async () => {
+    enable();
+    const world = refundWorld([{ id: 'bi_1', share: 300 }]);
+    await world.accrue('bi_1');
+    const slow = slowTransfer();
+    const running = settle(world.db, slow.transfer);
+    await slow.atTransfer;
+    await world.refund('bi_1', 40, 'r1');
+    await world.refund('bi_1', 20, 'r2');
+    await world.refund('bi_1', 40, 'r1'); // redelivery
+    slow.finish();
+    await running;
+    expect(world.fake.rows[0].reversedUsdCents).toBe(180);
+    expect(world.fake.adjustments.map((a) => a.amountUsdCents)).toEqual([180]);
+  });
+
+  it('the transfer is REFUSED after a refund landed while SENDING: the row returns to ACCRUED, NO debit is ever made, and the retry sends the reduced amount (the recruiter is charged ONCE)', async () => {
+    enable();
+    const world = refundWorld([{ id: 'bi_1', share: 300 }]);
+    await world.accrue('bi_1');
+    const slow = slowTransfer();
+    const running = settle(world.db, slow.transfer);
+    await slow.atTransfer;
+    await world.refund('bi_1', 40, 'r1');
+    slow.fail(); // Whop says no: the money never moved
+    await running;
+
+    expect(world.fake.rows[0]).toMatchObject({ state: 'ACCRUED', reversedUsdCents: 120 });
+    expect(world.fake.adjustments).toHaveLength(0);
+
+    const transfer = okTransfer();
+    await settle(world.db, transfer);
+    expect(transfer.mock.calls[0]![0].amountUsdDollars).toBe(1.8); // 300 - 120, once
+    expect(world.fake.adjustments).toHaveLength(0);
+    expect(world.fake.rows[0]).toMatchObject({ state: 'SETTLED', netPaidUsdCents: 180 });
+  });
+
+  it('a refund lands between the confirmation’s read and its swap: the swap misses on the total, re-reads, and the debit includes it', async () => {
+    enable();
+    const world = refundWorld([{ id: 'bi_1', share: 300 }]);
+    await world.accrue('bi_1');
+    const transfer = okTransfer();
+    const realFind = world.fake.affiliateLedgerEntry.findUnique;
+    let injected = false;
+    world.fake.affiliateLedgerEntry.findUnique = async (args: any) => {
+      const out = await realFind(args);
+      // The confirmation's own read of the SENDING row (it selects grossShareUsdCents).
+      if (!injected && args.select?.grossShareUsdCents && out?.state === 'SENDING') {
+        injected = true;
+        await world.refund('bi_1', 40, 'r1');
+      }
+      return out;
+    };
+
+    await settle(world.db, transfer);
+
+    expect(world.fake.rows[0]).toMatchObject({ state: 'SETTLED', reversedUsdCents: 120 });
+    expect(world.fake.adjustments.map((a) => a.amountUsdCents)).toEqual([120]);
+  });
+
+  it('a refund AFTER confirmation is a debit on its own, and an earlier SENDING-window debit is not repeated', async () => {
+    enable();
+    const world = refundWorld([{ id: 'bi_1', share: 300 }]);
+    await world.accrue('bi_1');
+    const slow = slowTransfer();
+    const running = settle(world.db, slow.transfer);
+    await slow.atTransfer;
+    await world.refund('bi_1', 20, 'r1'); // 60, in flight
+    slow.finish();
+    await running;
+    await world.refund('bi_1', 20, 'r2'); // 60 more, after confirmation
+    await world.refund('bi_1', 20, 'r1'); // redeliveries
+    await world.refund('bi_1', 20, 'r2');
+    expect(world.fake.adjustments.map((a) => a.amountUsdCents)).toEqual([60, 60]);
   });
 
   it('the refund READ the row as ACCRUED, then the whole payout lands before its swap: the swap misses on STATE, re-reads, and records the debit', async () => {

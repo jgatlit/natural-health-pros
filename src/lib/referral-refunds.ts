@@ -32,8 +32,9 @@
  * decided at mint.
  *
  * A REFUND AFTER THE RECRUITER WAS PAID (lane R2, operator ruling 2026-10-14) is NOT a flag for a
- * human any more: the row is already SENDING / SETTLED, so the reversal is recorded in the same
- * transaction as an `AffiliateBalanceAdjustment` DEBIT against the recruiter, which the payout
+ * human any more: the row is already SETTLED, so the reversal is recorded in the same
+ * transaction as an `AffiliateBalanceAdjustment` DEBIT against the recruiter (for a transfer still
+ * in flight, the debit is booked when it is confirmed), which the payout
  * sweep nets off their next payable shares (NHP is never out of pocket, nothing is clawed back by
  * transfer, and the recruiter sees an "adjusted for a refund" line). The referrer path below is
  * unchanged: it still only records and flags.

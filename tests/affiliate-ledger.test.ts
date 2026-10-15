@@ -630,10 +630,15 @@ describe('a refund after the share has left: a DEBIT against the recruiter, neve
     expect(db.affiliate.rows[0]).toMatchObject({ state: 'SETTLED', reversedUsdCents: 300 });
   });
 
-  it('SENDING (a transfer is in flight): treated like SETTLED, a debit, never edited into REVERSED', async () => {
-    const db = refundDb(entry({ state: 'SENDING', transferUsdCents: 300 }));
+  it('SENDING (a transfer is in flight, NOT yet confirmed): the cache rises, no debit yet, never edited into REVERSED', async () => {
+    // The debit for a refund in this window is written when the transfer is CONFIRMED
+    // (`completeAffiliateTransfer`): if Whop refuses it the row returns to ACCRUED and the retry
+    // claims the reduced amount, so a debit now would charge the recruiter twice.
+    const db = refundDb(entry({ state: 'SENDING', transferUsdCents: 300, grossShareUsdCents: 300 }));
     const out = await refund(db, 100);
-    expect(out.affiliateDebitRecordedUsdCents).toBe(300);
+    expect(out.affiliateReversedUsdCents).toBe(300);
+    expect(out.affiliateDebitRecordedUsdCents).toBe(0);
+    expect(db.affiliate.adjustments).toHaveLength(0);
     expect(db.affiliate.rows[0].state).toBe('SENDING');
     expect(db.affiliate.rows[0].reversedUsdCents).toBe(300);
   });
