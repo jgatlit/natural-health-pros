@@ -24,7 +24,6 @@
     "typesense:reset": "tsx --env-file=.env scripts/typesense-reset.ts",
     "typesense:reindex": "tsx --env-file=.env scripts/typesense-index.ts",
     "typesense:synonyms": "tsx --env-file=.env scripts/typesense-synonyms-sync.ts",
-    "taxonomy:seed": "tsx --env-file=.env scripts/seed-taxonomy.ts",
     "import:pilot": "tsx --env-file=.env scripts/import-pilot-practitioners.ts",
     "photos:wire": "tsx --env-file=.env scripts/wire-pilot-photos.ts",
     "photos:backfill": "tsx --env-file=.env scripts/backfill-pilot-photos.ts",

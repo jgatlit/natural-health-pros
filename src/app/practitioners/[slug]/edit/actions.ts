@@ -15,6 +15,9 @@ import { newToken } from '@/lib/tokens';
 import { indexPractitioner } from '@/lib/practitioner-indexer';
 import { syncSpecialtySynonyms } from '@/lib/typesense-synonyms';
 import { draftProfile, type DraftSpecialty } from '@/lib/onboarding-draft';
+import { resolveOwnSpecialty, type ResolvedSpecialty } from '@/lib/specialty-resolve';
+import { normalizeAliasLabel } from '@/lib/specialty-match';
+import { SPECIALTY_ORDER } from '@/lib/practitioner-ordering';
 import { parseBookingLinkRows, MAX_BOOKING_LINKS } from '@/lib/booking-links';
 import { detectProvider, extractUrlFromEmbed } from '@/lib/booking-providers';
 import { normalizeOfferingFields } from '@/lib/offering-fields';
@@ -64,8 +67,6 @@ function buildSearchText(parts: (string | null | undefined)[]): string {
   return parts.filter((p) => p && p.trim()).join(' \n ');
 }
 
-const normLabel = (s: string) => s.trim().toLowerCase().replace(/\s+/g, ' ');
-
 function slugify(s: string): string {
   return s
     .toLowerCase()
@@ -77,41 +78,21 @@ function slugify(s: string): string {
 type RawSelection = { specialtyId: string | null; rawLabel: string };
 
 /**
- * Resolve one combobox selection → a canonical specialtyId + the practitioner's rawLabel.
- * - Picked canonical → use it.
- * - Free-text that matches an existing alias/canonical (normalized) → reuse that canonical.
- * - Genuinely novel free-text → create a PROPOSED canonical + PENDING alias (the
- *   /admin/specialties moderation queue). Practitioner goes live immediately, never blocked.
+ * Resolve one combobox selection → a specialtyId + the practitioner's rawLabel.
+ * - An explicit pick of an existing specialty → use it.
+ * - Free text → the same words (exact, or a wording variant) if a specialty already has them,
+ *   else a new PROPOSED specialty named from the label + PENDING alias (the /admin/specialties
+ *   queue). Never a different concept: aliases are not followed (see resolveOwnSpecialty).
  * Returns null when the rawLabel is empty.
  */
 async function resolveSelection(
   tx: Prisma.TransactionClient,
   sel: RawSelection,
-): Promise<{ specialtyId: string; rawLabel: string } | null> {
+): Promise<ResolvedSpecialty | null> {
   const rawLabel = sel.rawLabel.trim();
   if (!rawLabel) return null;
-  if (sel.specialtyId) return { specialtyId: sel.specialtyId, rawLabel };
-
-  const label = normLabel(rawLabel);
-
-  const alias = await tx.specialtyAlias.findUnique({ where: { label } });
-  if (alias) return { specialtyId: alias.specialtyId, rawLabel };
-
-  const byName = await tx.specialty.findFirst({
-    where: { name: { equals: rawLabel, mode: 'insensitive' } },
-  });
-  if (byName) return { specialtyId: byName.id, rawLabel };
-
-  // Novel — create a PROPOSED canonical (unique slug) + PENDING alias.
-  let slug = slugify(rawLabel);
-  if (await tx.specialty.findUnique({ where: { slug } })) slug = `${slug}-${Date.now().toString(36)}`;
-  const created = await tx.specialty.create({
-    data: { slug, name: rawLabel, status: 'PROPOSED' },
-  });
-  await tx.specialtyAlias.create({
-    data: { label, specialtyId: created.id, source: 'PRACTITIONER', status: 'PENDING' },
-  });
-  return { specialtyId: created.id, rawLabel };
+  if (sel.specialtyId) return { specialtyId: sel.specialtyId, rawLabel, created: false };
+  return resolveOwnSpecialty(tx, { rawLabel, aliasSource: 'PRACTITIONER' });
 }
 
 function normalizeUrl(raw: string, allowlist: string[]): string | null {
@@ -365,25 +346,22 @@ export async function updatePractitioner(slug: string, formData: FormData): Prom
 
   await prisma.$transaction(async (tx) => {
     // Resolve combobox selections → canonical ids (+ create PROPOSED/PENDING for novel terms)
-    const resolved: { specialtyId: string; rawLabel: string }[] = [];
+    const resolved: ResolvedSpecialty[] = [];
     const seen = new Set<string>();
     for (const sel of rawSelections) {
-      const before = await tx.specialty.count();
       const r = await resolveSelection(tx, sel);
       if (!r || seen.has(r.specialtyId)) continue;
-      if ((await tx.specialty.count()) > before) createdNewTaxonomy = true;
+      if (r.created) createdNewTaxonomy = true;
       seen.add(r.specialtyId);
       resolved.push(r);
     }
 
-    // Canonical names (+ parents) for searchText
+    // Canonical names for searchText — the practitioner's own specialties only, no parent roll-up
     const specialtyRows = await tx.specialty.findMany({
       where: { id: { in: resolved.map((r) => r.specialtyId) } },
-      include: { parent: true },
+      select: { name: true },
     });
-    const canonicalNames = Array.from(
-      new Set(specialtyRows.flatMap((s) => (s.parent ? [s.name, s.parent.name] : [s.name]))),
-    );
+    const canonicalNames = Array.from(new Set(specialtyRows.map((s) => s.name)));
     const rawLabels = resolved.map((r) => r.rawLabel);
 
     await tx.practitionerSpecialty.deleteMany({ where: { practitionerId: target.id } });
@@ -564,49 +542,21 @@ export async function updatePractitioner(slug: string, formData: FormData): Prom
 }
 
 /**
- * Resolve one AI-drafted specialty → canonical id, writing the proposed mapping as
- * an IMPORT/PENDING SpecialtyAlias with the LLM confidence (Task B spec). Mirrors
- * resolveSelection but the proposal always lands in the moderation queue (PENDING)
- * with source=IMPORT, and novel canonicals are created PROPOSED.
+ * Resolve one AI-drafted specialty. The LLM may tidy wording but never choose the concept: its
+ * proposed canonical is only a tie-break hint between wording variants of the practitioner's own
+ * label, and a label with no same-words match becomes its own PROPOSED specialty with an
+ * IMPORT/PENDING alias carrying the LLM confidence.
  */
 async function resolveDraftSpecialty(
   tx: Prisma.TransactionClient,
   d: DraftSpecialty,
-): Promise<{ specialtyId: string; rawLabel: string } | null> {
-  const rawLabel = d.rawLabel.trim();
-  if (!rawLabel) return null;
-  const label = normLabel(rawLabel);
-
-  // Already-known phrasing → reuse its canonical (don't disturb an approved alias).
-  const existingAlias = await tx.specialtyAlias.findUnique({ where: { label } });
-  if (existingAlias) return { specialtyId: existingAlias.specialtyId, rawLabel };
-
-  // Map to the proposed canonical: by slug, then by name, else create a PROPOSED node.
-  let canonical =
-    (await tx.specialty.findUnique({ where: { slug: d.canonicalSlug } })) ||
-    (await tx.specialty.findFirst({
-      where: { name: { equals: d.canonicalName, mode: 'insensitive' } },
-    }));
-  if (!canonical) {
-    let slug = slugify(d.canonicalSlug || d.canonicalName);
-    if (await tx.specialty.findUnique({ where: { slug } })) {
-      slug = `${slug}-${Date.now().toString(36)}`;
-    }
-    canonical = await tx.specialty.create({
-      data: { slug, name: d.canonicalName || rawLabel, status: 'PROPOSED' },
-    });
-  }
-
-  await tx.specialtyAlias.create({
-    data: {
-      label,
-      specialtyId: canonical.id,
-      source: 'IMPORT',
-      status: 'PENDING',
-      confidence: d.confidence,
-    },
+): Promise<ResolvedSpecialty | null> {
+  return resolveOwnSpecialty(tx, {
+    rawLabel: d.rawLabel,
+    hint: { slug: d.canonicalSlug, name: d.canonicalName },
+    aliasSource: 'IMPORT',
+    confidence: d.confidence,
   });
-  return { specialtyId: canonical.id, rawLabel };
 }
 
 /**
@@ -629,7 +579,7 @@ export async function generateDraftAction(slug: string, formData: FormData): Pro
         tagline: true,
         whoIHelp: true,
         bio: true,
-        specialties: { select: { rawLabel: true } },
+        specialties: { select: { rawLabel: true, specialtyId: true }, orderBy: SPECIALTY_ORDER },
       },
     }),
     prisma.specialty.findMany({
@@ -656,22 +606,31 @@ export async function generateDraftAction(slug: string, formData: FormData): Pro
   });
 
   await prisma.$transaction(async (tx) => {
-    const resolved: { specialtyId: string; rawLabel: string }[] = [];
-    const seen = new Set<string>();
+    // Specialties the practitioner already holds are KEPT on the specialty they hold, never
+    // re-resolved from their wording: a re-resolve would move "Board Certified Holistic Health
+    // Practitioner (BC-HHP)" off the node an operator chose for it onto a fresh one, and a draft
+    // that omits a held specialty must not delete it. Only labels new to this practitioner are
+    // resolved, appended after the held ones.
+    const resolved: { specialtyId: string; rawLabel: string | null }[] =
+      practitioner.specialties.map((s) => ({ specialtyId: s.specialtyId, rawLabel: s.rawLabel }));
+    const seen = new Set(resolved.map((r) => r.specialtyId));
+    const heldLabels = new Set(
+      resolved.map((r) => (r.rawLabel ? normalizeAliasLabel(r.rawLabel) : '')).filter(Boolean),
+    );
     for (const d of draft.specialties) {
+      if (heldLabels.has(normalizeAliasLabel(d.rawLabel))) continue;
       const r = await resolveDraftSpecialty(tx, d);
       if (!r || seen.has(r.specialtyId)) continue;
       seen.add(r.specialtyId);
+      heldLabels.add(normalizeAliasLabel(r.rawLabel));
       resolved.push(r);
     }
 
     const specialtyRows = await tx.specialty.findMany({
       where: { id: { in: resolved.map((r) => r.specialtyId) } },
-      include: { parent: true },
+      select: { name: true },
     });
-    const canonicalNames = Array.from(
-      new Set(specialtyRows.flatMap((s) => (s.parent ? [s.name, s.parent.name] : [s.name]))),
-    );
+    const canonicalNames = Array.from(new Set(specialtyRows.map((s) => s.name)));
 
     await tx.practitionerSpecialty.deleteMany({ where: { practitionerId: target.id } });
     await tx.practitioner.update({
@@ -693,7 +652,7 @@ export async function generateDraftAction(slug: string, formData: FormData): Pro
           draft.bio,
           draft.whoIHelp,
           ...draft.modalities,
-          ...draft.specialties.map((s) => s.rawLabel),
+          ...resolved.map((r) => r.rawLabel),
           ...canonicalNames,
         ]),
         specialties: {
@@ -860,24 +819,21 @@ export async function submitOnboarding(slug: string, formData: FormData): Promis
   let createdNewTaxonomy = false;
 
   await prisma.$transaction(async (tx) => {
-    const resolved: { specialtyId: string; rawLabel: string }[] = [];
+    const resolved: ResolvedSpecialty[] = [];
     const seen = new Set<string>();
     for (const sel of rawSelections) {
-      const before = await tx.specialty.count();
       const r = await resolveSelection(tx, sel);
       if (!r || seen.has(r.specialtyId)) continue;
-      if ((await tx.specialty.count()) > before) createdNewTaxonomy = true;
+      if (r.created) createdNewTaxonomy = true;
       seen.add(r.specialtyId);
       resolved.push(r);
     }
 
     const specialtyRows = await tx.specialty.findMany({
       where: { id: { in: resolved.map((r) => r.specialtyId) } },
-      include: { parent: true },
+      select: { name: true },
     });
-    const canonicalNames = Array.from(
-      new Set(specialtyRows.flatMap((s) => (s.parent ? [s.name, s.parent.name] : [s.name]))),
-    );
+    const canonicalNames = Array.from(new Set(specialtyRows.map((s) => s.name)));
     const rawLabels = resolved.map((r) => r.rawLabel);
 
     if (target.isOwner && !alreadyAcceptedTerms) {

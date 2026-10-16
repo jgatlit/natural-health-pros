@@ -17,7 +17,7 @@
  * this is the one element on the page that must feel like a tool.
  */
 
-import { useMemo, useState } from 'react';
+import { useState } from 'react';
 import { motion } from 'motion/react';
 import { Search } from 'lucide-react';
 import { useReducedMotion } from '@/lib/use-reduced-motion';
@@ -34,14 +34,6 @@ export function HeroSearch({
   const reduced = useReducedMotion();
   const [specialty, setSpecialty] = useState('');
   const [city, setCity] = useState('');
-
-  // Parents first, then children indented — the taxonomy is hierarchical and
-  // flattening it alphabetically loses the relationship the practitioner used.
-  const grouped = useMemo(() => {
-    const roots = specialties.filter((s) => !s.parent);
-    const children = specialties.filter((s) => s.parent);
-    return { roots, children };
-  }, [specialties]);
 
   // pr-9 leaves room for the native select chevron, which otherwise crops the
   // longest option label; appearance-none would mean shipping a custom
@@ -76,20 +68,11 @@ export function HeroSearch({
             className={fieldClass}
           >
             <option value="">What do you need help with?</option>
-            {grouped.roots.map((s) => (
+            {specialties.map((s) => (
               <option key={s.slug} value={s.name}>
                 {s.name} ({s.count})
               </option>
             ))}
-            {grouped.children.length > 0 && (
-              <optgroup label="More specific">
-                {grouped.children.map((s) => (
-                  <option key={s.slug} value={s.name}>
-                    {s.name} ({s.count})
-                  </option>
-                ))}
-              </optgroup>
-            )}
           </select>
         </div>
 

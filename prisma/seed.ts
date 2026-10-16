@@ -1,10 +1,10 @@
 import { PrismaClient, Role } from '@prisma/client';
-import { seedTaxonomy } from './taxonomy';
+import { ensureFlatSpecialty } from './taxonomy';
 
 const prisma = new PrismaClient();
 
-// Canonical specialty taxonomy now lives in ./taxonomy (genesis canonical set +
-// APPROVED aliases), shared with the pilot importer. seedTaxonomy() is idempotent.
+// Specialties are flat and named from each practitioner's own labels (see ./taxonomy): no
+// parents, no seeded aliases.
 
 // 60% GA / 40% other (operator directive).
 // Coordinates are city centroids; per-practitioner jitter applied below.
@@ -30,7 +30,8 @@ type PractitionerSeed = {
   email: string;
   citySlug: string;
   cityState: string;
-  specialtySlugs: string[];
+  /** The practitioner's own specialty labels; each becomes a flat specialty of the same name. */
+  specialties: string[];
   bio: string;
   yearsInPractice: number;
 };
@@ -44,7 +45,7 @@ const PRACTITIONERS: PractitionerSeed[] = [
     email: 'maya.sullivan@example.com',
     citySlug: 'atlanta',
     cityState: 'GA',
-    specialtySlugs: ['functional-medicine', 'hormone-balance'],
+    specialties: ['Root-Cause Wellness', 'Cycle & Hormone Support'],
     bio: 'HHE-trained functional medicine practitioner helping Atlanta women rebalance hormones through root-cause investigation, comprehensive labs, and protocols built around real life.',
     yearsInPractice: 11,
   },
@@ -54,7 +55,7 @@ const PRACTITIONERS: PractitionerSeed[] = [
     email: 'jordan.beaumont@example.com',
     citySlug: 'atlanta',
     cityState: 'GA',
-    specialtySlugs: ['gut-health'],
+    specialties: ['Digestive Wellness'],
     bio: 'Recovering engineer turned gut-health practitioner. Specializes in SIBO, dysbiosis, and the inflammatory tail of long-term stress. Works with referring physicians across metro Atlanta.',
     yearsInPractice: 5,
   },
@@ -64,7 +65,7 @@ const PRACTITIONERS: PractitionerSeed[] = [
     email: 'naomi.pace@example.com',
     citySlug: 'atlanta',
     cityState: 'GA',
-    specialtySlugs: ['holistic-nutrition', 'childrens-holistic-health'],
+    specialties: ['Whole-Food Cooking', 'Family Wellness'],
     bio: 'Family nutrition built around what real Atlanta families actually eat. Pediatric and prenatal focus. Calm, non-judgmental, and grounded in food-first protocols.',
     yearsInPractice: 8,
   },
@@ -74,7 +75,7 @@ const PRACTITIONERS: PractitionerSeed[] = [
     email: 'marcus.whitfield@example.com',
     citySlug: 'atlanta',
     cityState: 'GA',
-    specialtySlugs: ['herbal-medicine'],
+    specialties: ['Plant Remedies'],
     bio: 'Clinical herbalist working alongside Atlanta-area physicians. Bridges traditional plant medicine with functional lab work and pharmaceutical-aware safety protocols.',
     yearsInPractice: 16,
   },
@@ -85,7 +86,7 @@ const PRACTITIONERS: PractitionerSeed[] = [
     email: 'eliza.boudreaux@example.com',
     citySlug: 'savannah',
     cityState: 'GA',
-    specialtySlugs: ['mind-body-coaching', 'stress-sleep-optimization'],
+    specialties: ['Mindset Coaching', 'Rest & Recovery'],
     bio: 'Nervous-system regulation coach for chronically overworked Southerners. Sleep first; everything else follows. Polyvagal-informed, body-led, refreshingly non-woo.',
     yearsInPractice: 7,
   },
@@ -95,7 +96,7 @@ const PRACTITIONERS: PractitionerSeed[] = [
     email: 'theresa.holcombe@example.com',
     citySlug: 'savannah',
     cityState: 'GA',
-    specialtySlugs: ['functional-medicine'],
+    specialties: ['Root-Cause Wellness'],
     bio: 'Functional medicine for thyroid, autoimmune, and hormone-disrupted women. Twelve years post-pharmacy, now practicing the medicine she wishes she had been taught.',
     yearsInPractice: 12,
   },
@@ -106,7 +107,7 @@ const PRACTITIONERS: PractitionerSeed[] = [
     email: 'cameron.liddell@example.com',
     citySlug: 'athens',
     cityState: 'GA',
-    specialtySlugs: ['gut-health', 'holistic-nutrition'],
+    specialties: ['Digestive Wellness', 'Whole-Food Cooking'],
     bio: 'Gut-brain axis specialist. Works closely with UGA students and faculty on stress-driven digestive issues, IBS, and the post-antibiotic restoration arc.',
     yearsInPractice: 6,
   },
@@ -116,7 +117,7 @@ const PRACTITIONERS: PractitionerSeed[] = [
     email: 'avery.tate@example.com',
     citySlug: 'athens',
     cityState: 'GA',
-    specialtySlugs: ['hormone-balance'],
+    specialties: ['Cycle & Hormone Support'],
     bio: 'Cycle-syncing nutrition and hormone restoration. PCOS, perimenopause, fertility prep. Practical, lab-informed, and built around the actual hour you have in a day.',
     yearsInPractice: 4,
   },
@@ -127,7 +128,7 @@ const PRACTITIONERS: PractitionerSeed[] = [
     email: 'sienna.galt@example.com',
     citySlug: 'macon',
     cityState: 'GA',
-    specialtySlugs: ['childrens-holistic-health'],
+    specialties: ['Family Wellness'],
     bio: 'Pediatric holistic care for picky eaters, sensory-processing kids, and parents who want a calmer kitchen. Trauma-informed, gentle, and pragmatic.',
     yearsInPractice: 9,
   },
@@ -138,7 +139,7 @@ const PRACTITIONERS: PractitionerSeed[] = [
     email: 'devin.russo@example.com',
     citySlug: 'augusta',
     cityState: 'GA',
-    specialtySlugs: ['stress-sleep-optimization'],
+    specialties: ['Rest & Recovery'],
     bio: 'Former ICU nurse, now insomnia-resolution specialist. Trauma-informed, evidence-driven, and unapologetically uninterested in sleep hygiene checklists that do not work.',
     yearsInPractice: 14,
   },
@@ -149,7 +150,7 @@ const PRACTITIONERS: PractitionerSeed[] = [
     email: 'phoebe.ash@example.com',
     citySlug: 'decatur',
     cityState: 'GA',
-    specialtySlugs: ['holistic-nutrition', 'herbal-medicine'],
+    specialties: ['Whole-Food Cooking', 'Plant Remedies'],
     bio: 'Whole-food nutrition and Appalachian herbalism. Decatur farmers-market regular. Builds protocols around what is actually growing and seasonal in the Southeast.',
     yearsInPractice: 10,
   },
@@ -160,7 +161,7 @@ const PRACTITIONERS: PractitionerSeed[] = [
     email: 'river.calhoun@example.com',
     citySlug: 'asheville',
     cityState: 'NC',
-    specialtySlugs: ['herbal-medicine'],
+    specialties: ['Plant Remedies'],
     bio: 'Wildcrafted Appalachian herbal practice. Folk-tradition trained, clinically rigorous, and respected by referring MDs across western North Carolina.',
     yearsInPractice: 18,
   },
@@ -171,7 +172,7 @@ const PRACTITIONERS: PractitionerSeed[] = [
     email: 'indira.ashland@example.com',
     citySlug: 'boulder',
     cityState: 'CO',
-    specialtySlugs: ['functional-medicine', 'mind-body-coaching'],
+    specialties: ['Root-Cause Wellness', 'Mindset Coaching'],
     bio: 'Altitude-adapted functional medicine. Mountain-athlete recovery, hormone protocols, and stress-load work for people whose lifestyle is the intervention they keep forgetting.',
     yearsInPractice: 13,
   },
@@ -182,7 +183,7 @@ const PRACTITIONERS: PractitionerSeed[] = [
     email: 'daniela.rojas@example.com',
     citySlug: 'austin',
     cityState: 'TX',
-    specialtySlugs: ['gut-health'],
+    specialties: ['Digestive Wellness'],
     bio: 'Bilingual gut-health practitioner. SIBO, IBS, post-antibiotic recovery, and the gut-skin axis. Practice rooted in Latina family-food traditions.',
     yearsInPractice: 7,
   },
@@ -193,7 +194,7 @@ const PRACTITIONERS: PractitionerSeed[] = [
     email: 'wren.kobayashi@example.com',
     citySlug: 'portland',
     cityState: 'OR',
-    specialtySlugs: ['mind-body-coaching'],
+    specialties: ['Mindset Coaching'],
     bio: 'Somatic, trauma-informed coaching for chronic fatigue and burnout. Quiet, methodical, and built for high-functioning clients who are running on fumes.',
     yearsInPractice: 8,
   },
@@ -204,7 +205,7 @@ const PRACTITIONERS: PractitionerSeed[] = [
     email: 'hollis.brennan@example.com',
     citySlug: 'nashville',
     cityState: 'TN',
-    specialtySlugs: ['hormone-balance', 'functional-medicine'],
+    specialties: ['Cycle & Hormone Support', 'Root-Cause Wellness'],
     bio: "Nashville's busy-mom hormone practice. PCOS, thyroid, perimenopause. Labs ordered, protocols built, follow-through scheduled. No vibes.",
     yearsInPractice: 6,
   },
@@ -215,7 +216,7 @@ const PRACTITIONERS: PractitionerSeed[] = [
     email: 'mira.pinckney@example.com',
     citySlug: 'charleston',
     cityState: 'SC',
-    specialtySlugs: ['holistic-nutrition', 'childrens-holistic-health'],
+    specialties: ['Whole-Food Cooking', 'Family Wellness'],
     bio: 'Lowcountry family nutrition. Food allergies, picky eating, and family-table strategy for parents who are done arguing about dinner.',
     yearsInPractice: 11,
   },
@@ -226,7 +227,7 @@ const PRACTITIONERS: PractitionerSeed[] = [
     email: 'solene.marchetti@example.com',
     citySlug: 'sedona',
     cityState: 'AZ',
-    specialtySlugs: ['mind-body-coaching', 'stress-sleep-optimization'],
+    specialties: ['Mindset Coaching', 'Rest & Recovery'],
     bio: 'Energy-medicine-informed nervous-system work. Twenty-year practice. Quiet, steady, and trusted by referring providers across the Southwest.',
     yearsInPractice: 22,
   },
@@ -253,9 +254,6 @@ async function main() {
   await prisma.specialty.deleteMany({});
   await prisma.city.deleteMany({});
 
-  console.log('Seeding genesis taxonomy (canonical + aliases)…');
-  await seedTaxonomy(prisma);
-
   console.log('Seeding cities…');
   const cityRows = new Map<string, { id: string; name: string; lat: number; lng: number }>();
   for (const c of CITIES) {
@@ -266,8 +264,6 @@ async function main() {
   }
 
   console.log('Seeding practitioners…');
-  const specialtyRows = await prisma.specialty.findMany();
-  const specialtyBySlug = new Map(specialtyRows.map((s) => [s.slug, s]));
 
   for (const p of PRACTITIONERS) {
     const cityKey = `${p.citySlug}|${p.cityState}`;
@@ -278,11 +274,9 @@ async function main() {
     const lat = city.lat + dLat;
     const lng = city.lng + dLng;
 
-    const specialtyNames = p.specialtySlugs.map((slug) => {
-      const s = specialtyBySlug.get(slug);
-      if (!s) throw new Error(`Specialty ${slug} not seeded`);
-      return s.name;
-    });
+    const specialtyRows: { id: string; name: string }[] = [];
+    for (const label of p.specialties) specialtyRows.push(await ensureFlatSpecialty(prisma, label));
+    const specialtyNames = specialtyRows.map((s) => s.name);
 
     const user = await prisma.user.create({
       data: {
@@ -305,8 +299,10 @@ async function main() {
         searchText: buildSearchText(p, city.name, specialtyNames),
         acceptedAt: new Date(),
         specialties: {
-          create: p.specialtySlugs.map((slug) => ({
-            specialty: { connect: { id: specialtyBySlug.get(slug)!.id } },
+          create: specialtyRows.map((s, idx) => ({
+            rawLabel: p.specialties[idx],
+            sortOrder: idx,
+            specialty: { connect: { id: s.id } },
           })),
         },
       },

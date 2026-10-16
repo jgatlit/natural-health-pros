@@ -30,6 +30,9 @@ describe('AI draft — qualifications are never fabricated', () => {
       rawSource:
         'I practise Herbalism and Functional Medicine. I am a certified herbalist with a degree ' +
         'in nutrition and years of university training. I studied at several institutes.',
+      // The template no longer extracts modalities or specialties from mentions (operator ruling
+      // 2026-10-15), so the only non-empty derived list is the practitioner's own labels.
+      existing: { rawLabels: ['Herbalism', 'Certified Herbalist'] },
       canonicalCatalog: [
         { slug: 'herbalism', name: 'Herbalism' },
         { slug: 'functional-medicine', name: 'Functional Medicine' },
@@ -37,8 +40,10 @@ describe('AI draft — qualifications are never fabricated', () => {
     });
 
     expect(source).toBe('template');
-    // Guard the guard: if modalities were empty this assertion would constrain nothing.
-    expect(draft.modalities.length).toBeGreaterThan(0);
+    expect(draft.modalities).toEqual([]);
+    // Guard the guard: a mutant copying the drafted labels into qualifications must fail below,
+    // which needs those labels to be non-empty.
+    expect(draft.specialties.length).toBeGreaterThan(0);
     // ⚠️ THE POINT OF THIS TEST. The template path does no extraction, so inferring a credential
     // here would put a qualification the practitioner never formally claimed onto a health
     // directory — a different class of wrong from clumsy wording. Empty is correct.

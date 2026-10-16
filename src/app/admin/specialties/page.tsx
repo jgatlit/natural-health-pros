@@ -21,7 +21,7 @@ export default async function AdminSpecialtiesPage() {
     redirect('/auth/signin?callbackUrl=/admin/specialties');
   }
 
-  const [pendingAliases, proposed, activeCanonicals, parents] = await Promise.all([
+  const [pendingAliases, proposed, activeCanonicals] = await Promise.all([
     prisma.specialtyAlias.findMany({
       where: { status: 'PENDING' },
       include: { specialty: true },
@@ -34,11 +34,6 @@ export default async function AdminSpecialtiesPage() {
     }),
     prisma.specialty.findMany({
       where: { status: 'ACTIVE' },
-      orderBy: { name: 'asc' },
-    }),
-    // Top-level canonicals usable as a parent when promoting
-    prisma.specialty.findMany({
-      where: { status: 'ACTIVE', parentId: null },
       orderBy: { name: 'asc' },
     }),
   ]);
@@ -133,21 +128,9 @@ export default async function AdminSpecialtiesPage() {
                     </div>
 
                     <div className="grid gap-2 sm:grid-cols-2">
-                      {/* Promote → ACTIVE under an optional parent */}
+                      {/* Promote → ACTIVE (specialties are flat; no parent) */}
                       <form action={promoteSpecialtyAction} className="flex items-center gap-1.5">
                         <input type="hidden" name="specialtyId" value={s.id} />
-                        <select
-                          name="parentId"
-                          defaultValue=""
-                          className="h-8 min-w-0 flex-1 rounded-md border bg-card px-2 text-xs outline-none"
-                        >
-                          <option value="">— no parent (top level) —</option>
-                          {parents.map((p) => (
-                            <option key={p.id} value={p.id}>
-                              under {p.name}
-                            </option>
-                          ))}
-                        </select>
                         <button
                           type="submit"
                           className="inline-flex h-8 shrink-0 items-center gap-1 rounded-md bg-primary px-2.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"

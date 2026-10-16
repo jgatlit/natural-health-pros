@@ -1,4 +1,5 @@
 import Anthropic from '@anthropic-ai/sdk';
+import { isWordingVariant } from './specialty-match';
 
 /**
  * AI onboarding draft step (Task B). Produces a first-pass practitioner profile
@@ -15,9 +16,10 @@ import Anthropic from '@anthropic-ai/sdk';
 export type DraftSpecialty = {
   /** Practitioner's own phrasing (their voice; becomes PractitionerSpecialty.rawLabel). */
   rawLabel: string;
-  /** LLM/template-proposed canonical slug from the provided catalog (or a novel kebab slug). */
+  /** Catalog slug ONLY when it is the same words as rawLabel (else a kebab of rawLabel). A hint:
+   *  the server ignores it unless it is a wording variant of rawLabel. */
   canonicalSlug: string;
-  /** Human-readable canonical name (for a novel proposal this seeds Specialty.name). */
+  /** Catalog name under the same rule; never a different concept from rawLabel. */
   canonicalName: string;
   /** 0..1 mapping confidence; written onto the IMPORT/PENDING SpecialtyAlias. */
   confidence: number;
@@ -57,7 +59,7 @@ export type DraftInput = {
     bio?: string | null;
     rawLabels?: string[];
   };
-  /** Curated canonical specialties the LLM should map to when possible. */
+  /** Existing specialty names, so a label that is the same words can reuse the existing spelling. */
   canonicalCatalog: { slug: string; name: string }[];
 };
 
@@ -143,7 +145,12 @@ const DRAFT_TOOL: Anthropic.Tool = {
       },
       specialties: {
         type: 'array',
-        description: "Dual-label specialties. rawLabel = practitioner's wording; map to a catalog slug when one fits, else propose a new kebab-case slug + name.",
+        description:
+          "The practitioner's own specialties, in their own words. rawLabel = their wording, " +
+          'never replaced by a broader, related or "standard" concept. Use a catalog slug + name ' +
+          'ONLY when it is the same words as rawLabel (differing at most in case, plural or a ' +
+          'role suffix such as coach/coaching, therapist/therapy, -ist/-y, practitioner, master); ' +
+          'otherwise set canonicalSlug to the kebab-case of rawLabel and canonicalName to rawLabel.',
         items: {
           type: 'object',
           additionalProperties: false,
@@ -151,7 +158,7 @@ const DRAFT_TOOL: Anthropic.Tool = {
             rawLabel: { type: 'string' },
             canonicalSlug: { type: 'string' },
             canonicalName: { type: 'string' },
-            confidence: { type: 'number', description: '0..1 confidence in the canonical mapping.' },
+            confidence: { type: 'number', description: '0..1 confidence that rawLabel is a specialty the source states.' },
           },
           required: ['rawLabel', 'canonicalSlug', 'canonicalName', 'confidence'],
         },
@@ -200,7 +207,7 @@ async function llmDraft(input: DraftInput): Promise<ProfileDraft> {
     input.rawSource || '(none provided — draft conservatively from name + existing fields only)',
     '"""',
     '',
-    `Curated canonical specialty catalog (map to these slugs when one fits; otherwise propose a new kebab-case slug):`,
+    `Existing specialty names. Reuse one ONLY when it is the same words as the practitioner's label (case, plural or role suffix aside) — never map a label to a different or broader concept; otherwise use the practitioner's label as its own specialty:`,
     catalog || '(empty)',
     '',
     `Draft warm, specific, plain-English copy. Keep the practitioner's own wording in each specialty rawLabel.`,
@@ -257,11 +264,10 @@ function templateDraft(input: DraftInput): ProfileDraft {
       ? bioBase
       : `${input.displayName} is a holistic health practitioner. ${whoIHelp}`.trim();
 
-  // Map source/existing phrasings to the catalog by case-insensitive substring overlap.
-  const phrasings = [
-    ...(input.existing?.rawLabels ?? []),
-    ...extractCandidatePhrases(source, input.canonicalCatalog),
-  ];
+  // Only labels the practitioner already wrote. A catalog name merely MENTIONED in the source is
+  // not a claim ("I'm not a yoga teacher and I don't do reiki" mentions both), and without an
+  // LLM there is no reading of intent, so the template never adds a specialty of its own.
+  const phrasings = input.existing?.rawLabels ?? [];
   const seenRaw = new Set<string>();
   const specialties: DraftSpecialty[] = [];
   for (const rawLabel of phrasings) {
@@ -281,9 +287,8 @@ function templateDraft(input: DraftInput): ProfileDraft {
     );
   }
 
-  const modalities = Array.from(
-    new Set(input.canonicalCatalog.filter((c) => contains(source, c.name)).map((c) => c.name)),
-  );
+  // Modalities feed searchText. For the same reason as above, substring mentions are not one.
+  const modalities: string[] = [];
 
   // Template never fabricates outcomes — and, for the same reason, never a tagline: `tagline`
   // is only ever carried through from an existing value here, else null.
@@ -296,14 +301,6 @@ function templateDraft(input: DraftInput): ProfileDraft {
   );
 }
 
-function extractCandidatePhrases(
-  source: string,
-  catalog: { slug: string; name: string }[],
-): string[] {
-  // Surface catalog names the source mentions; gives the reviewer concrete chips to edit.
-  return catalog.filter((c) => contains(source, c.name)).map((c) => c.name);
-}
-
 function matchCatalog(
   rawLabel: string,
   catalog: { slug: string; name: string }[],
@@ -311,13 +308,10 @@ function matchCatalog(
   const norm = rawLabel.toLowerCase().trim();
   return (
     catalog.find((c) => c.name.toLowerCase() === norm) ||
-    catalog.find((c) => contains(c.name, rawLabel) || contains(rawLabel, c.name)) ||
+    catalog.find((c) => isWordingVariant(rawLabel, c.name)) ||
     null
   );
 }
-
-const contains = (haystack: string, needle: string) =>
-  haystack.toLowerCase().includes(needle.toLowerCase().trim());
 
 function kebab(s: string): string {
   return (

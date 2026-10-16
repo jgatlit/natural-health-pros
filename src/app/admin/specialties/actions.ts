@@ -39,15 +39,15 @@ export async function rejectAlias(aliasId: string): Promise<void> {
 }
 
 /**
- * Promote a PROPOSED canonical → ACTIVE (optionally under a parent). Its PENDING aliases
- * are approved alongside. The taxonomy grows cleanly through this gate.
+ * Promote a PROPOSED canonical → ACTIVE. Its PENDING aliases are approved alongside. Specialties
+ * are flat (operator ruling 2026-10-15): promotion never assigns a parent.
  */
-export async function promoteSpecialty(specialtyId: string, parentId: string | null): Promise<void> {
+export async function promoteSpecialty(specialtyId: string): Promise<void> {
   await authorizeAdmin();
   await prisma.$transaction([
     prisma.specialty.update({
       where: { id: specialtyId },
-      data: { status: 'ACTIVE', parentId: parentId || null },
+      data: { status: 'ACTIVE', parentId: null },
     }),
     prisma.specialtyAlias.updateMany({
       where: { specialtyId, status: 'PENDING' },
@@ -126,8 +126,7 @@ export async function mergeSpecialty(sourceId: string, targetId: string): Promis
 // formData wrappers for the moderation forms (selects can't bind args directly)
 export async function promoteSpecialtyAction(formData: FormData): Promise<void> {
   const id = String(formData.get('specialtyId') ?? '');
-  const parentId = String(formData.get('parentId') ?? '') || null;
-  if (id) await promoteSpecialty(id, parentId);
+  if (id) await promoteSpecialty(id);
 }
 
 export async function mergeSpecialtyAction(formData: FormData): Promise<void> {
