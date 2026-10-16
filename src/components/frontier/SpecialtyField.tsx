@@ -13,8 +13,9 @@
  *      practitioners hold that specialty" — but measured on what this page actually renders
  *      (LISTED practitioners only): 21 specialties, of which 13 are held by exactly one and 5 by
  *      two. For most of the field every sphere was the same size. Size still varies here but is
- *      no longer doing the work: POSITION (real parent taxonomy — 5 clusters) and ADJACENCY
- *      (60 co-occurrence edges) are, and neither is something a flat list can show at all.
+ *      no longer doing the work: ADJACENCY (co-occurrence edges) is, and a flat list cannot
+ *      show it at all. There is no parent grouping: every specialty is the practitioner's own
+ *      words and stands on its own (operator ruling 2026-10-15), so every word homes to the centre.
  *
  * ⚠️ HOVERING THE HUB LOOKS LIKE NOTHING HAPPENS, and that is truthful rather than broken.
  * "Holistic Health Coaching" (13) co-occurs with all 20 other specialties, so nothing dims. The
@@ -61,8 +62,6 @@ type Props = {
 };
 
 type Node = {
-  /** Index of the cluster anchor this node is pulled toward; -1 for a specialty with no parent. */
-  cluster: number;
   x: number;
   y: number;
   vx: number;
@@ -95,13 +94,6 @@ export function SpecialtyField({ specialties, links }: Props) {
   const hotRef = useRef<number | null>(null);
   hotRef.current = hot;
 
-  /** Cluster anchors are the PARENT specialties actually present in this data. */
-  const parents = useMemo(() => {
-    const seen: string[] = [];
-    for (const s of specialties) if (s.parent && !seen.includes(s.parent)) seen.push(s.parent);
-    return seen;
-  }, [specialties]);
-
   const bySlug = useMemo(
     () => new Map(specialties.map((s, i) => [s.slug, i])),
     [specialties],
@@ -127,10 +119,7 @@ export function SpecialtyField({ specialties, links }: Props) {
 
   const nodes = useRef<Node[]>([]);
   if (nodes.current.length !== specialties.length) {
-    nodes.current = specialties.map((spec) => ({
-      cluster: spec.parent
-        ? parents.indexOf(spec.parent)
-        : parents.indexOf(spec.name), // a parent clusters at its own anchor
+    nodes.current = specialties.map(() => ({
       x: 0,
       y: 0,
       vx: 0,
@@ -150,7 +139,6 @@ export function SpecialtyField({ specialties, links }: Props) {
     const N = nodes.current;
     let W = 0;
     let H = 0;
-    let centers: { x: number; y: number }[] = [];
     let alpha = 1;
     const pointer = { x: -1e5, y: -1e5, on: false };
     let dragging: Node | null = null;
@@ -174,14 +162,9 @@ export function SpecialtyField({ specialties, links }: Props) {
         n.w = el.offsetWidth;
         n.h = el.offsetHeight;
       });
-      const radius = Math.min(W, H);
-      centers = parents.map((_, k) => {
-        const a = (k / Math.max(parents.length, 1)) * Math.PI * 2 - Math.PI / 2;
-        return { x: W / 2 + Math.cos(a) * radius * 0.26, y: H / 2 + Math.sin(a) * radius * 0.24 };
-      });
       N.forEach((n, i) => {
         if (n.x !== 0 || n.y !== 0) return;
-        const c = n.cluster >= 0 ? centers[n.cluster] : { x: W / 2, y: H / 2 };
+        const c = { x: W / 2, y: H / 2 };
         const a = (i / N.length) * Math.PI * 2;
         n.x = c.x + Math.cos(a) * 40 + (i % 7) * 3;
         n.y = c.y + Math.sin(a) * 40 + (i % 5) * 3;
@@ -205,7 +188,7 @@ export function SpecialtyField({ specialties, links }: Props) {
       }
       for (let i = 0; i < N.length; i++) {
         const n = N[i];
-        const c = n.cluster >= 0 ? centers[n.cluster] : { x: W / 2, y: H / 2 };
+        const c = { x: W / 2, y: H / 2 };
         // Floored, NOT scaled to zero with alpha: words displaced to make room for a locked word
         // must be able to come home once it is released, however long the field has been at rest.
         const home = Math.max(alpha, 0.22) * 0.0042;
@@ -419,7 +402,7 @@ export function SpecialtyField({ specialties, links }: Props) {
       stage.removeEventListener('click', onClick, true);
       window.removeEventListener('pointerup', onUp);
     };
-  }, [edges, parents, reduced]);
+  }, [edges, reduced]);
 
   useEffect(() => run(), [run]);
 

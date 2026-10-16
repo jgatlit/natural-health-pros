@@ -139,6 +139,8 @@ Next.js 14 App Router + Tailwind v4 `@theme` + shadcn/ui (new-york) + server com
 
 ## P1b — Evolving dual-label specialty taxonomy (Typesense-optimized)
 
+> **Superseded in part (2026-10-15).** Operator ruling: "Specialties should not be awarded/added by the application"; "categorize them independently, no parent". Specialties are now flat and come only from practitioners' own labels. Onboarding may normalise wording (case, plural, role suffix) but never maps a label to a different concept, and there are no parent facets or roll-ups. The genesis tree and its seeded aliases below were removed from code, and migration `20261015230000_specialties_own_words` repaired the production data. Read the parent/genesis passages below as history. Rules: `src/lib/specialty-match.ts` and `src/lib/specialty-resolve.ts`.
+
 **Operator requirement (2026-05-29):** specialty areas must **grow & evolve**; the app must keep **both** the practitioner's preferred/provided label **and** the system's normalized/canonical label, make **both searchable + intuitive** using the Typesense feature set optimally, **and** keep onboarding frictionless as the variety grows. This generalizes the meeting's "collapse gut-health = digestive-disorders" ask into a real architecture.
 
 ### Core principle

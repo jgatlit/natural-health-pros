@@ -23,7 +23,6 @@ import { buildSpecialtyLinks, type SpecialtyLink } from './specialty-graph';
 export type DirectorySpecialty = {
   slug: string;
   name: string;
-  parent: string | null;
   /** Listed practitioners holding this specialty. Never the raw relation count. */
   count: number;
 };
@@ -45,7 +44,7 @@ export type DirectoryPractitioner = {
   photoZoom: number;
   websiteUrl: string | null;
   telehealth: boolean | null;
-  specialties: { name: string; slug: string; parent: string | null }[];
+  specialties: { name: string; slug: string }[];
 };
 
 /** Every number the page renders reads from here, so a claim cannot drift from its data. */
@@ -72,7 +71,7 @@ export async function getDirectory(): Promise<Directory> {
       // Same order the profile renders — a practitioner's chips shouldn't reshuffle between
       // the directory card and the page it links to.
       specialties: {
-        include: { specialty: { include: { parent: true } } },
+        include: { specialty: true },
         orderBy: SPECIALTY_ORDER,
       },
     },
@@ -91,7 +90,6 @@ export async function getDirectory(): Promise<Directory> {
     specialties: p.specialties.map((ps) => ({
       name: ps.specialty.name,
       slug: ps.specialty.slug,
-      parent: ps.specialty.parent?.name ?? null,
     })),
   }));
 
@@ -110,7 +108,6 @@ export async function getDirectory(): Promise<Directory> {
         bySlug.set(ps.specialty.slug, {
           slug: ps.specialty.slug,
           name: ps.specialty.name,
-          parent: ps.specialty.parent?.name ?? null,
           count: 1,
         });
       }

@@ -52,7 +52,7 @@ function practitioner(overrides: Record<string, unknown> = {}) {
     city: { id: 'city_1', name: 'Atlanta', state: 'GA', slug: 'atlanta-ga' },
     cityId: 'city_1',
     specialties: [
-      { specialtyId: 'spec_1', rawLabel: null, specialty: { id: 'spec_1', name: 'Acupuncture', slug: 'acupuncture', parent: null } },
+      { specialtyId: 'spec_1', rawLabel: null, specialty: { id: 'spec_1', name: 'Acupuncture', slug: 'acupuncture' } },
     ],
     latitude: null,
     longitude: null,

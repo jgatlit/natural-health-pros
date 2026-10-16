@@ -11,10 +11,9 @@ import { prisma } from './prisma';
 import { SPECIALTY_ORDER } from './practitioner-ordering';
 import { getTypesenseAdmin, TYPESENSE_COLLECTION } from './typesense-server';
 
-type SpecialtyWithParent = Specialty & { parent: Specialty | null };
 type PractitionerForIndex = Practitioner & {
   city: City | null;
-  specialties: (PractitionerSpecialty & { specialty: SpecialtyWithParent })[];
+  specialties: (PractitionerSpecialty & { specialty: Specialty })[];
   user: { role: Role };
 };
 
@@ -202,10 +201,6 @@ export function toTypesenseDoc(p: PractitionerForIndex): PractitionerDoc {
   for (const ps of p.specialties) {
     specialtyNames.add(ps.specialty.name);
     specialtySlugs.add(ps.specialty.slug);
-    if (ps.specialty.parent) {
-      specialtyNames.add(ps.specialty.parent.name);
-      specialtySlugs.add(ps.specialty.parent.slug);
-    }
     if (ps.rawLabel && ps.rawLabel.trim()) specialtyLabels.add(ps.rawLabel.trim());
   }
 
@@ -236,7 +231,7 @@ const PRACTITIONER_INCLUDE = {
   // Ordered so the indexed document matches what the profile renders; without this the
   // Typesense doc's specialty order was whatever Postgres happened to return.
   specialties: {
-    include: { specialty: { include: { parent: true } } },
+    include: { specialty: true },
     orderBy: SPECIALTY_ORDER,
   },
   user: { select: { role: true } },

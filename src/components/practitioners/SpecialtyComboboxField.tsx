@@ -18,9 +18,10 @@ type Props = {
 const norm = (s: string) => s.trim().toLowerCase();
 
 /**
- * Dual-label intake combobox (P1b). Practitioners pick an existing canonical OR enter
- * their own phrasing — never blocked. Free-text that doesn't resolve becomes a PROPOSED
- * canonical + PENDING alias server-side (the /admin/specialties moderation queue).
+ * Dual-label intake combobox (P1b). Practitioners pick an existing specialty OR enter
+ * their own phrasing — never blocked. Free text is never converted to a different specialty:
+ * server-side it reuses a specialty only when that specialty is the same words, else it becomes
+ * a PROPOSED specialty + PENDING alias (the /admin/specialties moderation queue).
  * Submits a hidden JSON field consumed by updatePractitioner.
  */
 export function SpecialtyComboboxField({ options, aliases, initial }: Props) {
@@ -147,8 +148,15 @@ export function SpecialtyComboboxField({ options, aliases, initial }: Props) {
           onKeyDown={(e) => {
             if (e.key === 'Enter') {
               e.preventDefault();
-              if (suggestions[0]) {
-                add({ specialtyId: suggestions[0].specialtyId, rawLabel: suggestions[0].name });
+              // Enter keeps the practitioner's own words. It takes an existing specialty only when
+              // the text IS that specialty's name; a suggestion reached through an alias or a
+              // partial match ("anxiety" → Stress / Sleep Optimization) is a different concept and
+              // needs an explicit click.
+              const exact = options.find(
+                (o) => norm(o.name) === norm(query) && !selectedIds.has(o.id),
+              );
+              if (exact) {
+                add({ specialtyId: exact.id, rawLabel: exact.name });
               } else if (query.trim()) {
                 add({ specialtyId: null, rawLabel: query.trim() });
               }
