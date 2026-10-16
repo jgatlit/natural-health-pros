@@ -1,5 +1,7 @@
 -- Expected state after 20261015230000_specialties_own_words is applied to fixture.sql.
 -- Raises (non-zero psql exit with ON_ERROR_STOP) on the first mismatch.
+-- The caller sets verify.expected_status: PROPOSED after the first migration alone, ACTIVE after
+-- 20261016010000_specialties_own_words_active.
 
 DO $$
 DECLARE
@@ -11,12 +13,17 @@ BEGIN
   IF n <> 0 THEN RAISE EXCEPTION 'parentId still set on % rows', n; END IF;
 
   SELECT count(*) INTO n FROM "Specialty"
-  WHERE "status" = 'PROPOSED' AND "id" = 'spc_' || md5("slug") AND "slug" IN (
+  WHERE "status"::text = current_setting('verify.expected_status') AND "id" = 'spc_' || md5("slug") AND "slug" IN (
     'microcurrent-therapy', 'self-government-relationship-mentor', 'energy-frequency-support',
     'chronic-pain-anxiety-support', 'certified-crystal-healer', 'root-cause-chronic-disease',
     'spiritual-chronic-illness-support', 'ao-scan', 'mind-body-stress-release',
     'mindset-and-neuroscience-to-rewire-the-brain', 'performance-nutrition-biohacking');
-  IF n <> 11 THEN RAISE EXCEPTION 'expected 11 new PROPOSED specialties, got %', n; END IF;
+  IF n <> 11 THEN
+    RAISE EXCEPTION 'expected 11 new % specialties, got %', current_setting('verify.expected_status'), n;
+  END IF;
+  -- control: a PROPOSED node outside the 11 is never promoted
+  SELECT count(*) INTO n FROM "Specialty" WHERE "slug" = 'business-process-automation' AND "status" = 'PROPOSED';
+  IF n <> 1 THEN RAISE EXCEPTION 'business-process-automation status changed'; END IF;
 
   -- the 12 links: practitioner, rawLabel, expected slug, expected sortOrder
   FOR r IN SELECT * FROM (VALUES

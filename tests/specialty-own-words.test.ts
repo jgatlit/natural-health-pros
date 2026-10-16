@@ -11,7 +11,13 @@ import { draftProfile } from '@/lib/onboarding-draft';
 // Operator ruling 2026-10-15: "Specialties should not be awarded/added by the application."
 // Wording may be normalised; the concept may never be substituted.
 
-type Row = { id: string; slug: string; name: string; status: 'ACTIVE' | 'PROPOSED' | 'MERGED' };
+type Row = {
+  id: string;
+  slug: string;
+  name: string;
+  status: 'ACTIVE' | 'PROPOSED' | 'MERGED';
+  mergedIntoId?: string | null;
+};
 type Alias = { id: string; label: string; specialtyId: string; source: string; status: string };
 
 function fakeDb(specialties: Row[], aliases: Omit<Alias, 'id' | 'source' | 'status'>[] = []) {
@@ -20,7 +26,10 @@ function fakeDb(specialties: Row[], aliases: Omit<Alias, 'id' | 'source' | 'stat
   const tx = {
     specialty: {
       findMany: async (q: { where: { status: { in: string[] } } }) =>
-        s.filter((r) => q.where.status.in.includes(r.status)),
+        s
+          .filter((r) => q.where.status.in.includes(r.status))
+          .map((r) => ({ mergedIntoId: null, ...r }))
+          .sort((x, y) => x.name.localeCompare(y.name)),
       findUnique: async (q: { where: { slug: string } }) => s.find((r) => r.slug === q.where.slug) ?? null,
       create: async (q: { data: { slug: string; name: string; status: Row['status'] } }) => {
         const row = { id: `new_${s.length}`, ...q.data };
@@ -174,6 +183,43 @@ describe('resolveOwnSpecialty', () => {
     ]);
   });
 
+  it('a match on a MERGED row follows the admin merge to the surviving specialty', async () => {
+    const db = fakeDb([
+      ...CATALOG,
+      { id: 'tn', slug: 'therapeutic-nutrition', name: 'Therapeutic Nutrition', status: 'ACTIVE' },
+      {
+        id: 'tnc',
+        slug: 'therapeutic-nutritional-counselor',
+        name: 'Therapeutic Nutritional Counselor',
+        status: 'MERGED',
+        mergedIntoId: 'tn',
+      },
+    ]);
+    const r = await resolveOwnSpecialty(db.tx, {
+      rawLabel: 'Therapeutic Nutritional Counselor',
+      aliasSource: 'PRACTITIONER',
+    });
+    expect(r).toEqual({ specialtyId: 'tn', rawLabel: 'Therapeutic Nutritional Counselor', created: false });
+  });
+
+  it('a live row with the same words beats a merged one', async () => {
+    const db = fakeDb([
+      { id: 'old', slug: 'reiki-old', name: 'Reiki', status: 'MERGED', mergedIntoId: 'em' },
+      ...CATALOG,
+    ]);
+    const r = await resolveOwnSpecialty(db.tx, { rawLabel: 'reiki', aliasSource: 'PRACTITIONER' });
+    expect(r?.specialtyId).toBe('rei');
+  });
+
+  it('a broken merge chain is not followed; the label becomes its own node', async () => {
+    const db = fakeDb([
+      ...CATALOG,
+      { id: 'x', slug: 'sound-healing', name: 'Sound Healing', status: 'MERGED', mergedIntoId: 'gone' },
+    ]);
+    const r = await resolveOwnSpecialty(db.tx, { rawLabel: 'Sound Healing', aliasSource: 'PRACTITIONER' });
+    expect(r?.created).toBe(true);
+  });
+
   it('returns null for an empty label', async () => {
     const db = fakeDb(CATALOG);
     expect(await resolveOwnSpecialty(db.tx, { rawLabel: '   ', aliasSource: 'PRACTITIONER' })).toBeNull();
@@ -181,6 +227,25 @@ describe('resolveOwnSpecialty', () => {
 });
 
 describe('template draft (no LLM key)', () => {
+  it('never awards a specialty or modality from a mention in the source text', async () => {
+    const prev = process.env.ONBOARDING_LLM_API_KEY;
+    delete process.env.ONBOARDING_LLM_API_KEY;
+    try {
+      const { draft } = await draftProfile({
+        displayName: 'Test',
+        rawSource: "I'm not a yoga teacher and I don't do reiki.",
+        canonicalCatalog: [
+          ...CATALOG.map(({ slug, name }) => ({ slug, name })),
+          { slug: 'yoga', name: 'Yoga' },
+        ],
+      });
+      expect(draft.specialties).toEqual([]);
+      expect(draft.modalities).toEqual([]);
+    } finally {
+      if (prev !== undefined) process.env.ONBOARDING_LLM_API_KEY = prev;
+    }
+  });
+
   it('keeps an existing label rather than mapping it to a catalog concept it merely contains', async () => {
     const prev = process.env.ONBOARDING_LLM_API_KEY;
     delete process.env.ONBOARDING_LLM_API_KEY;

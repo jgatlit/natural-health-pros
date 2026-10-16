@@ -1,12 +1,15 @@
 #!/usr/bin/env bash
-# Proves prisma/migrations/20261015230000_specialties_own_words on a THROWAWAY local Docker
-# Postgres: fixture → run 1 → assertions → run 2 → byte-identical data → empty schema diff.
+# Proves prisma/migrations/20261015230000_specialties_own_words and its follow-up
+# 20261016010000_specialties_own_words_active on a THROWAWAY local Docker Postgres:
+# fixture → migration 1 → assert (PROPOSED) → migration 2 → assert (ACTIVE) → the whole chain
+# again → byte-identical data → assert → empty schema diff.
 # Never points at anything but localhost. Usage: scripts/verify-specialties-migration/run.sh [port]
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 DIR="$ROOT/scripts/verify-specialties-migration"
 MIGRATION="${MIGRATION:-$ROOT/prisma/migrations/20261015230000_specialties_own_words/migration.sql}"
+MIGRATION2="${MIGRATION2:-$ROOT/prisma/migrations/20261016010000_specialties_own_words_active/migration.sql}"
 PORT="${1:-55433}"
 NAME="nhp-pg-specialties-verify"
 URL="postgresql://postgres:x@localhost:${PORT}/postgres"
@@ -33,7 +36,8 @@ counts() {
 }
 assert_() {
   local out
-  out="$(psql_ < "$DIR/assert.sql" 2>&1)" || { echo "ASSERTION FAILED: $out" >&2; exit 1; }
+  out="$({ echo "SET verify.expected_status = '$1';"; cat "$DIR/assert.sql"; } | psql_ 2>&1)" \
+    || { echo "ASSERTION FAILED ($1): $out" >&2; exit 1; }
   echo "$out" | grep -o 'ALL ASSERTIONS PASSED'
 }
 snapshot() {
@@ -50,21 +54,25 @@ psql_ < "$DIR/fixture.sql"
 echo "before:     $(counts)"
 
 psql_ < "$MIGRATION"
-echo "after run1: $(counts)"
-assert_
+echo "after migration 1:  $(counts)"
+assert_ PROPOSED
+psql_ < "$MIGRATION2"
+echo "after migration 2:  $(counts) active=$(psql_ -At -c "SELECT count(*) FROM \"Specialty\" WHERE \"status\" = 'ACTIVE'")"
+assert_ ACTIVE
 snapshot > /tmp/nhp-specialties-run1.sql
 
 psql_ < "$MIGRATION"
-echo "after run2: $(counts)"
+psql_ < "$MIGRATION2"
+echo "after chain rerun:  $(counts) active=$(psql_ -At -c "SELECT count(*) FROM \"Specialty\" WHERE \"status\" = 'ACTIVE'")"
 snapshot > /tmp/nhp-specialties-run2.sql
 if diff -q /tmp/nhp-specialties-run1.sql /tmp/nhp-specialties-run2.sql >/dev/null; then
-  echo "second run: no-op (data byte-identical, $(wc -l < /tmp/nhp-specialties-run1.sql) rows compared)"
+  echo "second chain run: no-op (data byte-identical, $(wc -l < /tmp/nhp-specialties-run1.sql) rows compared)"
 else
   echo "second run CHANGED data" >&2
   diff /tmp/nhp-specialties-run1.sql /tmp/nhp-specialties-run2.sql >&2 || true
   exit 1
 fi
-assert_
+assert_ ACTIVE
 
 DIFF="$(cd "$ROOT" && env -u DATABASE_URL hhe_directory_DATABASE_URL="$URL" hhe_directory_DATABASE_URL_UNPOOLED="$URL" \
   npx prisma migrate diff --from-url "$URL" --to-schema-datamodel prisma/schema.prisma --script)"

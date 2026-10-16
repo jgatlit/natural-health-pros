@@ -264,11 +264,10 @@ function templateDraft(input: DraftInput): ProfileDraft {
       ? bioBase
       : `${input.displayName} is a holistic health practitioner. ${whoIHelp}`.trim();
 
-  // Phrasings map to the catalog only when they are the same words (see matchCatalog).
-  const phrasings = [
-    ...(input.existing?.rawLabels ?? []),
-    ...extractCandidatePhrases(source, input.canonicalCatalog),
-  ];
+  // Only labels the practitioner already wrote. A catalog name merely MENTIONED in the source is
+  // not a claim ("I'm not a yoga teacher and I don't do reiki" mentions both), and without an
+  // LLM there is no reading of intent, so the template never adds a specialty of its own.
+  const phrasings = input.existing?.rawLabels ?? [];
   const seenRaw = new Set<string>();
   const specialties: DraftSpecialty[] = [];
   for (const rawLabel of phrasings) {
@@ -288,9 +287,8 @@ function templateDraft(input: DraftInput): ProfileDraft {
     );
   }
 
-  const modalities = Array.from(
-    new Set(input.canonicalCatalog.filter((c) => contains(source, c.name)).map((c) => c.name)),
-  );
+  // Modalities feed searchText. For the same reason as above, substring mentions are not one.
+  const modalities: string[] = [];
 
   // Template never fabricates outcomes — and, for the same reason, never a tagline: `tagline`
   // is only ever carried through from an existing value here, else null.
@@ -301,14 +299,6 @@ function templateDraft(input: DraftInput): ProfileDraft {
     { headline, tagline, whoIHelp, bio, modalities, qualifications: [], specialties, caseStudies: [] },
     input,
   );
-}
-
-function extractCandidatePhrases(
-  source: string,
-  catalog: { slug: string; name: string }[],
-): string[] {
-  // Surface catalog names the source mentions; gives the reviewer concrete chips to edit.
-  return catalog.filter((c) => contains(source, c.name)).map((c) => c.name);
 }
 
 function matchCatalog(
@@ -322,9 +312,6 @@ function matchCatalog(
     null
   );
 }
-
-const contains = (haystack: string, needle: string) =>
-  haystack.toLowerCase().includes(needle.toLowerCase().trim());
 
 function kebab(s: string): string {
   return (

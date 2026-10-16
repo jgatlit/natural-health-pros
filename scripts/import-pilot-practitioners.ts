@@ -28,6 +28,7 @@ import { join } from 'node:path';
 import { randomBytes } from 'node:crypto';
 import { PrismaClient, Role } from '@prisma/client';
 import { resolveOwnSpecialty } from '../src/lib/specialty-resolve';
+import { normalizeAliasLabel } from '../src/lib/specialty-match';
 import { indexAllPractitioners } from '../src/lib/practitioner-indexer';
 import { syncSpecialtySynonyms } from '../src/lib/typesense-synonyms';
 
@@ -98,8 +99,26 @@ async function main() {
   // 3. upsert the 12 — visible records (acceptedAt set) + claimable Invitations (hybrid decision)
   const now = new Date();
   for (const p of data.practitioners) {
+    // A re-run keeps every label the practitioner already holds on the specialty it is on (an
+    // operator may have moved it); only labels new to them are resolved.
+    const existing = await prisma.practitioner.findUnique({
+      where: { slug: p.slug },
+      select: { specialties: { select: { rawLabel: true, specialtyId: true } } },
+    });
+    const held = new Map(
+      (existing?.specialties ?? [])
+        .filter((x) => x.rawLabel)
+        .map((x) => [normalizeAliasLabel(x.rawLabel!), x.specialtyId] as const),
+    );
     const resolved: { specialtyId: string; rawLabel: string }[] = [];
     for (const s of p.specialties) {
+      const heldId = held.get(normalizeAliasLabel(s.rawLabel));
+      if (heldId) {
+        if (!resolved.some((x) => x.specialtyId === heldId)) {
+          resolved.push({ specialtyId: heldId, rawLabel: s.rawLabel.trim() });
+        }
+        continue;
+      }
       const r = await resolveOwnSpecialty(prisma, {
         rawLabel: s.rawLabel,
         hint: { slug: s.canonicalSlug },

@@ -15,6 +15,8 @@ import { indexPractitioner } from '@/lib/practitioner-indexer';
 import { syncSpecialtySynonyms } from '@/lib/typesense-synonyms';
 import { draftProfile, type DraftSpecialty } from '@/lib/onboarding-draft';
 import { resolveOwnSpecialty, type ResolvedSpecialty } from '@/lib/specialty-resolve';
+import { normalizeAliasLabel } from '@/lib/specialty-match';
+import { SPECIALTY_ORDER } from '@/lib/practitioner-ordering';
 import { parseBookingLinkRows, MAX_BOOKING_LINKS } from '@/lib/booking-links';
 import { detectProvider, extractUrlFromEmbed } from '@/lib/booking-providers';
 import { normalizeOfferingFields } from '@/lib/offering-fields';
@@ -576,7 +578,7 @@ export async function generateDraftAction(slug: string, formData: FormData): Pro
         tagline: true,
         whoIHelp: true,
         bio: true,
-        specialties: { select: { rawLabel: true } },
+        specialties: { select: { rawLabel: true, specialtyId: true }, orderBy: SPECIALTY_ORDER },
       },
     }),
     prisma.specialty.findMany({
@@ -603,12 +605,23 @@ export async function generateDraftAction(slug: string, formData: FormData): Pro
   });
 
   await prisma.$transaction(async (tx) => {
-    const resolved: ResolvedSpecialty[] = [];
-    const seen = new Set<string>();
+    // Specialties the practitioner already holds are KEPT on the specialty they hold, never
+    // re-resolved from their wording: a re-resolve would move "Board Certified Holistic Health
+    // Practitioner (BC-HHP)" off the node an operator chose for it onto a fresh one, and a draft
+    // that omits a held specialty must not delete it. Only labels new to this practitioner are
+    // resolved, appended after the held ones.
+    const resolved: { specialtyId: string; rawLabel: string | null }[] =
+      practitioner.specialties.map((s) => ({ specialtyId: s.specialtyId, rawLabel: s.rawLabel }));
+    const seen = new Set(resolved.map((r) => r.specialtyId));
+    const heldLabels = new Set(
+      resolved.map((r) => (r.rawLabel ? normalizeAliasLabel(r.rawLabel) : '')).filter(Boolean),
+    );
     for (const d of draft.specialties) {
+      if (heldLabels.has(normalizeAliasLabel(d.rawLabel))) continue;
       const r = await resolveDraftSpecialty(tx, d);
       if (!r || seen.has(r.specialtyId)) continue;
       seen.add(r.specialtyId);
+      heldLabels.add(normalizeAliasLabel(r.rawLabel));
       resolved.push(r);
     }
 
@@ -638,7 +651,7 @@ export async function generateDraftAction(slug: string, formData: FormData): Pro
           draft.bio,
           draft.whoIHelp,
           ...draft.modalities,
-          ...draft.specialties.map((s) => s.rawLabel),
+          ...resolved.map((r) => r.rawLabel),
           ...canonicalNames,
         ]),
         specialties: {

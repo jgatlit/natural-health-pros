@@ -3,7 +3,13 @@ import { isWordingVariant, normalizeAliasLabel, specialtyNameFromLabel } from '.
 
 export type ResolvedSpecialty = { specialtyId: string; rawLabel: string; created: boolean };
 
-type Candidate = { id: string; slug: string; name: string };
+type Candidate = {
+  id: string;
+  slug: string;
+  name: string;
+  status: 'ACTIVE' | 'PROPOSED' | 'MERGED';
+  mergedIntoId: string | null;
+};
 
 export function specialtySlug(s: string): string {
   return (
@@ -26,6 +32,10 @@ export function specialtySlug(s: string): string {
  * Functional Medicine are synonyms for search, not a specialty the practitioner claimed. The same
  * goes for `hint` (an LLM's proposed canonical): it is only honoured when it is itself a wording
  * variant of the label, and then only to choose between equally valid matches.
+ *
+ * A match on a MERGED row follows its `mergedIntoId`: an admin merge is a human decision, so the
+ * surviving specialty stands in for the merged one. A live row of the same words wins over a
+ * merged one.
  */
 export async function resolveOwnSpecialty(
   tx: Prisma.TransactionClient,
@@ -40,23 +50,42 @@ export async function resolveOwnSpecialty(
   if (!rawLabel) return null;
 
   const candidates: Candidate[] = await tx.specialty.findMany({
-    where: { status: { in: ['ACTIVE', 'PROPOSED'] } },
-    select: { id: true, slug: true, name: true },
+    where: { status: { in: ['ACTIVE', 'PROPOSED', 'MERGED'] } },
+    select: { id: true, slug: true, name: true, status: true, mergedIntoId: true },
     orderBy: { name: 'asc' },
   });
+  const byId = new Map(candidates.map((c) => [c.id, c]));
 
-  const exact = candidates.find((c) => c.name.toLowerCase() === rawLabel.toLowerCase());
+  /** Follows a merge chain to the surviving row; null if the chain is broken or cyclic. */
+  const surviving = (c: Candidate): Candidate | null => {
+    let row: Candidate | undefined = c;
+    for (let hops = 0; row && row.status === 'MERGED'; hops++) {
+      if (hops > 10 || !row.mergedIntoId) return null;
+      row = byId.get(row.mergedIntoId);
+    }
+    return row ?? null;
+  };
+  /** Live rows first, then merged ones (followed); the first that resolves wins. */
+  const pick = (matches: Candidate[]): Candidate | null => {
+    for (const c of matches.filter((m) => m.status !== 'MERGED')) return c;
+    for (const c of matches) {
+      const s = surviving(c);
+      if (s) return s;
+    }
+    return null;
+  };
+
+  const exact = pick(candidates.filter((c) => c.name.toLowerCase() === rawLabel.toLowerCase()));
   if (exact) return { specialtyId: exact.id, rawLabel, created: false };
 
   const variants = candidates.filter((c) => isWordingVariant(rawLabel, c.name));
-  if (variants.length > 0) {
-    const hinted = variants.find(
-      (c) =>
-        (input.hint?.slug && c.slug === input.hint.slug) ||
-        (input.hint?.name && c.name.toLowerCase() === input.hint.name.trim().toLowerCase()),
-    );
-    return { specialtyId: (hinted ?? variants[0]).id, rawLabel, created: false };
-  }
+  const hinted = variants.filter(
+    (c) =>
+      (input.hint?.slug && c.slug === input.hint.slug) ||
+      (input.hint?.name && c.name.toLowerCase() === input.hint.name.trim().toLowerCase()),
+  );
+  const variant = pick(hinted) ?? pick(variants);
+  if (variant) return { specialtyId: variant.id, rawLabel, created: false };
 
   const name = specialtyNameFromLabel(rawLabel);
   let slug = specialtySlug(name);
