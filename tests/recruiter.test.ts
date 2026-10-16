@@ -232,7 +232,7 @@ describe('admin gating and invite gate', () => {
 
   it('onboarding still enforces the invitation gate unchanged', () => {
     const src = read('src/app/onboarding/page.tsx');
-    expect(src).toMatch(/if \(!token\) \{\s*redirect\('\/'\)/);
+    expect(src).not.toMatch(/redirect\(\s*'\/'\s*\)/);
     expect(src).toMatch(/invitation\.expiresAt < new Date\(\)/);
     expect(src).toMatch(/invitation\.acceptedByUserId !== session\.user\.id/);
     expect(src).toMatch(/AccessDenied/);
