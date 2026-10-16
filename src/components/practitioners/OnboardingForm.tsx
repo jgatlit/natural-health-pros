@@ -71,6 +71,8 @@ export function OnboardingForm({
                 type="text"
                 name="displayName"
                 required
+                autoComplete="name"
+                placeholder="First and last name, as clients should see it"
                 defaultValue={values.displayName}
                 className="h-10 w-full rounded-md border bg-card px-3 text-sm outline-none ring-ring/30 focus-visible:ring-2"
               />
@@ -84,7 +86,7 @@ export function OnboardingForm({
                 name="draftSource"
                 rows={7}
                 defaultValue={values.describe}
-                placeholder="e.g. I'm a functional nutritionist who helps women in perimenopause with fatigue, gut issues, and hormone balance. I trained at… I use HTMA, targeted supplementation, and mindset coaching…"
+                placeholder="e.g. Who you work with, what you help them with, where you trained, and the methods you use."
                 className="w-full rounded-md border bg-card px-3 py-2 text-sm outline-none ring-ring/30 focus-visible:ring-2"
               />
             </Field>

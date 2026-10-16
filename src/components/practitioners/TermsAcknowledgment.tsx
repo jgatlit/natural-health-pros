@@ -53,11 +53,7 @@ export function TermsAcknowledgment({ acceptedAt }: { acceptedAt: Date | null })
           className="mt-0.5 h-4 w-4 shrink-0 rounded border"
         />
         <span>
-          I have read and agree to the Terms &amp; Conditions above.{' '}
-          <span className="text-muted-foreground">
-            (Two sections above are still marked as open decisions — that&apos;s expected; this
-            draft isn&apos;t final yet.)
-          </span>
+          I have read and agree to the Terms &amp; Conditions above.
         </span>
       </label>
     </div>

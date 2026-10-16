@@ -21,6 +21,7 @@ const m = vi.hoisted(() => ({
   recruiterRows: {} as Record<string, { id: string; userId: string; archivedAt: Date | null }>,
   /** The schedule `current_rate_schedule_id` points at; null = none configured. */
   currentScheduleId: 'rs_go_forward_2026_10' as string | null,
+  enabledCohort: { slug: 'hhe' } as { slug: string } | null,
   create: vi.fn(),
   findFirst: vi.fn(),
 }));
@@ -81,6 +82,7 @@ vi.mock('@/lib/prisma', () => ({
         a.where.id === m.currentScheduleId ? V1 : null,
     },
     user: { update: async () => ({}) },
+    signupCohort: { findFirst: async () => m.enabledCohort },
     specialty: { findMany: async () => [] },
     specialtyAlias: { findMany: async () => [] },
   },
@@ -115,6 +117,8 @@ beforeEach(() => {
   m.cookie = undefined;
   m.currentScheduleId = V1.id;
   m.existingPractitioner = null;
+  m.enabledCohort = { slug: 'hhe' };
+  m.session = { user: { id: 'victim-user', email: 'victim@x.com', name: 'Victim' } };
   m.invitation = invitation();
   m.recruiterRows = {
     [REAL]: { id: 'real-recruiter', userId: 'real-user', archivedAt: null },
@@ -287,25 +291,98 @@ describe('disabling a cohort stops already-issued invitations', () => {
 });
 
 describe('invite gate regression', () => {
-  const expectRedirect = async (to: string) => {
-    await expect(render()).rejects.toMatchObject({ url: to });
-    expect(m.create).not.toHaveBeenCalled();
-  };
-  it('expired invitation', async () => {
+  it('expired invitation, no profile: the sign-up-link page, nothing created', async () => {
     m.invitation = invitation({ expiresAt: new Date(Date.now() - 1000) });
-    await expectRedirect('/auth/error?error=Verification');
+    const out = (await render()) as { props: { expired?: boolean; joinPath: string | null } };
+    expect(out.props).toMatchObject({ expired: true, joinPath: '/join/hhe' });
+    expect(m.create).not.toHaveBeenCalled();
   });
-  it('unknown invitation', async () => {
+  it('unknown invitation, no profile: the sign-up-link page, nothing created', async () => {
     m.invitation = null;
-    await expectRedirect('/auth/error?error=Verification');
+    const out = (await render()) as { props: { expired?: boolean } };
+    expect(out.props.expired).toBe(true);
+    expect(m.create).not.toHaveBeenCalled();
+  });
+  it('an invitation accepted by another account is still refused', async () => {
+    m.invitation = invitation({ acceptedAt: new Date(), acceptedByUserId: 'someone-else' });
+    const out = (await render()) as { props: { expired?: boolean } };
+    expect(out.props.expired).toBe(true);
+    expect(m.create).not.toHaveBeenCalled();
+  });
+  it('expired invitation for someone who already has a profile: their edit page', async () => {
+    m.invitation = invitation({ expiresAt: new Date(Date.now() - 1000) });
+    m.existingPractitioner = { slug: 'victim' };
+    await expect(render()).rejects.toMatchObject({ url: '/practitioners/victim/edit' });
   });
   it('signed-in email does not match', async () => {
     m.invitation = invitation({ email: 'someone@else.com' });
-    await expectRedirect('/auth/error?error=AccessDenied');
+    await expect(render()).rejects.toMatchObject({ url: '/auth/error?error=AccessDenied' });
+    expect(m.create).not.toHaveBeenCalled();
   });
-  it('a user with no invitation param is refused', async () => {
+});
+
+describe('/onboarding never strands anyone on the homepage (tsk_8cec02e4)', () => {
+  const page = async (searchParams: { invitation?: string }) => {
     const { default: Page } = await import('@/app/onboarding/page');
-    await expect(Page({ searchParams: {} })).rejects.toMatchObject({ url: '/' });
+    return Page({ searchParams });
+  };
+
+  it('signed out with an invitation: sign-in keeps the token in callbackUrl', async () => {
+    m.session = null;
+    await expect(page({ invitation: 'tok_ABC-123' })).rejects.toMatchObject({
+      url: '/auth/signin?callbackUrl=%2Fonboarding%3Finvitation%3Dtok_ABC-123',
+    });
+  });
+  it('signed out, bare /onboarding: sign-in with callbackUrl=/onboarding', async () => {
+    m.session = null;
+    await expect(page({})).rejects.toMatchObject({ url: '/auth/signin?callbackUrl=%2Fonboarding' });
+  });
+  it('signed in with a profile, bare /onboarding: their edit page', async () => {
+    m.existingPractitioner = { slug: 'victim' };
+    await expect(page({})).rejects.toMatchObject({ url: '/practitioners/victim/edit' });
+  });
+  it('signed in without a profile, bare /onboarding: the sign-up-link page pointing at the enabled cohort', async () => {
+    const out = (await page({})) as { props: { joinPath: string | null; expired?: boolean } };
+    expect(out.props.joinPath).toBe('/join/hhe');
+    expect(out.props.expired).toBeUndefined();
+    expect(m.create).not.toHaveBeenCalled();
+  });
+  it('no enabled cohort: the page still renders, without a join link', async () => {
+    m.enabledCohort = null;
+    const out = (await page({})) as { props: { joinPath: string | null } };
+    expect(out.props.joinPath).toBeNull();
+  });
+  it('the page source never redirects to the homepage', async () => {
+    const { readFileSync } = await import('node:fs');
+    const src = readFileSync('src/app/onboarding/page.tsx', 'utf8');
+    expect(src).not.toMatch(/redirect\(\s*['"`]\/['"`]\s*\)/);
+  });
+});
+
+describe('the name is the practitioner\'s own (fix 4)', () => {
+  it('a new practitioner is created with a blank name, not one derived from the email', async () => {
+    await render();
+    expect(m.create.mock.calls[0][0].data.displayName).toBe('');
+  });
+  it('an untouched shell holding an email-derived name is shown a blank name field', async () => {
+    m.invitation = invitation({ email: 'kbbunny81@x.com' });
+    m.session = { user: { id: 'victim-user', email: 'kbbunny81@x.com' } };
+    m.existingPractitioner = {
+      id: 'p1', slug: 'kbbunny81', displayName: 'Kbbunny', bio: null, headline: null, city: null,
+      yearsInPractice: null, telehealth: false, inPerson: false, specialties: [],
+      recruitedById: null, rateScheduleId: V1.id, user: { termsAcceptedAt: null },
+    };
+    const out = (await render()) as { props: { values: { displayName: string } } };
+    expect(out.props.values.displayName).toBe('');
+  });
+  it('a name the practitioner typed is kept', async () => {
+    m.existingPractitioner = {
+      id: 'p1', slug: 'victim', displayName: 'Jordan Lee', bio: null, headline: null, city: null,
+      yearsInPractice: null, telehealth: false, inPerson: false, specialties: [],
+      recruitedById: null, rateScheduleId: V1.id, user: { termsAcceptedAt: null },
+    };
+    const out = (await render()) as { props: { values: { displayName: string } } };
+    expect(out.props.values.displayName).toBe('Jordan Lee');
   });
 });
 

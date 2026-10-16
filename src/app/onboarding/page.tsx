@@ -12,28 +12,12 @@ import { RECRUITER_COOKIE, verifyRecruiterCookie } from '@/lib/recruiter-cookie'
 import { cohortRedemptionOpen } from '@/lib/join-cohort';
 import { planComparison } from '@/lib/pricing-plans';
 import { getPlanAListSchedule, getScheduleForCopy, signupScheduleData } from '@/lib/rate-schedules';
+import { emailDerivedName, isNeverDrafted, slugBase, uniqueSlug } from '@/lib/practitioner-slug';
+import { SignUpLinkNeeded } from '@/components/practitioners/SignUpLinkNeeded';
 
 type Props = { searchParams: { invitation?: string } };
 
 export const dynamic = 'force-dynamic';
-
-async function generateUniqueSlug(email: string): Promise<string> {
-  const base =
-    email
-      .split('@')[0]
-      ?.toLowerCase()
-      .replace(/[^a-z0-9]+/g, '-')
-      .replace(/^-+|-+$/g, '') || 'practitioner';
-  let slug = base;
-  let suffix = 0;
-  // eslint-disable-next-line no-constant-condition
-  while (true) {
-    const exists = await prisma.practitioner.findUnique({ where: { slug } });
-    if (!exists) return slug;
-    suffix++;
-    slug = `${base}-${suffix}`;
-  }
-}
 
 // Ordered like every other read site. This one was missed when ordering shipped, and it is not
 // cosmetic here: submitOnboarding rewrites sortOrder from the order this query returns, so an
@@ -71,13 +55,24 @@ const trialClockEnabled = process.env.PILOT_TRIAL_CLOCK_ENABLED === 'true';
 
 export default async function OnboardingPage({ searchParams }: Props) {
   const session = await auth();
+  const token = searchParams.invitation;
   if (!session?.user?.id) {
-    redirect('/auth/signin?callbackUrl=/onboarding');
+    // Keep the invitation through sign-in. Dropping it sent people back here token-less and on to
+    // the homepage, with no message.
+    const callback = token ? `/onboarding?invitation=${encodeURIComponent(token)}` : '/onboarding';
+    redirect(`/auth/signin?callbackUrl=${encodeURIComponent(callback)}`);
   }
 
-  const token = searchParams.invitation;
+  // No usable invitation: send an existing practitioner to their profile, and anyone else to the
+  // page that explains the sign-up link. Never to the homepage.
+  const userId = session.user.id;
+  const ownProfile = () =>
+    prisma.practitioner.findUnique({ where: { userId }, select: { slug: true } });
+
   if (!token) {
-    redirect('/');
+    const own = await ownProfile();
+    if (own) redirect(`/practitioners/${own.slug}/edit`);
+    return <SignUpLinkNeeded joinPath={await enabledJoinPath()} />;
   }
 
   const invitation = await prisma.invitation.findUnique({
@@ -89,7 +84,9 @@ export default async function OnboardingPage({ searchParams }: Props) {
     invitation.expiresAt < new Date() ||
     (invitation.acceptedAt && invitation.acceptedByUserId !== session.user.id)
   ) {
-    redirect('/auth/error?error=Verification');
+    const own = await ownProfile();
+    if (own) redirect(`/practitioners/${own.slug}/edit`);
+    return <SignUpLinkNeeded joinPath={await enabledJoinPath()} expired />;
   }
 
   // Confirm the signed-in email matches the invitation.
@@ -119,16 +116,10 @@ export default async function OnboardingPage({ searchParams }: Props) {
   }
 
   if (!practitioner) {
-    const slug = await generateUniqueSlug(invitation.email);
-    const displayName =
-      session.user.name?.trim() ||
-      invitation.email
-        .split('@')[0]
-        .split(/[^a-z]+/i)
-        .filter(Boolean)
-        .map((p) => p[0]!.toUpperCase() + p.slice(1).toLowerCase())
-        .join(' ') ||
-      'New Practitioner';
+    // A placeholder until the first submit, which regenerates it from the name the practitioner
+    // types (submitOnboarding). The name itself starts blank: the form asks for it.
+    const slug = await uniqueSlug(prisma, slugBase(invitation.email.split('@')[0] ?? ''));
+    const displayName = '';
 
     // An HHE invitation grants a 90-day pilot — not a permanent comp. Reaching this line proves
     // the grant is earned: the invitation-required, validity and email-match gates above all
@@ -231,7 +222,13 @@ export default async function OnboardingPage({ searchParams }: Props) {
       isPrefilled={isPrefilled}
       llmConfigured={isLlmConfigured()}
       values={{
-        displayName: practitioner.displayName,
+        // Rows created before this change hold a name derived from the email ("Kbbunny"). Until
+        // the first submit, ask for a real one instead of prefilling that.
+        displayName:
+          isNeverDrafted(practitioner) &&
+          practitioner.displayName === emailDerivedName(invitation.email)
+            ? ''
+            : practitioner.displayName,
         describe: practitioner.bio ?? '',
         cityName: practitioner.city?.name ?? '',
         cityState: practitioner.city?.state ?? '',
@@ -250,4 +247,13 @@ export default async function OnboardingPage({ searchParams }: Props) {
       planTerms={{ plans: comparison.cards, referral: comparison.referral }}
     />
   );
+}
+
+async function enabledJoinPath(): Promise<string | null> {
+  const cohort = await prisma.signupCohort.findFirst({
+    where: { enabled: true },
+    orderBy: { createdAt: 'asc' },
+    select: { slug: true },
+  });
+  return cohort ? `/join/${cohort.slug}` : null;
 }

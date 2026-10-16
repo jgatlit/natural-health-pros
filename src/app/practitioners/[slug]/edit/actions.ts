@@ -3,7 +3,7 @@
 import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import * as Sentry from '@sentry/nextjs';
-import type { Prisma } from '@prisma/client';
+import { Prisma as PrismaNS, type Prisma } from '@prisma/client';
 import { auth } from '@/auth';
 import { normalizeFraming } from '@/lib/photo-framing';
 import { prisma } from '@/lib/prisma';
@@ -13,6 +13,7 @@ import { sendEmail, normalizeEmail, escapeHtml } from '@/lib/email';
 import { SITE_URL } from '@/lib/site';
 import { newToken } from '@/lib/tokens';
 import { indexPractitioner } from '@/lib/practitioner-indexer';
+import { isNeverDrafted, slugBase, uniqueSlug } from '@/lib/practitioner-slug';
 import { syncSpecialtySynonyms } from '@/lib/typesense-synonyms';
 import { draftProfile, type DraftSpecialty } from '@/lib/onboarding-draft';
 import { resolveOwnSpecialty, type ResolvedSpecialty } from '@/lib/specialty-resolve';
@@ -791,6 +792,7 @@ export async function submitOnboarding(slug: string, formData: FormData): Promis
         openToOutsideWork: true,
         openToOutsideWorkUpdatedAt: true,
         specialties: { select: { rawLabel: true } },
+        _count: { select: { bookingLinks: true } },
       },
     }),
     prisma.specialty.findMany({
@@ -818,7 +820,13 @@ export async function submitOnboarding(slug: string, formData: FormData): Promis
 
   let createdNewTaxonomy = false;
 
-  await prisma.$transaction(async (tx) => {
+  // The first submit names the page after the practitioner: the slug was a placeholder minted from
+  // the email when the row was created. Only while nothing has been drafted and no booking link
+  // exists, so a slug anyone may already have shared is never changed.
+  const renameSlug = !!existing && isNeverDrafted(existing) && existing._count.bookingLinks === 0;
+  let finalSlug = renameSlug ? await uniqueSlug(prisma, slugBase(displayName), target.id) : slug;
+
+  const writeProfile = (nextSlug: string) => prisma.$transaction(async (tx) => {
     const resolved: ResolvedSpecialty[] = [];
     const seen = new Set<string>();
     for (const sel of rawSelections) {
@@ -852,6 +860,7 @@ export async function submitOnboarding(slug: string, formData: FormData): Promis
     await tx.practitioner.update({
       where: { id: target.id },
       data: {
+        slug: nextSlug,
         displayName,
         headline: draft.headline || null,
         tagline: draft.tagline || null,
@@ -919,6 +928,15 @@ export async function submitOnboarding(slug: string, formData: FormData): Promis
     }
   });
 
+  try {
+    await writeProfile(finalSlug);
+  } catch (err) {
+    // Another sign-up took the same slug between the lookup and the write. Keep the current one.
+    if (finalSlug === slug || !isSlugCollision(err)) throw err;
+    finalSlug = slug;
+    await writeProfile(finalSlug);
+  }
+
   await indexPractitioner(target.id).catch((err) =>
     console.error('Typesense reindex failed:', err),
   );
@@ -929,9 +947,10 @@ export async function submitOnboarding(slug: string, formData: FormData): Promis
   }
 
   revalidatePath(`/practitioners/${slug}`);
+  if (finalSlug !== slug) revalidatePath(`/practitioners/${finalSlug}`);
   revalidatePath('/');
   revalidatePath('/search');
-  redirect(`/practitioners/${slug}?onboarded=1`);
+  redirect(`/practitioners/${finalSlug}?onboarded=1`);
 }
 
 /**
@@ -943,6 +962,12 @@ export async function submitOnboarding(slug: string, formData: FormData): Promis
  * token is `updatedAt`, and this write is not part of that form, so bumping it would make the
  * practitioner's next "Save profile" in the same tab fail as "changed elsewhere".
  */
+function isSlugCollision(err: unknown): boolean {
+  if (!(err instanceof PrismaNS.PrismaClientKnownRequestError) || err.code !== 'P2002') return false;
+  const target = err.meta?.target;
+  return Array.isArray(target) ? target.includes('slug') : String(target ?? '').includes('slug');
+}
+
 export async function setOpenToOutsideWork(slug: string, next: boolean): Promise<boolean> {
   const target = await authorizeForSlug(slug);
   const current = await prisma.practitioner.findUnique({
