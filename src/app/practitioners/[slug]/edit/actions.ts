@@ -13,7 +13,7 @@ import { sendEmail, normalizeEmail, escapeHtml } from '@/lib/email';
 import { SITE_URL } from '@/lib/site';
 import { newToken } from '@/lib/tokens';
 import { indexPractitioner } from '@/lib/practitioner-indexer';
-import { isNeverDrafted, slugBase, uniqueSlug } from '@/lib/practitioner-slug';
+import { isPlaceholderProfile, slugBase, uniqueSlug } from '@/lib/practitioner-slug';
 import { syncSpecialtySynonyms } from '@/lib/typesense-synonyms';
 import { draftProfile, type DraftSpecialty } from '@/lib/onboarding-draft';
 import { resolveOwnSpecialty, type ResolvedSpecialty } from '@/lib/specialty-resolve';
@@ -730,7 +730,7 @@ export async function submitOnboarding(slug: string, formData: FormData): Promis
   // hand-crafted POST can't skip.
   const existingUser = await prisma.user.findUnique({
     where: { id: target.userId },
-    select: { termsAcceptedAt: true },
+    select: { termsAcceptedAt: true, email: true },
   });
   const alreadyAcceptedTerms = !!existingUser?.termsAcceptedAt;
   if (target.isOwner && !alreadyAcceptedTerms && formData.get('termsAccepted') !== 'on') {
@@ -792,7 +792,15 @@ export async function submitOnboarding(slug: string, formData: FormData): Promis
         openToOutsideWork: true,
         openToOutsideWorkUpdatedAt: true,
         specialties: { select: { rawLabel: true } },
-        _count: { select: { bookingLinks: true } },
+        displayName: true,
+        plan: true,
+        subscriptionStatus: true,
+        whopCompanyId: true,
+        whopMembershipId: true,
+        whopSubscriptionCheckoutUrl: true,
+        _count: {
+          select: { bookingLinks: true, bookingIntents: true, whopProducts: true, profileSections: true },
+        },
       },
     }),
     prisma.specialty.findMany({
@@ -821,9 +829,11 @@ export async function submitOnboarding(slug: string, formData: FormData): Promis
   let createdNewTaxonomy = false;
 
   // The first submit names the page after the practitioner: the slug was a placeholder minted from
-  // the email when the row was created. Only while nothing has been drafted and no booking link
-  // exists, so a slug anyone may already have shared is never changed.
-  const renameSlug = !!existing && isNeverDrafted(existing) && existing._count.bookingLinks === 0;
+  // the email when the row was created. Only the practitioner's own submit, and only while the row
+  // is still that placeholder (see isPlaceholderProfile), so a slug that a link, Whop redirect or
+  // checkout may already carry is never changed.
+  const renameSlug =
+    target.isOwner && !!existing && isPlaceholderProfile(existing, existingUser?.email ?? '');
   let finalSlug = renameSlug ? await uniqueSlug(prisma, slugBase(displayName), target.id) : slug;
 
   const writeProfile = (nextSlug: string) => prisma.$transaction(async (tx) => {

@@ -12,10 +12,11 @@ const m = vi.hoisted(() => ({
   existing: null as unknown,
   updates: [] as Array<Record<string, unknown>>,
   failFirstUpdateWithSlugCollision: false,
+  session: { user: { id: 'u1', role: 'PRACTITIONER' } } as unknown,
   revalidatePath: vi.fn(),
 }));
 
-vi.mock('@/auth', () => ({ auth: async () => ({ user: { id: 'u1', role: 'PRACTITIONER' } }) }));
+vi.mock('@/auth', () => ({ auth: async () => m.session }));
 vi.mock('next/navigation', () => ({
   redirect: (url: string) => {
     throw Object.assign(new Error(`REDIRECT:${url}`), { url });
@@ -80,7 +81,7 @@ vi.mock('@/lib/prisma', () => {
           return null;
         },
       },
-      user: { findUnique: async () => ({ termsAcceptedAt: null }) },
+      user: { findUnique: async () => ({ termsAcceptedAt: null, email: 'kbbunny81@hotmail.com' }) },
       specialty: { findMany: async () => [] },
       $transaction: async (fn: (t: typeof tx) => Promise<unknown>) => fn(tx),
     },
@@ -105,7 +106,13 @@ const shell = (over: Record<string, unknown> = {}) => ({
   openToOutsideWork: false,
   openToOutsideWorkUpdatedAt: null,
   specialties: [],
-  _count: { bookingLinks: 0 },
+  displayName: 'Kbbunny',
+  plan: null,
+  subscriptionStatus: 'NONE',
+  whopCompanyId: null,
+  whopMembershipId: null,
+  whopSubscriptionCheckoutUrl: null,
+  _count: { bookingLinks: 0, bookingIntents: 0, whopProducts: 0, profileSections: 0 },
   ...over,
 });
 
@@ -121,6 +128,7 @@ beforeEach(() => {
   m.existing = shell();
   m.updates = [];
   m.failFirstUpdateWithSlugCollision = false;
+  m.session = { user: { id: 'u1', role: 'PRACTITIONER' } };
   m.revalidatePath.mockReset();
 });
 
@@ -160,11 +168,33 @@ describe('an existing practitioner keeps their slug', () => {
     ['a bio', { bio: 'Already has a page' }],
     ['a headline', { headline: 'Herbalist' }],
     ['specialties', { specialties: [{ rawLabel: 'Gut health' }] }],
-    ['a booking link', { _count: { bookingLinks: 1 } }],
+    ['a booking link', { _count: { bookingLinks: 1, bookingIntents: 0, whopProducts: 0, profileSections: 0 } }],
+    ['a booking intent', { _count: { bookingLinks: 0, bookingIntents: 1, whopProducts: 0, profileSections: 0 } }],
+    ['a Whop product', { _count: { bookingLinks: 0, bookingIntents: 0, whopProducts: 1, profileSections: 0 } }],
+    ['a custom section', { _count: { bookingLinks: 0, bookingIntents: 0, whopProducts: 0, profileSections: 1 } }],
+    ['a connected Whop account', { whopCompanyId: 'biz_1' }],
+    ['a chosen plan', { plan: 'A' }],
+    ['a started plan checkout', { whopSubscriptionCheckoutUrl: 'https://whop.com/checkout/x' }],
+    ['a membership', { whopMembershipId: 'mem_1' }],
+    ['a subscription', { subscriptionStatus: 'ACTIVE' }],
+    ['a name they already typed', { displayName: 'Kristin Smith' }],
   ])('a profile with %s is not renamed', async (_label, over) => {
     m.existing = shell(over);
     const out = await submit('Jordan Lee');
     expect(m.updates[0]).toMatchObject({ slug: 'kbbunny81', displayName: 'Jordan Lee' });
     expect(out.url).toBe('/practitioners/kbbunny81?onboarded=1');
   });
+});
+
+it('a blank placeholder name (rows created after this change) is renamed too', async () => {
+  m.existing = shell({ displayName: '' });
+  await submit('Jordan Lee');
+  expect(m.updates[0]).toMatchObject({ slug: 'jordan-lee' });
+});
+
+it("an admin completing someone else's onboarding never renames their slug", async () => {
+  m.session = { user: { id: 'admin', role: 'ADMIN' } };
+  const out = await submit('Jordan Lee');
+  expect(m.updates[0]).toMatchObject({ slug: 'kbbunny81' });
+  expect(out.url).toBe('/practitioners/kbbunny81?onboarded=1');
 });
