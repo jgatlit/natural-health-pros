@@ -46,12 +46,13 @@ model User {
   createdAt       DateTime  @default(now())
   updatedAt       DateTime  @updatedAt
 
-  accounts            Account[]
-  sessions            Session[]
-  practitioner        Practitioner?
-  invitationsSent     Invitation[]         @relation("InvitedBy")
-  invitationsAccepted Invitation[]         @relation("AcceptedBy")
-  emailChangeRequests EmailChangeRequest[]
+  accounts             Account[]
+  sessions             Session[]
+  practitioner         Practitioner?
+  invitationsSent      Invitation[]         @relation("InvitedBy")
+  invitationsAccepted  Invitation[]         @relation("AcceptedBy")
+  emailChangeRequests  EmailChangeRequest[]
+  joinRequestsReviewed JoinRequest[]        @relation("JoinRequestReviewedBy")
 }
 
 enum Role {
@@ -797,6 +798,7 @@ model Invitation {
   /// The `?nhpa=` recruiter token captured (first-wins cookie) when the cohort sign-up was
   /// requested, so it survives opening the magic link on a different device than the form.
   recruiterToken   String?
+  joinRequests     JoinRequest[]
 
   @@index([email])
   @@index([acceptedAt])
@@ -1615,4 +1617,32 @@ model ProfileSection {
   updatedAt      DateTime     @updatedAt
 
   @@index([practitionerId, sortOrder])
+}
+
+enum JoinRequestStatus {
+  PENDING
+  APPROVED
+  DECLINED
+}
+
+/// A request from the public /join form. Creates no User, Practitioner or Invitation; an admin's
+/// approval issues an ordinary admin invitation and records it here.
+model JoinRequest {
+  id           String            @id @default(cuid())
+  name         String
+  email        String
+  credential   String
+  website      String?
+  note         String?
+  status       JoinRequestStatus @default(PENDING)
+  createdAt    DateTime          @default(now())
+  reviewedAt   DateTime?
+  reviewedById String?
+  reviewedBy   User?             @relation("JoinRequestReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  invitationId String?
+  invitation   Invitation?       @relation(fields: [invitationId], references: [id], onDelete: SetNull)
+
+  @@index([email])
+  @@index([status, createdAt])
+  @@index([invitationId])
 }

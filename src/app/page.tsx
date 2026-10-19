@@ -297,7 +297,7 @@ export default async function Home({
 
             <div className="mt-10 flex flex-wrap items-center gap-x-6 gap-y-3">
               <a
-                href={`${SITE_URL}/onboarding`}
+                href={`${SITE_URL}/join`}
                 className="inline-flex h-12 items-center justify-center rounded-lg px-8 text-[0.9375rem] font-medium text-white transition-shadow hover:[box-shadow:var(--shadow-glow-rose)]"
                 style={{ background: 'var(--gradient-rose-cta)' }}
               >

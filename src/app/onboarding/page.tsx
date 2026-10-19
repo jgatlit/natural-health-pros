@@ -72,7 +72,7 @@ export default async function OnboardingPage({ searchParams }: Props) {
   if (!token) {
     const own = await ownProfile();
     if (own) redirect(`/practitioners/${own.slug}/edit`);
-    return <SignUpLinkNeeded joinPath={await enabledJoinPath()} />;
+    return <SignUpLinkNeeded />;
   }
 
   const invitation = await prisma.invitation.findUnique({
@@ -86,7 +86,7 @@ export default async function OnboardingPage({ searchParams }: Props) {
   ) {
     const own = await ownProfile();
     if (own) redirect(`/practitioners/${own.slug}/edit`);
-    return <SignUpLinkNeeded joinPath={await enabledJoinPath()} expired />;
+    return <SignUpLinkNeeded expired />;
   }
 
   // Confirm the signed-in email matches the invitation.
@@ -247,13 +247,4 @@ export default async function OnboardingPage({ searchParams }: Props) {
       planTerms={{ plans: comparison.cards, referral: comparison.referral }}
     />
   );
-}
-
-async function enabledJoinPath(): Promise<string | null> {
-  const cohort = await prisma.signupCohort.findFirst({
-    where: { enabled: true },
-    orderBy: { createdAt: 'asc' },
-    select: { slug: true },
-  });
-  return cohort ? `/join/${cohort.slug}` : null;
 }
