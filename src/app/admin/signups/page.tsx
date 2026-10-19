@@ -78,6 +78,16 @@ export default async function AdminSignupsPage({
             </p>
           </div>
         )}
+        {errorCode === 'badge-index-out-of-sync' && (
+          <div className="flex items-start gap-2 rounded-md border px-4 py-3 text-sm">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+            <p>
+              Badge saved and shown on the profile. The search index was not refreshed; run{' '}
+              <code className="rounded bg-muted px-1">npm run typesense:reindex</code> if it keeps
+              failing.
+            </p>
+          </div>
+        )}
         {notice === 'index-unverified' && (
           <div className="flex items-start gap-2 rounded-md border px-4 py-3 text-sm">
             <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />

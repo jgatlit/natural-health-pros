@@ -11,6 +11,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 const m = vi.hoisted(() => ({
   session: { user: { id: 'admin_1', role: 'ADMIN' } } as unknown,
   invitation: null as unknown,
+  userByEmail: null as unknown,
   updates: [] as Array<{ where: unknown; data: Record<string, unknown> }>,
   reindexed: [] as string[],
   revalidated: [] as string[],
@@ -36,7 +37,7 @@ vi.mock('@/lib/practitioner-indexer', () => ({
 vi.mock('@/lib/prisma', () => ({
   prisma: {
     invitation: { findUnique: async () => m.invitation },
-    user: { findUnique: async () => null },
+    user: { findUnique: async () => m.userByEmail },
     practitioner: {
       update: async (a: { where: unknown; data: Record<string, unknown> }) => {
         m.updates.push(a);
@@ -60,6 +61,7 @@ const run = (p: Promise<void>) => p.then(() => ({}) as { url?: string }, (e) => 
 beforeEach(() => {
   m.session = { user: { id: 'admin_1', role: 'ADMIN' } };
   m.invitation = { email: 'jane@x.com', acceptedByUser: { practitioner: { id: 'p_1' } } };
+  m.userByEmail = null;
   m.updates = [];
   m.reindexed = [];
   m.revalidated = [];
@@ -104,25 +106,33 @@ describe('setHheCertified', () => {
     expect(m.revalidated).toContain('/admin/invites');
   });
 
-  it('resolves a seeded pilot with no accepted invitation by email', async () => {
+  it('a seeded pilot with no accepted invitation is resolved by email and toggled', async () => {
     m.invitation = { email: 'pilot@x.com', acceptedByUser: null };
-    // user.findUnique is mocked to null at module level; this pins the no-profile branch.
+    m.userByEmail = { practitioner: { id: 'p_9' } };
+    await run(setHheCertified(fd({ id: 'inv_1', on: '1', returnTo: '/admin/invites' })));
+    expect(m.updates[0].where).toEqual({ id: 'p_9' });
+    expect(m.updates[0].data.hheCertified).toBe(true);
+    expect(m.reindexed).toEqual(['p_9']);
+  });
+
+  it('an invitation with no profile returns no-profile and writes nothing', async () => {
+    m.invitation = { email: 'nobody@x.com', acceptedByUser: null };
     const out = await run(setHheCertified(fd({ id: 'inv_1', on: '1', returnTo: '/admin/invites' })));
     expect(out.url).toBe('/admin/invites?error=no-profile');
     expect(m.updates).toEqual([]);
     expect(m.reindexed).toEqual([]);
   });
 
-  it('a failed search push returns to the page it was pressed on with the error', async () => {
+  it('a failed search push returns to the page it was pressed on with the badge error', async () => {
     m.sync = { ok: false, verified: false };
     const out = await run(setHheCertified(fd({ id: 'inv_1', on: '1', returnTo: '/admin/signups' })));
-    expect(out.url).toBe('/admin/signups?error=index-out-of-sync');
+    expect(out.url).toBe('/admin/signups?error=badge-index-out-of-sync');
   });
 
   it('an unallowlisted returnTo falls back to /admin/invites', async () => {
     m.sync = { ok: false, verified: false };
     const out = await run(setHheCertified(fd({ id: 'inv_1', on: '1', returnTo: 'https://evil.example' })));
-    expect(out.url).toBe('/admin/invites?error=index-out-of-sync');
+    expect(out.url).toBe('/admin/invites?error=badge-index-out-of-sync');
   });
 
   it.each([
@@ -175,6 +185,7 @@ describe('both admin screens render the control', () => {
     expect(src).toMatch(new RegExp(`<HheBadgeControl[\\s\\S]*?returnTo="${returnTo}"`));
     expect(src).toMatch(/hheCertified: true/);
     expect(src).toMatch(/hheCertifiedChangedAt: true/);
+    expect(src).toContain("errorCode === 'badge-index-out-of-sync'");
   });
 });
 

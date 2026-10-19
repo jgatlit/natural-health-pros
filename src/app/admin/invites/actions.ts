@@ -355,13 +355,14 @@ async function applyDirectoryFlag(
   // in /search. Nothing else will come along and fix it either — the trial sweep only visits
   // practitioners whose trial has lapsed, so a delisted pilot with a null trial clock is
   // invisible to it forever.
-  await reindexAndReturn(practitionerId, slug, back, { field, on });
+  await reindexAndReturn(practitionerId, slug, back, 'index-out-of-sync', { field, on });
 }
 
 async function reindexAndReturn(
   practitionerId: string,
   slug: string,
   back: DirectoryReturnPath,
+  errorCode: 'index-out-of-sync' | 'badge-index-out-of-sync',
   context: Record<string, unknown>,
 ): Promise<void> {
   const sync = await indexPractitionerVerified(practitionerId);
@@ -373,7 +374,7 @@ async function reindexAndReturn(
 
   if (!sync.ok) {
     console.error('Directory flag reindex failed:', { practitionerId, ...context, sync });
-    redirect(`${back}?error=index-out-of-sync`);
+    redirect(`${back}?error=${errorCode}`);
   }
   if (!sync.verified) redirect(`${back}?notice=index-unverified`);
 }
@@ -411,7 +412,13 @@ export async function setHheCertified(formData: FormData): Promise<void> {
     select: { slug: true },
   });
 
-  await reindexAndReturn(practitionerId, slug, back, { field: 'hheCertified', on });
+  // Search cards do not show the badge, so a failed push here leaves only a stale document, not
+  // a wrong listing: its own error code keeps the page from warning that the practitioner "may
+  // still appear in search".
+  await reindexAndReturn(practitionerId, slug, back, 'badge-index-out-of-sync', {
+    field: 'hheCertified',
+    on,
+  });
 }
 
 /**
