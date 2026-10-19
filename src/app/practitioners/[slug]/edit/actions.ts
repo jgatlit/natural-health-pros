@@ -78,6 +78,11 @@ function slugify(s: string): string {
 
 type RawSelection = { specialtyId: string | null; rawLabel: string };
 
+/** A label with something a reader can see: trim() leaves zero-width characters in place. */
+function visibleLabel(raw: string): boolean {
+  return raw.replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').trim().length > 0;
+}
+
 /**
  * Resolve one combobox selection → a specialtyId + the practitioner's rawLabel.
  * - An explicit pick of an existing specialty → use it.
@@ -773,10 +778,18 @@ export async function submitOnboarding(slug: string, formData: FormData): Promis
           specialtyId: typeof p.specialtyId === 'string' ? p.specialtyId : null,
           rawLabel: typeof p.rawLabel === 'string' ? p.rawLabel : '',
         }))
-        .filter((p) => p.rawLabel.trim());
+        .filter((p) => visibleLabel(p.rawLabel));
     }
   } catch {
     rawSelections = [];
+  }
+  // At least one specialty, for everyone (an admin completing onboarding too): a profile with
+  // none is never listed (isProfileComplete), which is how a practitioner finished onboarding on
+  // 2026-10-19 and silently stayed out of search. Checked before the draft call, so a refused
+  // submit costs no LLM request. Every non-blank label resolves (resolveSelection), so a
+  // non-empty list here always writes at least one specialty.
+  if (rawSelections.length === 0) {
+    redirect(`/practitioners/${slug}/edit?error=specialty-required`);
   }
 
   const coords = resolvedCity?.coords ?? null;
