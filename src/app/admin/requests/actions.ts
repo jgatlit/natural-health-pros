@@ -4,7 +4,7 @@ import { redirect } from 'next/navigation';
 import { revalidatePath } from 'next/cache';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
-import { invite } from '@/lib/admin-invite';
+import { invite, type InviteResult } from '@/lib/admin-invite';
 import { sendDeclineEmail } from '@/lib/join-request';
 
 const BASE = '/admin/requests';
@@ -50,7 +50,13 @@ export async function approveJoinRequest(formData: FormData): Promise<void> {
   });
   if (claim.count === 0) redirect(`${BASE}?error=not-pending`);
 
-  const result = await invite(request.email, session.user.id);
+  let result: InviteResult;
+  try {
+    result = await invite(request.email, session.user.id);
+  } catch (e) {
+    console.error('[join-request-invite-threw]', { id }, e);
+    result = { outcome: 'send-failed', invitationId: null };
+  }
   if (!result.invitationId) {
     await prisma.joinRequest
       .updateMany({

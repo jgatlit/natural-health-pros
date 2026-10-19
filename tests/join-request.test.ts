@@ -35,6 +35,7 @@ const m = vi.hoisted(() => ({
   rows: [] as Row[],
   users: new Map<string, { practitioner: { id: string } | null }>(),
   pendingInvitation: null as null | { id: string; token: string },
+  invitationCreateThrows: false,
   invitationCreate: vi.fn(),
   invitationDelete: vi.fn(),
   userCreate: vi.fn(),
@@ -106,6 +107,7 @@ vi.mock('@/lib/prisma', () => ({
     invitation: {
       findFirst: async () => m.pendingInvitation,
       create: async (args: { data: { email: string } }) => {
+        if (m.invitationCreateThrows) throw new Error('db down');
         m.invitationCreate(args);
         return { id: 'inv_new' };
       },
@@ -174,6 +176,7 @@ beforeEach(() => {
   m.rows = [];
   m.users = new Map();
   m.pendingInvitation = null;
+  m.invitationCreateThrows = false;
   m.signIn.mockReset().mockResolvedValue('https://naturalhealthpros.com/auth/verify-request');
   m.sendEmail.mockReset().mockResolvedValue({ id: 'em1' });
   for (const f of [m.invitationCreate, m.invitationDelete, m.userCreate, m.practitionerCreate, m.joinRequestCreate]) {
@@ -328,6 +331,18 @@ describe('/admin/requests: approve', () => {
     expect(await redirectOf(approveJoinRequest(idForm('jr1')))).toBe('/admin/requests?error=send-failed');
     expect(row).toMatchObject({ status: 'PENDING', reviewedAt: null, reviewedById: null, invitationId: null });
     expect(m.invitationDelete).toHaveBeenCalledWith({ where: { id: 'inv_new' } });
+  });
+
+  it('a throw inside the invite core also leaves the request PENDING and retryable', async () => {
+    const row = pendingRow();
+    m.invitationCreateThrows = true;
+    expect(await redirectOf(approveJoinRequest(idForm('jr1')))).toBe('/admin/requests?error=send-failed');
+    expect(row).toMatchObject({ status: 'PENDING', reviewedAt: null, reviewedById: null, invitationId: null });
+    expect(m.signIn).not.toHaveBeenCalled();
+
+    m.invitationCreateThrows = false;
+    expect(await redirectOf(approveJoinRequest(idForm('jr1')))).toBe('/admin/requests?done=approved');
+    expect(row).toMatchObject({ status: 'APPROVED', invitationId: 'inv_new' });
   });
 
   it('is refused when the email already has a practitioner profile', async () => {
