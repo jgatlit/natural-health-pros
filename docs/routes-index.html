@@ -95,7 +95,7 @@
           <button id="env-prod" class="active" type="button">Production</button>
           <button id="env-local" type="button">Local (localhost:3000)</button>
         </div>
-        <p class="meta-note">Generated 2026-10-19T06:04:01.481Z</p>
+        <p class="meta-note">Generated 2026-10-19T07:27:35.828Z</p>
       </header>
 
       <section class="group">
@@ -106,6 +106,17 @@
           <div>
             <div class="path"><a href="" data-route="/" target="_blank">/</a></div>
             <p class="desc"><strong>Landing.</strong> Hero, "Find a practitioner you can trust", "Browse the directory" CTA → /search, recently-joined practitioner cards (4), invite-only directory note, link to holistichealtheducators.com (the HHE school).</p>
+            
+          </div>
+          <div class="badges">
+            <span class="badge public">Public</span>
+            <span class="badge live">Live</span>
+          </div>
+        </div>
+        <div class="route">
+          <div>
+            <div class="path"><a href="" data-route="/join" target="_blank">/join</a></div>
+            <p class="desc"><strong>Request to join.</strong> The public front door for practitioners, linked from the homepage &ldquo;Get listed&rdquo; button and from <code>/onboarding</code> when there is no usable invitation. Name, email, training or credential, optional website and note; bot-guarded (honeypot, fill time, per-IP and per-email limits, Turnstile when keyed). Stores a <code>JoinRequest</code> only (no user, practitioner or invitation), emails the admins, and gives the same confirmation whatever the address. Middleware does not stamp recruiters here (only <code>/join/</code> paths).</p>
             
           </div>
           <div class="badges">
@@ -338,6 +349,17 @@
           <div>
             <div class="path"><a href="" data-route="/admin/signups" target="_blank">/admin/signups</a></div>
             <p class="desc"><strong>Open sign-up cohorts.</strong> Lists sign-up cohorts (for example <code>hhe</code>) with an enable/disable switch, and the invitations each cohort has issued with their progress through onboarding. Disabling a cohort stops invitations already issued as well as new requests.</p>
+            
+          </div>
+          <div class="badges">
+            <span class="badge admin">Admin</span>
+            <span class="badge live">Live</span>
+          </div>
+        </div>
+        <div class="route">
+          <div>
+            <div class="path"><a href="" data-route="/admin/requests" target="_blank">/admin/requests</a></div>
+            <p class="desc"><strong>Join requests.</strong> Requests from <code>/join</code>, pending first. Each row flags an existing practitioner profile, another pending request or a pending invitation for the same email. Approve sends the normal admin invitation through the shared invite core (refused when the email already has a profile); Decline marks the request declined, with an optional kind email. Both act only on a pending row.</p>
             
           </div>
           <div class="badges">

@@ -1,6 +1,6 @@
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
-import { Mail, Building2, Webhook, Tags, ChevronRight, Scale, Users } from 'lucide-react';
+import { Mail, Building2, Webhook, Tags, ChevronRight, Scale, Users, UserPlus } from 'lucide-react';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
 import { isWhopPlatformsReady } from '@/lib/whop';
@@ -27,6 +27,7 @@ export default async function AdminIndex() {
     held,
     attributions,
     cohortSignups,
+    pendingJoinRequests,
   ] = await Promise.all([
     prisma.invitation.count({
       where: { cohortId: null, acceptedAt: null, expiresAt: { gt: new Date() } },
@@ -42,6 +43,7 @@ export default async function AdminIndex() {
     }),
     prisma.attributedClient.count(),
     prisma.invitation.count({ where: { cohortId: { not: null } } }),
+    prisma.joinRequest.count({ where: { status: 'PENDING' } }),
   ]);
 
   const heldShares = held._count;
@@ -61,6 +63,15 @@ export default async function AdminIndex() {
     {
       heading: 'People',
       tools: [
+        {
+          icon: UserPlus,
+          title: 'Join requests',
+          href: '/admin/requests',
+          count: pendingJoinRequests,
+          countLabel: 'pending',
+          description: 'Requests from the public /join form. Approve to send an invitation.',
+          configured: true,
+        },
         {
           icon: Mail,
           title: 'Invitations',

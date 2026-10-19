@@ -119,6 +119,12 @@ export const ROUTE_META: Record<string, RouteMeta> = {
     audience: 'admin',
     status: 'live',
   },
+  '/admin/requests': {
+    description:
+      '<strong>Join requests.</strong> Requests from <code>/join</code>, pending first. Each row flags an existing practitioner profile, another pending request or a pending invitation for the same email. Approve sends the normal admin invitation through the shared invite core (refused when the email already has a profile); Decline marks the request declined, with an optional kind email. Both act only on a pending row.',
+    audience: 'admin',
+    status: 'live',
+  },
   '/admin/signups': {
     description:
       '<strong>Open sign-up cohorts.</strong> Lists sign-up cohorts (for example <code>hhe</code>) with an enable/disable switch, and the invitations each cohort has issued with their progress through onboarding. Disabling a cohort stops invitations already issued as well as new requests.',
@@ -176,6 +182,12 @@ export const ROUTE_META: Record<string, RouteMeta> = {
   '/verification-submitted': {
     description:
       '<strong>Public KYC return landing.</strong> Where <code>/api/whop/onboarding/return</code> sends anyone it cannot positively identify as the owner. Deliberately generic — no name, slug or status — so it renders identically for the practitioner who just finished, a stale link, and a stranger, which is what lets the return route stay unauthenticated without leaking whether a practitioner exists. ⚠️ The path is load-bearing: middleware gates on <code>startsWith(&apos;/onboarding&apos;)</code>, a PREFIX match, so naming this <code>/onboarding-complete</code> would auth-gate it and reintroduce the dead end it exists to remove.',
+    audience: 'public',
+    status: 'live',
+  },
+  '/join': {
+    description:
+      '<strong>Request to join.</strong> The public front door for practitioners, linked from the homepage &ldquo;Get listed&rdquo; button and from <code>/onboarding</code> when there is no usable invitation. Name, email, training or credential, optional website and note; bot-guarded (honeypot, fill time, per-IP and per-email limits, Turnstile when keyed). Stores a <code>JoinRequest</code> only (no user, practitioner or invitation), emails the admins, and gives the same confirmation whatever the address. Middleware does not stamp recruiters here (only <code>/join/</code> paths).',
     audience: 'public',
     status: 'live',
   },

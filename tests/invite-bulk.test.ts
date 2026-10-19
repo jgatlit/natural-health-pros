@@ -170,11 +170,12 @@ describe('bulk invite outcomes', () => {
 });
 
 describe('the production source still carries the shared core + batch semantics', () => {
-  const src = () =>
-    require('node:fs').readFileSync(
-      require('node:path').join(__dirname, '..', 'src', 'app', 'admin', 'invites', 'actions.ts'),
-      'utf8',
-    );
+  const read = (...p: string[]) =>
+    require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'src', ...p), 'utf8');
+  // The core moved to src/lib/admin-invite.ts (shared with the join-request approval, and kept out
+  // of the 'use server' file so it is not a public action). The actions file comes first, so the
+  // bounded createInvitationsBulk slice below still falls inside it.
+  const src = () => read('app', 'admin', 'invites', 'actions.ts') + read('lib', 'admin-invite.ts');
 
   // Bounded to the function body, not sliced to end-of-file — an unbounded slice from
   // createInvitationsBulk's start would also cover every unrelated function below it

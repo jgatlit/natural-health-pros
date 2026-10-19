@@ -244,8 +244,10 @@ describe('admin gating and invite gate', () => {
     expect(src).not.toMatch(/cohort.*trialEndsAt|trialEndsAt.*cohort/);
   });
 
-  it('there is no cohort-less public sign-up route', () => {
-    expect(() => readFileSync(join(__dirname, '..', 'src/app/join/page.tsx'))).toThrow();
+  it('the cohort-less /join route only records a request: no invitation, no sign-in, no recruiter', () => {
+    const src = read('src/app/join/actions.ts');
+    expect(src).not.toMatch(/signIn|invitation\.|ensureCohortInvitation|recruiter/i);
+    expect(read('src/middleware.ts')).toMatch(/startsWith\('\/join\/'\)/);
   });
 });
 

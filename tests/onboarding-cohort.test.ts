@@ -293,8 +293,8 @@ describe('disabling a cohort stops already-issued invitations', () => {
 describe('invite gate regression', () => {
   it('expired invitation, no profile: the sign-up-link page, nothing created', async () => {
     m.invitation = invitation({ expiresAt: new Date(Date.now() - 1000) });
-    const out = (await render()) as { props: { expired?: boolean; joinPath: string | null } };
-    expect(out.props).toMatchObject({ expired: true, joinPath: '/join/hhe' });
+    const out = (await render()) as { props: Record<string, unknown> };
+    expect(out.props).toEqual({ expired: true });
     expect(m.create).not.toHaveBeenCalled();
   });
   it('unknown invitation, no profile: the sign-up-link page, nothing created', async () => {
@@ -341,16 +341,10 @@ describe('/onboarding never strands anyone on the homepage (tsk_8cec02e4)', () =
     m.existingPractitioner = { slug: 'victim' };
     await expect(page({})).rejects.toMatchObject({ url: '/practitioners/victim/edit' });
   });
-  it('signed in without a profile, bare /onboarding: the sign-up-link page pointing at the enabled cohort', async () => {
-    const out = (await page({})) as { props: { joinPath: string | null; expired?: boolean } };
-    expect(out.props.joinPath).toBe('/join/hhe');
-    expect(out.props.expired).toBeUndefined();
+  it('signed in without a profile, bare /onboarding: the request-to-join page, no cohort link passed', async () => {
+    const out = (await page({})) as { props: Record<string, unknown> };
+    expect(out.props).toEqual({});
     expect(m.create).not.toHaveBeenCalled();
-  });
-  it('no enabled cohort: the page still renders, without a join link', async () => {
-    m.enabledCohort = null;
-    const out = (await page({})) as { props: { joinPath: string | null } };
-    expect(out.props.joinPath).toBeNull();
   });
   it('the page source never redirects to the homepage', async () => {
     const { readFileSync } = await import('node:fs');
