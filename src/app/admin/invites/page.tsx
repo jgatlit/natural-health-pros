@@ -17,6 +17,7 @@ import {
 } from './actions';
 import { DeleteInviteButton } from './DeleteInviteButton';
 import { DirectoryControls } from './DirectoryControls';
+import { HheBadgeControl } from './HheBadgeControl';
 import { EditEmailControl } from './EditEmailControl';
 import { matchesOutsideWorkFilter, parseOutsideWorkFilter, type OutsideWorkFilter } from '@/lib/outside-work';
 import { assignScheduleToPractitioner } from '@/app/admin/commercial-settings/actions';
@@ -74,6 +75,8 @@ export default async function AdminInvitesPage({
               delistedAt: true,
               archivedAt: true,
               openToOutsideWork: true,
+              hheCertified: true,
+              hheCertifiedChangedAt: true,
               // Spec v1.5 §2: which rate card this practitioner is priced under.
               rateSchedule: { select: { label: true } },
             },
@@ -109,6 +112,8 @@ export default async function AdminInvitesPage({
               delistedAt: true,
               archivedAt: true,
               openToOutsideWork: true,
+              hheCertified: true,
+              hheCertifiedChangedAt: true,
               // Spec v1.5 §2: which rate card this practitioner is priced under.
               rateSchedule: { select: { label: true } },
             },
@@ -178,6 +183,16 @@ export default async function AdminInvitesPage({
               flag changed in the database and the Typesense push did not confirm — this
               practitioner may still appear in search. Retry the toggle; if it keeps failing, run{' '}
               <code className="rounded bg-muted px-1">npm run typesense:reindex</code>.
+            </p>
+          </div>
+        )}
+        {errorCode === 'badge-index-out-of-sync' && (
+          <div className="flex items-start gap-2 rounded-md border px-4 py-3 text-sm">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+            <p>
+              Badge saved and shown on the profile. The search index was not refreshed; run{' '}
+              <code className="rounded bg-muted px-1">npm run typesense:reindex</code> if it keeps
+              failing.
             </p>
           </div>
         )}
@@ -549,6 +564,15 @@ export default async function AdminInvitesPage({
                           displayName={practitioner.displayName}
                           delisted={delisted}
                           archived={archived}
+                          returnTo="/admin/invites"
+                        />
+                      )}
+                      {practitioner && (
+                        <HheBadgeControl
+                          invitationId={inv.id}
+                          displayName={practitioner.displayName}
+                          certified={practitioner.hheCertified}
+                          changedAt={practitioner.hheCertifiedChangedAt}
                           returnTo="/admin/invites"
                         />
                       )}

@@ -53,6 +53,7 @@ model User {
   invitationsAccepted  Invitation[]         @relation("AcceptedBy")
   emailChangeRequests  EmailChangeRequest[]
   joinRequestsReviewed JoinRequest[]        @relation("JoinRequestReviewedBy")
+  hheCertifiedChanges  Practitioner[]       @relation("HheCertifiedChangedBy")
 }
 
 enum Role {
@@ -217,6 +218,11 @@ model Practitioner {
   /// feed it. Do NOT wire it back into the rail without re-reading §4's CTA hierarchy.
   firstSessionPriceCents Int? // first-session price in cents; render as $X.XX
   hheCertified           Boolean  @default(false) // HHE-certification trust badge; an admin grants it (pilot rows were seeded true)
+  /// The LAST admin grant or removal of the badge (tsk_1fb8683b): who and when. Null on every row
+  /// the toggle has never touched, which includes the seeded pilots whose `true` came from the seed.
+  hheCertifiedChangedAt   DateTime?
+  hheCertifiedChangedById String?
+  hheCertifiedChangedBy   User?    @relation("HheCertifiedChangedBy", fields: [hheCertifiedChangedById], references: [id], onDelete: SetNull)
 
   /// Qualifications / certifications / education — one credential per entry, in the
   /// practitioner's own words ("BS in Nutrition, Bastyr University").

@@ -9,6 +9,7 @@ import { isProfileComplete } from '@/lib/practitioner-indexer';
 import { SIGNUP_PROGRESS_LABEL, signupProgress } from '@/lib/signup-progress';
 import { setCohortEnabled } from './actions';
 import { DirectoryControls } from '@/app/admin/invites/DirectoryControls';
+import { HheBadgeControl } from '@/app/admin/invites/HheBadgeControl';
 
 export const dynamic = 'force-dynamic';
 
@@ -40,6 +41,8 @@ export default async function AdminSignupsPage({
                 displayName: true,
                 delistedAt: true,
                 archivedAt: true,
+                hheCertified: true,
+                hheCertifiedChangedAt: true,
                 cityId: true,
                 bio: true,
                 specialties: { select: { specialtyId: true } },
@@ -72,6 +75,16 @@ export default async function AdminSignupsPage({
               <span className="font-medium">Saved, but search was not updated.</span> This
               practitioner may still appear in search. Retry the button; if it keeps failing, run{' '}
               <code className="rounded bg-muted px-1">npm run typesense:reindex</code>.
+            </p>
+          </div>
+        )}
+        {errorCode === 'badge-index-out-of-sync' && (
+          <div className="flex items-start gap-2 rounded-md border px-4 py-3 text-sm">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+            <p>
+              Badge saved and shown on the profile. The search index was not refreshed; run{' '}
+              <code className="rounded bg-muted px-1">npm run typesense:reindex</code> if it keeps
+              failing.
             </p>
           </div>
         )}
@@ -125,7 +138,7 @@ export default async function AdminSignupsPage({
                     <th className="py-1 pr-3 font-medium">Name</th>
                     <th className="py-1 pr-3 font-medium">Email</th>
                     <th className="py-1 pr-3 font-medium">Progress</th>
-                    <th className="py-1 pr-3 font-medium">Directory</th>
+                    <th className="py-1 pr-3 font-medium">Directory · badge</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -177,6 +190,13 @@ export default async function AdminSignupsPage({
                                 displayName={p.displayName}
                                 delisted={Boolean(p.delistedAt)}
                                 archived={Boolean(p.archivedAt)}
+                                returnTo="/admin/signups"
+                              />
+                              <HheBadgeControl
+                                invitationId={r.id}
+                                displayName={p.displayName}
+                                certified={p.hheCertified}
+                                changedAt={p.hheCertifiedChangedAt}
                                 returnTo="/admin/signups"
                               />
                             </div>
