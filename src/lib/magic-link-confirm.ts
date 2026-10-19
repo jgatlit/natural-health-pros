@@ -15,7 +15,9 @@ export const CALLBACK_PATH = '/api/auth/callback/resend';
 
 const PARAMS = ['callbackUrl', 'token', 'email'] as const;
 const TOKEN_RE = /^[A-Za-z0-9_-]{16,256}$/;
-const EMAIL_RE = /^[^\s@<>"'\\]+@[^\s@<>"'\\.]+(\.[^\s@<>"'\\.]+)+$/;
+// As permissive as normalizeEmail and Auth.js (o'brien@… is real). React escapes the displayed
+// address and URLSearchParams encodes the action, so stricter matching adds no safety.
+const EMAIL_RE = /^[^\s@]+@[^\s@]+$/;
 const CALLBACK_MAX = 2048;
 
 export type ConfirmTarget = {
@@ -75,8 +77,9 @@ function sameOriginPath(raw: string, origin: string): string | null {
 }
 
 /**
- * Validate the confirm page's query. Exactly `callbackUrl`, `token` and `email`, each once; the
- * callback must stay on `origin`. Returns the email to show and the form action to post to.
+ * Validate the confirm page's query: `callbackUrl`, `token` and `email`, each exactly once; the
+ * callback must stay on `origin`. Other keys (e.g. `utm_*` added by link rewriters) are ignored,
+ * since the action is rebuilt from the three validated values only.
  */
 export function parseConfirmTarget(
   searchParams: URLSearchParams | Record<string, string | string[] | undefined>,
@@ -86,8 +89,6 @@ export function parseConfirmTarget(
     searchParams instanceof URLSearchParams ? searchParams : recordToParams(searchParams);
   if (!params) return null;
 
-  const keys = Array.from(params.keys());
-  if (keys.length !== PARAMS.length) return null;
   if (!PARAMS.every((k) => params.getAll(k).length === 1)) return null;
 
   const token = params.get('token')!;

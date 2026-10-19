@@ -101,6 +101,10 @@ afterEach(() => {
 });
 
 describe('form stamp', () => {
+  it('lives two hours', () => {
+    expect(MAX_STAMP_AGE_MS).toBe(2 * 60 * 60 * 1000);
+  });
+
   it('accepts a stamp between the minimum fill time and its maximum age', () => {
     expect(checkFormStamp(issueFormStamp(NOW - MIN_FILL_MS, SECRET), NOW, SECRET)).toEqual({ ok: true });
     expect(checkFormStamp(issueFormStamp(NOW - MAX_STAMP_AGE_MS, SECRET), NOW, SECRET)).toEqual({ ok: true });
@@ -226,6 +230,35 @@ describe('checkBotGuard', () => {
     it('refusal → retry', async () => {
       vi.stubGlobal('fetch', reply({ success: false, 'error-codes': ['invalid-input-response'] }));
       expect(await guard(withToken())).toMatchObject({ reason: 'turnstile', outcome: 'retry' });
+    });
+
+    it('a failed or missing challenge spends no per-email bucket (victim lockout)', async () => {
+      vi.stubGlobal('fetch', reply({ success: false }));
+      expect(await guard(withToken())).toMatchObject({ reason: 'turnstile' });
+      expect(await guard(form())).toMatchObject({ reason: 'turnstile' });
+      expect(m.rateCalls.map(([p]) => p)).toEqual(['t-ip', 't-ip']);
+    });
+
+    it('order: per-IP limits, then Turnstile, then per-email limits', async () => {
+      const order: string[] = [];
+      vi.stubGlobal(
+        'fetch',
+        vi.fn(async () => {
+          order.push(`turnstile after ${m.rateCalls.map(([p]) => p).join(',')}`);
+          return new Response(JSON.stringify({ success: true }));
+        }),
+      );
+      expect(await guard(withToken())).toEqual({ ok: true });
+      expect(order).toEqual(['turnstile after t-ip']);
+      expect(m.rateCalls.map(([p]) => p)).toEqual(['t-ip', 't-email']);
+    });
+
+    it('a per-IP throttle stops before Cloudflare is called', async () => {
+      const fetchMock = reply({ success: true });
+      vi.stubGlobal('fetch', fetchMock);
+      m.rate.set('t-ip', false);
+      expect(await guard(withToken())).toMatchObject({ reason: 'throttled' });
+      expect(fetchMock).not.toHaveBeenCalled();
     });
 
     it('missing token → retry without calling Cloudflare', async () => {

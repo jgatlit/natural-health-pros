@@ -126,19 +126,42 @@ describe('toConfirmUrl / parseConfirmTarget', () => {
     ['a token with a slash', { token: `${TOKEN}/x` }],
     ['a short token', { token: 'abc' }],
     ['an email with no @', { email: 'nope' }],
-    ['an email with markup', { email: 'a<b>@x.com' }],
+    ['an email with two @', { email: 'a@b@x.com' }],
+    ['an email with whitespace', { email: 'a b@x.com' }],
   ])('rejects %s', (_l, over) => {
     expect(parseConfirmTarget(params({ ...good, ...over }), ORIGIN)).toBeNull();
   });
 
-  it('rejects missing, extra and repeated parameters', () => {
+  it.each([
+    ["an apostrophe", "o'brien@example.com"],
+    ['a plus tag', 'jane+nhp@example.com'],
+    ['both', "o'brien+a.b@gmail.com"],
+  ])('accepts an address with %s (anything normalizeEmail and Auth.js accept)', (_l, email) => {
+    const confirm = new URL(toConfirmUrl(authUrl(`${ORIGIN}/`, email)));
+    const t = parseConfirmTarget(confirm.searchParams, ORIGIN);
+    expect(t?.email).toBe(email);
+    expect(new URL(t!.action, ORIGIN).searchParams.get('email')).toBe(email);
+  });
+
+  it('ignores unknown extra parameters (link rewriters) and rebuilds the action from the three', () => {
+    const t = parseConfirmTarget(
+      params({ ...good, utm_source: 'outlook', utm_campaign: 'x', next: 'https://evil.com/' }),
+      ORIGIN,
+    );
+    expect(t!.action).toBe(`${CALLBACK_PATH}?${new URLSearchParams(good)}`);
+    expect(t!.action).not.toContain('utm_');
+    expect(t!.action).not.toContain('evil');
+  });
+
+  it('rejects missing and repeated parameters', () => {
     const { token: _t, ...noToken } = good;
     expect(parseConfirmTarget(params(noToken), ORIGIN)).toBeNull();
-    expect(parseConfirmTarget(params({ ...good, next: '/x' }), ORIGIN)).toBeNull();
+    expect(parseConfirmTarget(params({ ...noToken, utm_source: 'x' }), ORIGIN)).toBeNull();
     const dup = params(good);
     dup.append('callbackUrl', '/');
     expect(parseConfirmTarget(dup, ORIGIN)).toBeNull();
     expect(parseConfirmTarget({ ...good, token: [TOKEN, TOKEN] }, ORIGIN)).toBeNull();
+    expect(parseConfirmTarget({ ...good, email: [good.email, 'other@x.com'] }, ORIGIN)).toBeNull();
     expect(parseConfirmTarget({}, ORIGIN)).toBeNull();
   });
 
@@ -208,6 +231,13 @@ describe('/auth/confirm page', () => {
     expect(html).toContain('Sign me in');
     expect(html).toMatch(/<form method="post" action="\/api\/auth\/callback\/resend\?/);
     expect(html.match(/<form/g)).toHaveLength(1);
+  });
+
+  it('escapes an unusual address when displaying it', async () => {
+    const html = await render({ ...good, email: "o'brien<b>@example.com" });
+    expect(html).toContain('Sign me in');
+    expect(html).not.toContain('<b>@');
+    expect(html).toContain('o&#x27;brien&lt;b&gt;@example.com');
   });
 
   it('renders the invalid state for a bad link, with a way back to sign-in', async () => {

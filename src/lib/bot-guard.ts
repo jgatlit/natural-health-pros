@@ -8,7 +8,8 @@ import { BOT_GUARD_FIELDS } from '@/lib/bot-guard-fields';
  *
  * Layers, cheapest first: a honeypot field, Gmail addresses padded with dots (the pattern every
  * observed bot used), a signed render stamp that rejects submissions faster than a person can
- * type, per-IP and per-email rate limits, and Cloudflare Turnstile when both keys are set.
+ * type, per-IP rate limits, Cloudflare Turnstile when both keys are set, then per-email rate
+ * limits.
  *
  * A rejection never sends mail. Honeypot and dotted-Gmail rejections are reported as
  * `pretend-success` so the caller shows the normal "check your inbox" result and a bot learns
@@ -18,7 +19,7 @@ import { BOT_GUARD_FIELDS } from '@/lib/bot-guard-fields';
 export { BOT_GUARD_FIELDS };
 
 export const MIN_FILL_MS = 3_000;
-export const MAX_STAMP_AGE_MS = 24 * 60 * 60 * 1000;
+export const MAX_STAMP_AGE_MS = 2 * 60 * 60 * 1000;
 const CLOCK_SKEW_MS = 60_000;
 const STAMP_CONTEXT = 'nhp-form-stamp:v1:';
 const SITEVERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
@@ -167,7 +168,10 @@ export async function verifyTurnstile(
   }
 }
 
-/** The caller's IP as Vercel reports it. */
+/**
+ * The caller's IP. Vercel overwrites `x-forwarded-for` with the client as its first entry, and the
+ * Cloudflare zone is DNS-only; if it is ever proxied, read `cf-connecting-ip` instead.
+ */
 export function clientIp(h: Headers): string {
   return h.get('x-forwarded-for')?.split(',')[0]?.trim() || h.get('x-real-ip')?.trim() || 'unknown';
 }
@@ -179,6 +183,17 @@ function reject(input: BotGuardInput, reason: BotGuardReason): BotGuardResult {
     email: input.email ? maskEmail(input.email) : null,
   });
   return { ok: false, reason, outcome: OUTCOME[reason] };
+}
+
+async function withinLimits(input: BotGuardInput, by: RateRule['by']): Promise<boolean> {
+  const id = by === 'ip' ? input.ip : input.email;
+  if (!id) return true;
+  const results = await Promise.all(
+    input.rateLimits
+      .filter((r) => r.by === by)
+      .map((r) => rateLimit(r.prefix, id, { limit: r.limit, windowSeconds: r.windowSeconds })),
+  );
+  return results.every((r) => r.success);
 }
 
 export async function checkBotGuard(input: BotGuardInput): Promise<BotGuardResult> {
@@ -194,18 +209,9 @@ export async function checkBotGuard(input: BotGuardInput): Promise<BotGuardResul
   const stampCheck = checkFormStamp(typeof stamp === 'string' ? stamp : null, now);
   if (!stampCheck.ok) return reject(input, stampCheck.reason);
 
-  const results = await Promise.all(
-    input.rateLimits
-      .filter((r) => r.by === 'ip' || email)
-      .map((r) =>
-        rateLimit(r.prefix, r.by === 'ip' ? ip : email!, {
-          limit: r.limit,
-          windowSeconds: r.windowSeconds,
-        }),
-      ),
-  );
-  if (results.some((r) => !r.success)) return reject(input, 'throttled');
+  if (!(await withinLimits(input, 'ip'))) return reject(input, 'throttled');
 
+  // Before the email buckets: an unsolved challenge must not spend a victim's per-email quota.
   if (turnstileSiteKey()) {
     const token = formData.get(BOT_GUARD_FIELDS.turnstile);
     const verdict = await verifyTurnstile(typeof token === 'string' ? token : null, ip);
@@ -213,6 +219,8 @@ export async function checkBotGuard(input: BotGuardInput): Promise<BotGuardResul
   } else {
     warnTurnstileOff();
   }
+
+  if (!(await withinLimits(input, 'email'))) return reject(input, 'throttled');
 
   return { ok: true };
 }
