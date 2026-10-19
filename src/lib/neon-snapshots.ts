@@ -6,12 +6,17 @@
  * attempted. So a recurring snapshot must delete the previous one first — and that ordering is the
  * whole reason `checkDbHealth()` gates this.
  *
- * ⚠️ Requires `NEON_API_KEY`. There is no key in the environment today; the route refuses loudly
+ * ⚠️ Requires `NEON_API_KEY` (set on Production 2026-10-19). Without it the route refuses loudly
  * rather than reporting success while doing nothing.
  */
 const API = 'https://console.neon.tech/api/v2';
 
-export type NeonSnapshot = { id: string; name?: string; created_at?: string };
+export type NeonSnapshot = {
+  id: string;
+  name?: string;
+  created_at?: string;
+  source_branch_id?: string;
+};
 
 function headers(key: string) {
   return { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' };
@@ -31,11 +36,11 @@ export async function listSnapshots(
   projectId: string,
   branchId: string,
 ): Promise<NeonSnapshot[]> {
-  const d = await call<{ snapshots?: NeonSnapshot[] }>(
-    key,
-    `/projects/${projectId}/branches/${branchId}/snapshots`,
-  );
-  return d.snapshots ?? [];
+  // Neon lists snapshots per PROJECT only; `/branches/{id}/snapshots` is a 404 ("this route does
+  // not exist"), which is what broke the first production run. Filter to this branch so rotation
+  // never deletes a snapshot taken of some other branch; one with no source branch is skipped too.
+  const d = await call<{ snapshots?: NeonSnapshot[] }>(key, `/projects/${projectId}/snapshots`);
+  return (d.snapshots ?? []).filter((s) => s.source_branch_id === branchId);
 }
 
 export async function deleteSnapshot(key: string, projectId: string, snapshotId: string) {
