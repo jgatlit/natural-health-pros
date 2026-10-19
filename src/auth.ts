@@ -4,6 +4,7 @@ import { PrismaAdapter } from '@auth/prisma-adapter';
 import { prisma } from '@/lib/prisma';
 import { authConfig } from '@/auth.config';
 import { sessionStateFor } from '@/lib/session-role';
+import { toConfirmUrl } from '@/lib/magic-link-confirm';
 
 // One email, not two. An invitation's magic link carries `callbackUrl=/onboarding?invitation=…`,
 // so a single click both signs the practitioner in AND lands them on onboarding. We brand the
@@ -53,6 +54,8 @@ async function sendBrandedVerificationRequest(params: {
   const isInvite = invitation !== null;
   const invitedBy = invitation?.invitedBy?.name ?? null;
   const isCohort = Boolean(invitation?.cohortId);
+  // Never the callback itself: mail scanners fetch links, and that fetch would spend the token.
+  const link = toConfirmUrl(url);
 
   // TRANSACTIONAL SHAPE, deliberately plain. An earlier, prettier version of this mail —
   // promo subject ("You're invited to join…"), a product pitch, and a big styled CTA button —
@@ -74,7 +77,7 @@ async function sendBrandedVerificationRequest(params: {
     line,
     '',
     'Sign in:',
-    url,
+    link,
     '',
     'This link expires in 24 hours and can only be used once.',
     "If you weren't expecting this email, you can ignore it.",
@@ -82,7 +85,7 @@ async function sendBrandedVerificationRequest(params: {
 
   const html = `<div style="font-family: -apple-system, system-ui, sans-serif; font-size: 15px; line-height: 1.6; color: #1a1a1a;">
 <p>${line}</p>
-<p>Sign in: <a href="${url}">${url}</a></p>
+<p>Sign in: <a href="${link}">${link}</a></p>
 <p>This link expires in 24 hours and can only be used once.</p>
 <p style="color:#666;">If you weren't expecting this email, you can ignore it.</p>
 </div>`;
