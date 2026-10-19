@@ -17,6 +17,7 @@ import {
 } from './actions';
 import { DeleteInviteButton } from './DeleteInviteButton';
 import { DirectoryControls } from './DirectoryControls';
+import { HheBadgeControl } from './HheBadgeControl';
 import { EditEmailControl } from './EditEmailControl';
 import { matchesOutsideWorkFilter, parseOutsideWorkFilter, type OutsideWorkFilter } from '@/lib/outside-work';
 import { assignScheduleToPractitioner } from '@/app/admin/commercial-settings/actions';
@@ -74,6 +75,8 @@ export default async function AdminInvitesPage({
               delistedAt: true,
               archivedAt: true,
               openToOutsideWork: true,
+              hheCertified: true,
+              hheCertifiedChangedAt: true,
               // Spec v1.5 §2: which rate card this practitioner is priced under.
               rateSchedule: { select: { label: true } },
             },
@@ -109,6 +112,8 @@ export default async function AdminInvitesPage({
               delistedAt: true,
               archivedAt: true,
               openToOutsideWork: true,
+              hheCertified: true,
+              hheCertifiedChangedAt: true,
               // Spec v1.5 §2: which rate card this practitioner is priced under.
               rateSchedule: { select: { label: true } },
             },
@@ -549,6 +554,15 @@ export default async function AdminInvitesPage({
                           displayName={practitioner.displayName}
                           delisted={delisted}
                           archived={archived}
+                          returnTo="/admin/invites"
+                        />
+                      )}
+                      {practitioner && (
+                        <HheBadgeControl
+                          invitationId={inv.id}
+                          displayName={practitioner.displayName}
+                          certified={practitioner.hheCertified}
+                          changedAt={practitioner.hheCertifiedChangedAt}
                           returnTo="/admin/invites"
                         />
                       )}

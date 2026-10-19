@@ -345,23 +345,34 @@ async function applyDirectoryFlag(
 
   const practitionerId = await practitionerForInvitation(invitationId, back);
 
-  await prisma.practitioner.update({
+  const { slug } = await prisma.practitioner.update({
     where: { id: practitionerId },
     data: { [field]: on ? new Date() : null },
+    select: { slug: true },
   });
 
   // Typesense is push-based: flipping the column in SQL alone changes NOTHING about who appears
   // in /search. Nothing else will come along and fix it either — the trial sweep only visits
   // practitioners whose trial has lapsed, so a delisted pilot with a null trial clock is
   // invisible to it forever.
+  await reindexAndReturn(practitionerId, slug, back, { field, on });
+}
+
+async function reindexAndReturn(
+  practitionerId: string,
+  slug: string,
+  back: DirectoryReturnPath,
+  context: Record<string, unknown>,
+): Promise<void> {
   const sync = await indexPractitionerVerified(practitionerId);
 
   revalidatePath('/admin/invites');
   revalidatePath('/admin/signups');
   revalidatePath('/');
+  revalidatePath(`/practitioners/${slug}`);
 
   if (!sync.ok) {
-    console.error('Directory flag reindex failed:', { practitionerId, field, on, sync });
+    console.error('Directory flag reindex failed:', { practitionerId, ...context, sync });
     redirect(`${back}?error=index-out-of-sync`);
   }
   if (!sync.verified) redirect(`${back}?notice=index-unverified`);
@@ -375,6 +386,32 @@ export async function setDelisted(formData: FormData): Promise<void> {
 /** Soft DELETE. Drops out of discovery AND booking; booking intents and payments are preserved. */
 export async function setArchived(formData: FormData): Promise<void> {
   await applyDirectoryFlag(formData, 'archivedAt');
+}
+
+/**
+ * Grant or remove the 'HHE Certified' badge. New sign-ups start without it (#137); this is the
+ * only way it is granted. Records who made the change and when, overwriting the previous change.
+ */
+export async function setHheCertified(formData: FormData): Promise<void> {
+  const session = await requireAdmin();
+  const invitationId = String(formData.get('id') ?? '');
+  const on = String(formData.get('on') ?? '') === '1';
+  const back = directoryReturnPath(formData);
+  if (!invitationId) return;
+
+  const practitionerId = await practitionerForInvitation(invitationId, back);
+
+  const { slug } = await prisma.practitioner.update({
+    where: { id: practitionerId },
+    data: {
+      hheCertified: on,
+      hheCertifiedChangedAt: new Date(),
+      hheCertifiedChangedById: session.user.id,
+    },
+    select: { slug: true },
+  });
+
+  await reindexAndReturn(practitionerId, slug, back, { field: 'hheCertified', on });
 }
 
 /**

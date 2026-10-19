@@ -9,6 +9,7 @@ import { isProfileComplete } from '@/lib/practitioner-indexer';
 import { SIGNUP_PROGRESS_LABEL, signupProgress } from '@/lib/signup-progress';
 import { setCohortEnabled } from './actions';
 import { DirectoryControls } from '@/app/admin/invites/DirectoryControls';
+import { HheBadgeControl } from '@/app/admin/invites/HheBadgeControl';
 
 export const dynamic = 'force-dynamic';
 
@@ -40,6 +41,8 @@ export default async function AdminSignupsPage({
                 displayName: true,
                 delistedAt: true,
                 archivedAt: true,
+                hheCertified: true,
+                hheCertifiedChangedAt: true,
                 cityId: true,
                 bio: true,
                 specialties: { select: { specialtyId: true } },
@@ -125,7 +128,7 @@ export default async function AdminSignupsPage({
                     <th className="py-1 pr-3 font-medium">Name</th>
                     <th className="py-1 pr-3 font-medium">Email</th>
                     <th className="py-1 pr-3 font-medium">Progress</th>
-                    <th className="py-1 pr-3 font-medium">Directory</th>
+                    <th className="py-1 pr-3 font-medium">Directory · badge</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -177,6 +180,13 @@ export default async function AdminSignupsPage({
                                 displayName={p.displayName}
                                 delisted={Boolean(p.delistedAt)}
                                 archived={Boolean(p.archivedAt)}
+                                returnTo="/admin/signups"
+                              />
+                              <HheBadgeControl
+                                invitationId={r.id}
+                                displayName={p.displayName}
+                                certified={p.hheCertified}
+                                changedAt={p.hheCertifiedChangedAt}
                                 returnTo="/admin/signups"
                               />
                             </div>
