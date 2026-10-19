@@ -95,7 +95,7 @@
           <button id="env-prod" class="active" type="button">Production</button>
           <button id="env-local" type="button">Local (localhost:3000)</button>
         </div>
-        <p class="meta-note">Generated 2026-10-15T05:33:32.488Z</p>
+        <p class="meta-note">Generated 2026-10-19T06:04:01.481Z</p>
       </header>
 
       <section class="group">
@@ -149,7 +149,18 @@
         <div class="route">
           <div>
             <div class="path"><a href="" data-route="/auth/signin" target="_blank">/auth/signin</a></div>
-            <p class="desc"><strong>Sign-in form.</strong> Magic-link request via Resend. Email field + "Send magic link" button. Redirects to /auth/verify-request on submit.</p>
+            <p class="desc"><strong>Sign-in form.</strong> Magic-link request via Resend. Email field + "Send magic link" button, with bot checks (honeypot, signed fill-time stamp, rate limits, optional Turnstile). Redirects to /auth/verify-request on submit.</p>
+            
+          </div>
+          <div class="badges">
+            <span class="badge public">Public</span>
+            <span class="badge live">Live</span>
+          </div>
+        </div>
+        <div class="route">
+          <div>
+            <div class="path"><a href="" data-route="/auth/confirm" target="_blank">/auth/confirm</a></div>
+            <p class="desc"><strong>"Sign me in" confirm page.</strong> Every magic-link email points here, not at the Auth.js callback, so a mail scanner that fetches the link cannot spend the token. Validates the link and shows the address with one "Sign me in" button, which POSTs to /api/auth/callback/resend. Rendering touches neither Auth.js nor the database.</p>
             
           </div>
           <div class="badges">

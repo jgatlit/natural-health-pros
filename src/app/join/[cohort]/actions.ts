@@ -5,8 +5,14 @@ import { redirect } from 'next/navigation';
 import { signIn } from '@/auth';
 import { prisma } from '@/lib/prisma';
 import { normalizeEmail } from '@/lib/email';
-import { rateLimit } from '@/lib/rate-limit';
+import { checkBotGuard, clientIp, type RateRule } from '@/lib/bot-guard';
 import { ensureCohortInvitation, COHORT_SLUG_RE } from '@/lib/join-cohort';
+
+const RATE_LIMITS: RateRule[] = [
+  { prefix: 'join-ip', by: 'ip', limit: 10, windowSeconds: 60 * 60 },
+  { prefix: 'join-ip-1d', by: 'ip', limit: 30, windowSeconds: 24 * 60 * 60 },
+  { prefix: 'join-email', by: 'email', limit: 3, windowSeconds: 60 * 60 },
+];
 
 /**
  * Public, unauthenticated: anyone may request a sign-up link for an ENABLED cohort. What that buys
@@ -20,12 +26,17 @@ export async function requestJoin(cohortSlug: string, formData: FormData): Promi
   const email = normalizeEmail(String(formData.get('email') ?? ''));
   if (!email) redirect(`${base}?error=invalid`);
 
-  const fwd = headers().get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
-  const [byIp, byEmail] = await Promise.all([
-    rateLimit('join-ip', fwd, { limit: 10, windowSeconds: 3600 }),
-    rateLimit('join-email', email, { limit: 3, windowSeconds: 3600 }),
-  ]);
-  if (!byIp.success || !byEmail.success) redirect(`${base}?error=throttled`);
+  const guard = await checkBotGuard({
+    form: 'join',
+    formData,
+    email,
+    ip: clientIp(headers()),
+    rateLimits: RATE_LIMITS,
+  });
+  if (!guard.ok) {
+    if (guard.outcome === 'pretend-success') redirect(`${base}?sent=1`);
+    redirect(`${base}?error=${guard.outcome}`);
+  }
 
   const cohort = await prisma.signupCohort.findUnique({ where: { slug: cohortSlug } });
   // Unknown or disabled: no invitation, no email. The page itself renders the 404 / closed state.

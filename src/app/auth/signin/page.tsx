@@ -1,6 +1,11 @@
-import { signIn } from '@/auth';
 import { Mail } from 'lucide-react';
 import { Card } from '@/components/ui/card';
+import { BotGuardFields } from '@/components/auth/BotGuardFields';
+import { issueFormStamp, turnstileSiteKey } from '@/lib/bot-guard';
+import { requestSignIn } from './actions';
+
+// Dynamic so the form stamp is issued per request; a prerendered stamp would age out for everyone.
+export const dynamic = 'force-dynamic';
 
 type Props = {
   searchParams: { callbackUrl?: string; error?: string; emailChanged?: string };
@@ -34,18 +39,16 @@ export default function SignInPage({ searchParams }: Props) {
             <div className="rounded-md border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive">
               {error === 'OAuthAccountNotLinked'
                 ? 'This email is already linked to another sign-in method.'
+                : error === 'throttled'
+                ? 'Too many attempts. Please try again in a little while.'
+                : error === 'retry'
+                ? 'Please try again.'
                 : 'Could not sign in. Try again.'}
             </div>
           )}
 
           <form
-            action={async (formData: FormData) => {
-              'use server';
-              await signIn('resend', {
-                email: formData.get('email'),
-                redirectTo: callbackUrl,
-              });
-            }}
+            action={requestSignIn.bind(null, callbackUrl)}
             className="space-y-3"
           >
             <label className="block space-y-1">
@@ -59,6 +62,7 @@ export default function SignInPage({ searchParams }: Props) {
                 className="h-10 w-full rounded-md border bg-card px-3 text-sm outline-none ring-ring/30 transition-shadow focus-visible:ring-2"
               />
             </label>
+            <BotGuardFields stamp={issueFormStamp()} turnstileSiteKey={turnstileSiteKey()} />
             <button
               type="submit"
               className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-md bg-primary text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"

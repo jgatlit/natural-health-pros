@@ -50,7 +50,13 @@ export const ROUTE_META: Record<string, RouteMeta> = {
   },
   '/auth/signin': {
     description:
-      '<strong>Sign-in form.</strong> Magic-link request via Resend. Email field + "Send magic link" button. Redirects to /auth/verify-request on submit.',
+      '<strong>Sign-in form.</strong> Magic-link request via Resend. Email field + "Send magic link" button, with bot checks (honeypot, signed fill-time stamp, rate limits, optional Turnstile). Redirects to /auth/verify-request on submit.',
+    audience: 'public',
+    status: 'live',
+  },
+  '/auth/confirm': {
+    description:
+      '<strong>"Sign me in" confirm page.</strong> Every magic-link email points here, not at the Auth.js callback, so a mail scanner that fetches the link cannot spend the token. Validates the link and shows the address with one "Sign me in" button, which POSTs to /api/auth/callback/resend. Rendering touches neither Auth.js nor the database.',
     audience: 'public',
     status: 'live',
   },
