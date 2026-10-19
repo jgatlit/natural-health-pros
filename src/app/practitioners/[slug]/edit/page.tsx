@@ -78,6 +78,7 @@ import { JoinLinkCard } from '@/components/practitioners/JoinLinkCard';
 import { RecruitedPractitionersSection } from '@/components/practitioners/RecruitedPractitionersSection';
 import { joinLinkFor, newRecruiterToken } from '@/lib/recruiter';
 import { SITE_URL } from '@/lib/site';
+import { isWhopPublishErrorCode, WHOP_OVER_LIMIT_MESSAGE, WHOP_PUBLISH_ERRORS } from '@/lib/whop-limits';
 
 type Props = {
   params: { slug: string };
@@ -88,6 +89,8 @@ type Props = {
     drafted?: string;
     source?: string;
     whop?: string;
+    /** '1' when publishOffering's failure email went out. */
+    mailed?: string;
     /** Plan A checkout outcome, from the Whop redirect or startSubscriptionCheckout. */
     subscription?: string;
     /** Echoed-back concurrency token — see the hidden `profileUpdatedAt` field below. */
@@ -1054,6 +1057,33 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
             each offering is its own <form>. BookingsSection stays ahead of both for
             time-sensitivity, a separate ordering rule this does not touch. */}
         <div className="space-y-4">
+          {/* Here, not with the banners at the top: these redirects land on #offerings, so a
+              message at the top of the page is off-screen. That is how a generic failure was
+              retried eight times on 2026-10-17. */}
+          {searchParams.error === 'offering-over-whop-limit' && (
+            <Card className="border-destructive/30 bg-destructive/5 p-3">
+              <p className="text-xs text-destructive">{WHOP_OVER_LIMIT_MESSAGE} Nothing was sent to Whop.</p>
+            </Card>
+          )}
+          {(() => {
+            // ?error=whop-<code> from publishOffering: a known short code, never Whop's raw text.
+            const code = searchParams.error?.startsWith('whop-') ? searchParams.error.slice(5) : null;
+            if (!isWhopPublishErrorCode(code)) return null;
+            const { summary, nextStep } = WHOP_PUBLISH_ERRORS[code];
+            return (
+              <Card className="border-destructive/30 bg-destructive/5 p-3">
+                <p className="text-xs text-destructive">
+                  <span className="font-medium">Payments for that offering were not set up.</span>{' '}
+                  {summary} {nextStep}
+                </p>
+                {searchParams.mailed === '1' && (
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    A copy was emailed to the account address.
+                  </p>
+                )}
+              </Card>
+            );
+          })()}
           <OfferingsEditor
             offerings={practitioner.whopProducts.map((o) => ({
               id: o.id,

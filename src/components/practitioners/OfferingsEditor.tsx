@@ -8,6 +8,7 @@ import { SortableList } from '@/components/practitioners/SortableList';
 import { PendingButton } from '@/components/practitioners/PendingButton';
 import { OfferingFields, type BookingLinkOption } from '@/components/practitioners/OfferingFields';
 import { Separator } from '@/components/ui/separator';
+import { exceedsWhopPaymentLimit, WHOP_OVER_LIMIT_MESSAGE } from '@/lib/whop-limits';
 
 type Offering = {
   id: string;
@@ -260,6 +261,12 @@ function PublishRow({
         </PendingButton>
       </div>
     );
+  }
+
+  // Saved before the editor refused such prices. Say why instead of offering a button Whop will
+  // refuse (publishOffering refuses it too, before any Whop call).
+  if (payoutsEnabled && exceedsWhopPaymentLimit(offering.priceUsdCents)) {
+    return <p className="border-t pt-3 text-xs text-destructive">{WHOP_OVER_LIMIT_MESSAGE}</p>;
   }
 
   if (payoutsEnabled) {

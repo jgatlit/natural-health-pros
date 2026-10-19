@@ -1,7 +1,8 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { CalendarClock, Link2 } from 'lucide-react';
+import { exceedsWhopPaymentLimit, WHOP_OVER_LIMIT_MESSAGE } from '@/lib/whop-limits';
 
 export type OfferingFormValues = {
   title: string;
@@ -30,6 +31,12 @@ const CATEGORY_SUGGESTIONS = [
 ];
 
 const dollars = (cents: number) => (cents > 0 ? (cents / 100).toString() : '');
+
+/** Same parse as the server's parsePriceToCents, for the live limit check only. */
+const priceToCents = (raw: string) => {
+  const n = parseFloat(raw.replace(/[^0-9.]/g, ''));
+  return Number.isFinite(n) && n > 0 ? Math.round(n * 100) : 0;
+};
 
 /**
  * A DISABLED input is excluded from form submission entirely — not sent as false, not sent at
@@ -74,6 +81,14 @@ export function OfferingFields({
   whopConnected: boolean;
 }) {
   const [isConsult, setIsConsult] = useState(offering?.isConsult ?? false);
+  // Whop's $2,500 ceiling, said while typing and enforced on Save; the server refuses it too. Only
+  // the flag is state: the input stays uncontrolled, like every other field in this row.
+  const [typedCents, setTypedCents] = useState(offering?.priceUsdCents ?? 0);
+  const priceRef = useRef<HTMLInputElement>(null);
+  const overLimit = !isConsult && exceedsWhopPaymentLimit(typedCents);
+  useEffect(() => {
+    priceRef.current?.setCustomValidity(overLimit ? WHOP_OVER_LIMIT_MESSAGE : '');
+  }, [overLimit]);
   const [acceptsPayments, setAcceptsPayments] = useState(offering?.acceptsPayments ?? false);
   const [bookingLinkId, setBookingLinkId] = useState(offering?.bookingLinkId ?? '');
   const [showOnProfile, setShowOnProfile] = useState(
@@ -133,13 +148,22 @@ export function OfferingFields({
             type="text"
             inputMode="decimal"
             name="price"
+            ref={priceRef}
             disabled={isConsult}
             defaultValue={offering ? dollars(offering.priceUsdCents) : ''}
+            onInput={(e) => setTypedCents(priceToCents(e.currentTarget.value))}
+            aria-invalid={overLimit || undefined}
+            aria-describedby={overLimit ? `offering-price-limit-${idPrefix}` : undefined}
             placeholder={isConsult ? 'Free' : '150'}
             className="h-9 w-full bg-transparent text-sm outline-none disabled:cursor-not-allowed"
           />
         </div>
       </div>
+      {overLimit && (
+        <p id={`offering-price-limit-${idPrefix}`} role="alert" className="text-xs text-destructive">
+          {WHOP_OVER_LIMIT_MESSAGE}
+        </p>
+      )}
 
       <div className="grid grid-cols-1 gap-2.5 sm:grid-cols-3">
         <select
