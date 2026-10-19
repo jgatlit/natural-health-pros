@@ -23,6 +23,7 @@ const m = vi.hoisted(() => ({
   creates: [] as Array<Record<string, unknown>>,
   updates: [] as Array<Record<string, unknown>>,
   createOfferingCheckout: vi.fn(),
+  failUpdate: null as Error | null,
   sendEmail: vi.fn(),
   logged: [] as unknown[],
 }));
@@ -77,6 +78,7 @@ vi.mock('@/lib/prisma', () => ({
         return { id: 'o_new' };
       },
       update: async (a: { data: Record<string, unknown> }) => {
+        if (m.failUpdate) throw m.failUpdate;
         m.updates.push(a.data);
         return {};
       },
@@ -121,6 +123,7 @@ beforeEach(() => {
   m.creates = [];
   m.updates = [];
   m.createOfferingCheckout.mockReset();
+  m.failUpdate = null;
   m.sendEmail.mockReset().mockResolvedValue({ id: 'em_1' });
   vi.spyOn(console, 'error').mockImplementation((...a) => {
     m.logged.push(a);
@@ -229,7 +232,8 @@ describe('a Whop failure on Publish is explained, never raw', () => {
   });
 
   it('a failure after Whop succeeded (our own write) is not blamed on Whop or the account', async () => {
-    m.createOfferingCheckout.mockRejectedValue(new Error('Invalid prisma.whopProduct.update(): verification of row failed'));
+    m.createOfferingCheckout.mockResolvedValue({ checkoutConfigId: 'ch_1', planId: 'plan_1', purchaseUrl: 'https://whop.com/c/x' });
+    m.failUpdate = new Error('Invalid prisma.whopProduct.update(): verification of row failed');
     const out = await run(publishOffering('amy', fd({ offeringId: 'o_1' })));
     expect(out.url).toBe('/practitioners/amy/edit?error=whop-unknown&mailed=1#offerings');
     expect(m.sendEmail.mock.calls[0][0].text).not.toMatch(/Whop said no/);

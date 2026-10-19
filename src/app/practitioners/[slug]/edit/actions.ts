@@ -1463,8 +1463,9 @@ export async function publishOffering(slug: string, formData: FormData): Promise
 /**
  * Tell the practitioner, by email, what the page already shows: the same summary and next step.
  * Fail-soft: the page message is the primary channel. The idempotency key is per offering and
- * failure kind, so retries within 24 hours send no further email (Resend refuses a repeated key,
- * which lands in the catch and returns false, so the page then doesn't claim an email went out).
+ * failure kind, so retries within 24 hours send no further email: Resend answers a repeated key
+ * with the first send's response (the copy did go out). A changed payload under the same key is
+ * refused, lands in the catch and returns false, so the page then makes no claim.
  */
 async function emailPublishFailure(
   userId: string,
