@@ -31,6 +31,8 @@ import {
   WHOP_OFFERING_TITLE_MAX,
 } from '@/lib/whop';
 import { bookableWhere } from '@/lib/practitioner-indexer';
+import { exceedsWhopPaymentLimit, WHOP_PUBLISH_ERRORS, type WhopPublishErrorCode } from '@/lib/whop-limits';
+import { classifyWhopPublishError } from '@/lib/whop-errors';
 import { rateLimit } from '@/lib/rate-limit';
 import { extractError } from '@/lib/action-utils';
 import { getScheduleForCopy } from '@/lib/rate-schedules';
@@ -1061,6 +1063,10 @@ export async function createOffering(slug: string, formData: FormData): Promise<
   const title = String(formData.get('title') ?? '').trim();
   if (!title) redirect(`/practitioners/${slug}/edit?error=offering-title#offerings`);
   const extra = await offeringFieldsFrom(formData, target.id);
+  const priceUsdCents = extra.priceOverride ?? parsePriceToCents(formData.get('price'));
+  if (exceedsWhopPaymentLimit(priceUsdCents)) {
+    redirect(`/practitioners/${slug}/edit?error=offering-over-whop-limit#offerings`);
+  }
   await prisma.whopProduct.create({
     data: {
       practitionerId: target.id,
@@ -1068,7 +1074,7 @@ export async function createOffering(slug: string, formData: FormData): Promise<
       description: String(formData.get('description') ?? '').trim() || null,
       category: String(formData.get('category') ?? '').trim() || null,
       interval: offeringInterval(formData.get('interval')),
-      priceUsdCents: extra.priceOverride ?? parsePriceToCents(formData.get('price')),
+      priceUsdCents,
       isConsult: extra.isConsult,
       acceptsPayments: extra.acceptsPayments,
       duration: extra.duration,
@@ -1089,6 +1095,11 @@ export async function updateOffering(slug: string, formData: FormData): Promise<
   // updateMany scoped by practitionerId = the ownership check (no cross-practitioner edits).
   const extra = await offeringFieldsFrom(formData, target.id);
   const priceUsdCents = extra.priceOverride ?? parsePriceToCents(formData.get('price'));
+  // Refused rather than saved: a price Whop will not take is a Buy button that can never work,
+  // and the practitioner finds out only when Publish fails.
+  if (exceedsWhopPaymentLimit(priceUsdCents)) {
+    redirect(`/practitioners/${slug}/edit?error=offering-over-whop-limit#offerings`);
+  }
 
   // §9 — "never render a Buy CTA that cannot transact."
   //
@@ -1363,9 +1374,16 @@ export async function publishOffering(slug: string, formData: FormData): Promise
   if (offering.title.length > WHOP_OFFERING_TITLE_MAX) {
     redirect(`/practitioners/${slug}/edit?error=offering-title-too-long#offerings`);
   }
+  // Whop's $2,500 ceiling (2026-10-17: Amy's Publish failed with "Purchases over $2500 USD are not
+  // enabled…" and was retried 8 times against the generic banner). Covers offerings saved before
+  // the editor refused such prices.
+  if (exceedsWhopPaymentLimit(offering.priceUsdCents)) {
+    redirect(`/practitioners/${slug}/edit?error=offering-over-whop-limit#offerings`);
+  }
 
   let ok = false;
   let noPlan = false;
+  let failure: WhopPublishErrorCode | null = null;
   try {
     const result = await createOfferingCheckout({
       companyId: practitioner.whopCompanyId,
@@ -1404,7 +1422,7 @@ export async function publishOffering(slug: string, formData: FormData): Promise
     //
     // Signalled with a specific error CODE, matching every other failure in this action. A
     // `USER:`-prefixed throw would have been swallowed by the catch below and surfaced as the
-    // generic ?whop=error banner in a different section — extractError() is never involved here,
+    // generic Whop-failure message — extractError() is never involved here,
     // because publishOffering is not wrapped by anything that reads the convention.
     //
     // Set a FLAG rather than redirecting here. `redirect()` signals by throwing NEXT_REDIRECT, so
@@ -1416,9 +1434,19 @@ export async function publishOffering(slug: string, formData: FormData): Promise
     ok = !noPlan;
   } catch (err) {
     console.error('Whop publish offering failed:', err);
+    failure = classifyWhopPublishError(err);
   }
   if (noPlan) redirect(`/practitioners/${slug}/edit?error=offering-no-plan#offerings`);
-  if (!ok) redirect(`/practitioners/${slug}/edit?whop=error#offerings`);
+  if (!ok) {
+    // Outside the try for the same reason as the redirects: nothing here may be swallowed.
+    const code = failure ?? 'unknown';
+    // Emailed only when the practitioner pressed Publish themselves. An admin acting for them sees
+    // the same message on the page; an email about a click they never made would only confuse.
+    const mailed = target.isOwner
+      ? await emailPublishFailure(target.userId, slug, offering.title, code, offering.id)
+      : false;
+    redirect(`/practitioners/${slug}/edit?error=whop-${code}${mailed ? '&mailed=1' : ''}#offerings`);
+  }
 
   // A re-publish mints a FRESH checkout configuration (createOfferingCheckout treats the result as
   // derived and disposable), so any session already minted against the old one now points at a
@@ -1430,6 +1458,48 @@ export async function publishOffering(slug: string, formData: FormData): Promise
   revalidatePath(`/practitioners/${slug}`);
   revalidatePath(`/practitioners/${slug}/edit`);
   redirect(`/practitioners/${slug}/edit?saved=offering#offerings`);
+}
+
+/**
+ * Tell the practitioner, by email, what the page already shows: the same summary and next step.
+ * Fail-soft: the page message is the primary channel. The idempotency key is per offering and
+ * failure kind, so retries within 24 hours send no further email: Resend answers a repeated key
+ * with the first send's response (the copy did go out). A changed payload under the same key is
+ * refused, lands in the catch and returns false, so the page then makes no claim.
+ */
+async function emailPublishFailure(
+  userId: string,
+  slug: string,
+  offeringTitle: string,
+  code: WhopPublishErrorCode,
+  offeringId: string,
+): Promise<boolean> {
+  try {
+    const user = await prisma.user.findUnique({ where: { id: userId }, select: { email: true } });
+    if (!user?.email) return false;
+    const { summary, nextStep } = WHOP_PUBLISH_ERRORS[code];
+    const url = `${SITE_URL}/practitioners/${encodeURIComponent(slug)}/edit#offerings`;
+    const title = escapeHtml(offeringTitle);
+    const subjectTitle = offeringTitle.replace(/[\r\n]+/g, ' ').slice(0, 80);
+    await sendEmail({
+      to: user.email,
+      subject: `We couldn't set up payments for "${subjectTitle}"`,
+      html:
+        `<p>We tried to set up online payments for your offering <strong>${title}</strong>, and it didn't go through.</p>` +
+        `<p>${escapeHtml(summary)}</p>` +
+        `<p><strong>What to do next:</strong> ${escapeHtml(nextStep)}</p>` +
+        `<p><a href="${url}">Open your offerings</a></p>`,
+      text:
+        `We tried to set up online payments for your offering "${subjectTitle}", and it didn't go through.\n\n` +
+        `${summary}\n\nWhat to do next: ${nextStep}\n\nOpen your offerings: ${url}\n`,
+      idempotencyKey: `offering-publish-failed/${offeringId}/${code}`,
+      tags: [{ name: 'type', value: 'offering-publish-failed' }],
+    });
+    return true;
+  } catch (err) {
+    console.error('Publish-failure email not sent:', { offeringId, code, err });
+    return false;
+  }
 }
 
 export async function unpublishOffering(slug: string, formData: FormData): Promise<void> {

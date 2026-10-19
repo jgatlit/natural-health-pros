@@ -8,6 +8,7 @@ import { SortableList } from '@/components/practitioners/SortableList';
 import { PendingButton } from '@/components/practitioners/PendingButton';
 import { OfferingFields, type BookingLinkOption } from '@/components/practitioners/OfferingFields';
 import { Separator } from '@/components/ui/separator';
+import { exceedsWhopPaymentLimit, WHOP_OVER_LIMIT_MESSAGE } from '@/lib/whop-limits';
 
 type Offering = {
   id: string;
@@ -242,6 +243,28 @@ function PublishRow({
   publishAction: Action;
   unpublishAction: Action;
 }) {
+  // Saved before the editor refused such prices (none is published in production as of
+  // 2026-10-19). Say why instead of offering a button Whop will refuse, and never call such an
+  // offering "Live": publishOffering refuses it before any Whop call, and a booking would fail.
+  if (exceedsWhopPaymentLimit(offering.priceUsdCents)) {
+    return (
+      <div className="flex items-center justify-between gap-3 border-t pt-3">
+        <p className="text-xs text-destructive">{WHOP_OVER_LIMIT_MESSAGE}</p>
+        {offering.purchaseUrl && (
+          <PendingButton
+            intent="unpublish"
+            formAction={unpublishAction}
+            formNoValidate
+            pendingLabel="Unpublishing…"
+            className="inline-flex shrink-0 items-center gap-1.5 text-xs font-medium text-muted-foreground transition-colors hover:text-foreground disabled:opacity-60"
+          >
+            Unpublish
+          </PendingButton>
+        )}
+      </div>
+    );
+  }
+
   if (offering.purchaseUrl) {
     return (
       <div className="flex items-center justify-between gap-3 border-t pt-3">
