@@ -176,9 +176,9 @@ describe('join page and action source invariants', () => {
 
   it('action rate-limits by IP and email before touching the database', () => {
     const src = read('src/app/join/[cohort]/actions.ts');
-    expect(src).toMatch(/rateLimit\('join-ip'/);
-    expect(src).toMatch(/rateLimit\('join-email'/);
-    expect(src.indexOf('rateLimit(')).toBeLessThan(src.indexOf('signupCohort.findUnique'));
+    expect(src).toMatch(/prefix: 'join-ip', by: 'ip'/);
+    expect(src).toMatch(/prefix: 'join-email', by: 'email'/);
+    expect(src.indexOf('checkBotGuard(')).toBeLessThan(src.indexOf('signupCohort.findUnique'));
   });
 
   it('action refuses a disabled or unknown cohort before minting an invitation', () => {

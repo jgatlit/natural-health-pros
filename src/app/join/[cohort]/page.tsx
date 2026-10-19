@@ -12,6 +12,8 @@ import {
   verifyRecruiterCookie,
 } from '@/lib/recruiter-cookie';
 import { RECRUITER_DISCLOSURE } from '@/lib/recruiter';
+import { issueFormStamp, turnstileSiteKey } from '@/lib/bot-guard';
+import { BotGuardFields } from '@/components/auth/BotGuardFields';
 import { requestJoin } from './actions';
 
 export const dynamic = 'force-dynamic';
@@ -29,6 +31,7 @@ type Props = {
 const ERRORS: Record<string, string> = {
   invalid: 'That does not look like an email address.',
   throttled: 'Too many attempts. Please try again in a little while.',
+  retry: 'Please try again.',
   'send-failed': 'We could not send the link. Please try again.',
 };
 
@@ -111,6 +114,7 @@ export default async function JoinPage({ params, searchParams }: Props) {
                     className="h-10 w-full rounded-md border bg-card px-3 text-sm outline-none ring-ring/30 transition-shadow focus-visible:ring-2"
                   />
                 </label>
+                <BotGuardFields stamp={issueFormStamp()} turnstileSiteKey={turnstileSiteKey()} />
                 <button
                   type="submit"
                   className="inline-flex h-10 w-full items-center justify-center gap-2 rounded-md bg-primary text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"

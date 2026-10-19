@@ -77,6 +77,11 @@ const nextConfig = {
           { key: 'X-Frame-Options', value: 'DENY' },
         ],
       },
+      {
+        // The sign-in confirm page carries a magic-link token in its URL. Later entries win.
+        source: '/auth/confirm',
+        headers: [{ key: 'Referrer-Policy', value: 'no-referrer' }],
+      },
     ];
   },
 };
