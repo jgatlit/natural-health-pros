@@ -58,7 +58,7 @@ export const WHOP_PUBLISH_ERRORS: Record<WhopPublishErrorCode, { summary: string
     nextStep: 'Nothing was charged and nothing was lost. Try again in a few minutes.',
   },
   unknown: {
-    summary: 'Whop could not set up checkout for this offering.',
+    summary: "We couldn't finish setting up checkout for this offering.",
     nextStep:
       'Nothing was charged and nothing was lost. Try again in a few minutes; if it keeps failing, contact us and we will look at it.',
   },

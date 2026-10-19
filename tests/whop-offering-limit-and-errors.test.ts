@@ -64,7 +64,10 @@ vi.mock('@/lib/prisma', () => ({
       findUnique: async (a: { where: { slug?: string; id?: string } }) =>
         a.where.slug === 'amy' ? { id: 'p_amy', userId: 'u_amy' } : a.where.id === 'p_amy' ? m.practitioner : null,
     },
-    user: { findUnique: async () => ({ email: 'amy@example.com' }) },
+    user: {
+      findUnique: async (a: { where: { id: string } }) =>
+        ({ u_amy: { email: 'amy@example.com' }, u_admin: { email: 'admin@example.com' } })[a.where.id] ?? null,
+    },
     bookingLink: { findFirst: async () => null },
     bookingIntent: { updateMany: async () => ({ count: 0 }) },
     whopProduct: {
@@ -133,11 +136,11 @@ describe('the $2,500 ceiling is refused before Whop is called', () => {
   });
 
   it.each([
-    ['$2,500.01', '2500.01'],
-    ['$3,000', '3,000'],
-    ['$10,000 monthly', '10000'],
-  ])('Publish of a stored %s offering redirects to the in-page message and never calls Whop', async (_l, price) => {
-    m.offering = offering({ priceUsdCents: Math.round(parseFloat(price.replace(/,/g, '')) * 100) });
+    ['$2,500.01 one-time', '2500.01', 'ONE_TIME'],
+    ['$3,000 one-time', '3,000', 'ONE_TIME'],
+    ['$10,000 monthly', '10000', 'MONTHLY'],
+  ])('Publish of a stored %s offering redirects to the in-page message and never calls Whop', async (_l, price, interval) => {
+    m.offering = offering({ priceUsdCents: Math.round(parseFloat(price.replace(/,/g, '')) * 100), interval });
     const out = await run(publishOffering('amy', fd({ offeringId: 'o_1' })));
     expect(out.url).toBe('/practitioners/amy/edit?error=offering-over-whop-limit#offerings');
     expect(m.createOfferingCheckout).not.toHaveBeenCalled();
@@ -210,6 +213,28 @@ describe('a Whop failure on Publish is explained, never raw', () => {
     expect(out.url).toBe('/practitioners/amy/edit?error=whop-unavailable#offerings');
   });
 
+  it('an admin publishing for the practitioner sees the message; no email about a click they never made', async () => {
+    m.session = { user: { id: 'u_admin', role: 'ADMIN' } };
+    m.createOfferingCheckout.mockRejectedValue(AMY_WHOP_400);
+    const out = await run(publishOffering('amy', fd({ offeringId: 'o_1' })));
+    expect(out.url).toBe('/practitioners/amy/edit?error=whop-over-limit#offerings');
+    expect(m.sendEmail).not.toHaveBeenCalled();
+  });
+
+  it('line breaks in a title never reach the email subject', async () => {
+    m.offering = offering({ title: 'Program\r\nBcc: x@evil.example' });
+    m.createOfferingCheckout.mockRejectedValue(AMY_WHOP_400);
+    await run(publishOffering('amy', fd({ offeringId: 'o_1' })));
+    expect(m.sendEmail.mock.calls[0][0].subject).not.toMatch(/[\r\n]/);
+  });
+
+  it('a failure after Whop succeeded (our own write) is not blamed on Whop or the account', async () => {
+    m.createOfferingCheckout.mockRejectedValue(new Error('Invalid prisma.whopProduct.update(): verification of row failed'));
+    const out = await run(publishOffering('amy', fd({ offeringId: 'o_1' })));
+    expect(out.url).toBe('/practitioners/amy/edit?error=whop-unknown&mailed=1#offerings');
+    expect(m.sendEmail.mock.calls[0][0].text).not.toMatch(/Whop said no/);
+  });
+
   it('a practitioner title with HTML is escaped in the email', async () => {
     m.offering = offering({ title: '<img src=x onerror=alert(1)>' });
     m.createOfferingCheckout.mockRejectedValue(AMY_WHOP_400);
@@ -227,7 +252,12 @@ describe('classifyWhopPublishError', () => {
     [new TypeError('fetch failed'), 'unavailable'],
     [new Error('Whop /checkout_configurations failed (400): Payouts are not enabled for this account'), 'account'],
     [new Error('Whop /checkout_configurations failed (403): account requires verification'), 'account'],
+    [new Error('Whop /checkout_configurations failed (401): invalid api key'), 'not-configured'],
+    [new Error('Whop /checkout_configurations failed (403): missing permission plan:create'), 'not-configured'],
+    [new Error('Whop /checkout_configurations failed (409): restricted'), 'unknown'],
     [new Error('Whop /checkout_configurations failed (400): something new'), 'unknown'],
+    [new Error('prisma: verification failed, account restricted'), 'unknown'],
+    [new Error('fetch failed'), 'unknown'],
     ['not even an error', 'unknown'],
   ])('%s -> %s', (err, code) => {
     expect(classifyWhopPublishError(err)).toBe(code);

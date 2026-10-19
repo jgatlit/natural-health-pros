@@ -1427,7 +1427,11 @@ export async function publishOffering(slug: string, formData: FormData): Promise
   if (!ok) {
     // Outside the try for the same reason as the redirects: nothing here may be swallowed.
     const code = failure ?? 'unknown';
-    const mailed = await emailPublishFailure(target.userId, slug, offering.title, code, offering.id);
+    // Emailed only when the practitioner pressed Publish themselves. An admin acting for them sees
+    // the same message on the page; an email about a click they never made would only confuse.
+    const mailed = target.isOwner
+      ? await emailPublishFailure(target.userId, slug, offering.title, code, offering.id)
+      : false;
     redirect(`/practitioners/${slug}/edit?error=whop-${code}${mailed ? '&mailed=1' : ''}#offerings`);
   }
 
@@ -1445,8 +1449,9 @@ export async function publishOffering(slug: string, formData: FormData): Promise
 
 /**
  * Tell the practitioner, by email, what the page already shows: the same summary and next step.
- * Fail-soft (the page message is the primary channel) and once per offering per failure kind per
- * day: Resend de-duplicates the key for 24 hours, so eight retries are one email, not eight.
+ * Fail-soft: the page message is the primary channel. The idempotency key is per offering and
+ * failure kind, so retries within 24 hours send no further email (Resend refuses a repeated key,
+ * which lands in the catch and returns false, so the page then doesn't claim an email went out).
  */
 async function emailPublishFailure(
   userId: string,
@@ -1461,16 +1466,17 @@ async function emailPublishFailure(
     const { summary, nextStep } = WHOP_PUBLISH_ERRORS[code];
     const url = `${SITE_URL}/practitioners/${encodeURIComponent(slug)}/edit#offerings`;
     const title = escapeHtml(offeringTitle);
+    const subjectTitle = offeringTitle.replace(/[\r\n]+/g, ' ').slice(0, 80);
     await sendEmail({
       to: user.email,
-      subject: `We couldn't set up payments for "${offeringTitle}"`,
+      subject: `We couldn't set up payments for "${subjectTitle}"`,
       html:
-        `<p>We tried to set up online payments for your offering <strong>${title}</strong>, and Whop said no.</p>` +
+        `<p>We tried to set up online payments for your offering <strong>${title}</strong>, and it didn't go through.</p>` +
         `<p>${escapeHtml(summary)}</p>` +
         `<p><strong>What to do next:</strong> ${escapeHtml(nextStep)}</p>` +
         `<p><a href="${url}">Open your offerings</a></p>`,
       text:
-        `We tried to set up online payments for your offering "${offeringTitle}", and Whop said no.\n\n` +
+        `We tried to set up online payments for your offering "${subjectTitle}", and it didn't go through.\n\n` +
         `${summary}\n\nWhat to do next: ${nextStep}\n\nOpen your offerings: ${url}\n`,
       idempotencyKey: `offering-publish-failed/${offeringId}/${code}`,
       tags: [{ name: 'type', value: 'offering-publish-failed' }],
