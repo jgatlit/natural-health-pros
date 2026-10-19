@@ -622,6 +622,14 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
             <p className="text-xs text-destructive">Display name is required.</p>
           </Card>
         )}
+        {searchParams.error === 'specialty-required' && (
+          <Card className="border-destructive/30 bg-destructive/5 p-3">
+            <p className="text-xs text-destructive">
+              Add at least one specialty, in your own words, so clients can find you in search.
+              Nothing was saved.
+            </p>
+          </Card>
+        )}
         {searchParams.error === 'outside-work-required' && (
           <Card className="border-destructive/30 bg-destructive/5 p-3">
             <p className="text-xs text-destructive">

@@ -173,6 +173,7 @@ async function main() {
         searchText: buildSearchText(p, canonicalNames),
         acceptedAt: now,
         invitedAt: now,
+        hheCertified: true, // the pilots are HHE graduates; the column default is false
       },
     });
 

@@ -381,3 +381,24 @@ describe('the name is the practitioner\'s own (fix 4)', () => {
 });
 
 void RECRUITER_COOKIE;
+
+describe("no 'HHE Certified' badge for a sign-up (operator ruling 2026-10-15, tsk_303ec99f (b))", () => {
+  it.each([
+    ['a cohort sign-up (/join/hhe)', {}],
+    ['an invitation from a /join approval or an admin', { cohortId: null, cohort: null }],
+  ])('%s is created with hheCertified=false', async (_label, over) => {
+    m.invitation = invitation(over);
+    await render();
+    expect(m.create.mock.calls[0][0].data.hheCertified).toBe(false);
+  });
+
+  it('an existing practitioner revisiting onboarding is not re-written', async () => {
+    m.existingPractitioner = {
+      id: 'p1', slug: 'victim', displayName: 'V', bio: null, headline: null, city: null,
+      yearsInPractice: null, telehealth: false, inPerson: false, specialties: [],
+      recruitedById: null, rateScheduleId: V1.id, user: { termsAcceptedAt: null },
+    };
+    await render();
+    expect(m.create).not.toHaveBeenCalled();
+  });
+});

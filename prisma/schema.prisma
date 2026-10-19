@@ -216,7 +216,7 @@ model Practitioner {
   /// real data (docs/brand/CLAIMS-REVIEW-JONATHAN-AMY.md §1) and this is the column that would
   /// feed it. Do NOT wire it back into the rail without re-reading §4's CTA hierarchy.
   firstSessionPriceCents Int? // first-session price in cents; render as $X.XX
-  hheCertified           Boolean  @default(true) // HHE-certification trust badge (pilots are HHE grads)
+  hheCertified           Boolean  @default(false) // HHE-certification trust badge; an admin grants it (pilot rows were seeded true)
 
   /// Qualifications / certifications / education — one credential per entry, in the
   /// practitioner's own words ("BS in Nutrition, Bastyr University").

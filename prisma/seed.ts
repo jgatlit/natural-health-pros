@@ -298,6 +298,7 @@ async function main() {
         yearsInPractice: p.yearsInPractice,
         searchText: buildSearchText(p, city.name, specialtyNames),
         acceptedAt: new Date(),
+        hheCertified: true, // seed practitioners are HHE graduates; the column default is false
         specialties: {
           create: specialtyRows.map((s, idx) => ({
             rawLabel: p.specialties[idx],
