@@ -15,7 +15,8 @@
  * Jonathan + Amy review — see docs/brand/CLAIMS-REVIEW-JONATHAN-AMY.md.
  *
  *   priceBand          0 of 13 practitioners priced; 0 Offering rows exist
- *   trustRow[0]        hheCertified is @default(true); no code path sets it
+ *   trustRow[0]        hheCertified was @default(true) with no code path setting it (default
+ *                      false since 2026-10-19; new sign-ups get false, pilot rows kept true)
  *   trustRow[2]        1 of 13 has a booking link
  *   scopeOfService.is  no in-area inventory; 13 of 13 are virtual
  *

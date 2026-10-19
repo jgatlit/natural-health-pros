@@ -293,7 +293,7 @@ export async function resetTrial(formData: FormData): Promise<void> {
  * precisely the profiles an operator needs to manage. So the practitioner is resolved by the
  * invitation's EMAIL, with acceptedByUser preferred when it exists.
  */
-async function practitionerForInvitation(invitationId: string): Promise<string> {
+async function practitionerForInvitation(invitationId: string, back: DirectoryReturnPath): Promise<string> {
   const invitation = await prisma.invitation.findUnique({
     where: { id: invitationId },
     select: {
@@ -301,7 +301,7 @@ async function practitionerForInvitation(invitationId: string): Promise<string> 
       acceptedByUser: { select: { practitioner: { select: { id: true } } } },
     },
   });
-  if (!invitation) redirect('/admin/invites?error=not-found');
+  if (!invitation) redirect(`${back}?error=not-found`);
 
   const accepted = invitation.acceptedByUser?.practitioner?.id;
   if (accepted) return accepted;
@@ -311,8 +311,21 @@ async function practitionerForInvitation(invitationId: string): Promise<string> 
     select: { practitioner: { select: { id: true } } },
   });
   const id = byEmail?.practitioner?.id;
-  if (!id) redirect('/admin/invites?error=no-profile');
+  if (!id) redirect(`${back}?error=no-profile`);
   return id;
+}
+
+/**
+ * The same controls also sit on /admin/signups (cohort sign-ups are not on /admin/invites), so the
+ * form names the page to come back to. An allowlist, never the raw value: anything else returns
+ * to /admin/invites.
+ */
+const DIRECTORY_RETURN_PATHS = ['/admin/invites', '/admin/signups'] as const;
+type DirectoryReturnPath = (typeof DIRECTORY_RETURN_PATHS)[number];
+
+function directoryReturnPath(formData: FormData): DirectoryReturnPath {
+  const requested = String(formData.get('returnTo') ?? '');
+  return DIRECTORY_RETURN_PATHS.find((p) => p === requested) ?? '/admin/invites';
 }
 
 /**
@@ -327,9 +340,10 @@ async function applyDirectoryFlag(
   await requireAdmin();
   const invitationId = String(formData.get('id') ?? '');
   const on = String(formData.get('on') ?? '') === '1';
+  const back = directoryReturnPath(formData);
   if (!invitationId) return;
 
-  const practitionerId = await practitionerForInvitation(invitationId);
+  const practitionerId = await practitionerForInvitation(invitationId, back);
 
   await prisma.practitioner.update({
     where: { id: practitionerId },
@@ -343,13 +357,14 @@ async function applyDirectoryFlag(
   const sync = await indexPractitionerVerified(practitionerId);
 
   revalidatePath('/admin/invites');
+  revalidatePath('/admin/signups');
   revalidatePath('/');
 
   if (!sync.ok) {
     console.error('Directory flag reindex failed:', { practitionerId, field, on, sync });
-    redirect('/admin/invites?error=index-out-of-sync');
+    redirect(`${back}?error=index-out-of-sync`);
   }
-  if (!sync.verified) redirect('/admin/invites?notice=index-unverified');
+  if (!sync.verified) redirect(`${back}?notice=index-unverified`);
 }
 
 /** Hide from DISCOVERY. The profile URL keeps working and booking keeps working. */

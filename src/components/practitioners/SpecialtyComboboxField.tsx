@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { X, Plus, Sparkles } from 'lucide-react';
 import { Badge } from '@/components/ui/badge';
 import { SortableList } from '@/components/practitioners/SortableList';
@@ -13,6 +13,9 @@ type Props = {
   options: CanonicalOption[];
   aliases: AliasOption[];
   initial: Selection[];
+  /** Block the enclosing form's submit until at least one specialty is added. */
+  required?: boolean;
+  requiredMessage?: string;
 };
 
 const norm = (s: string) => s.trim().toLowerCase();
@@ -24,11 +27,25 @@ const norm = (s: string) => s.trim().toLowerCase();
  * a PROPOSED specialty + PENDING alias (the /admin/specialties moderation queue).
  * Submits a hidden JSON field consumed by updatePractitioner.
  */
-export function SpecialtyComboboxField({ options, aliases, initial }: Props) {
+export function SpecialtyComboboxField({
+  options,
+  aliases,
+  initial,
+  required = false,
+  requiredMessage = 'Add at least one specialty.',
+}: Props) {
   const [selected, setSelected] = useState<Selection[]>(initial);
   const [query, setQuery] = useState('');
   const [open, setOpen] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
+
+  // The selections travel in a hidden input, which the browser never validates, so the visible
+  // search box carries the "required" state: the form will not submit, and the browser points at
+  // this box with the message, until a chip exists. Text typed but not yet added does not count.
+  const missing = required && selected.length === 0;
+  useEffect(() => {
+    inputRef.current?.setCustomValidity(missing ? requiredMessage : '');
+  }, [missing, requiredMessage]);
 
   const nameById = useMemo(() => new Map(options.map((o) => [o.id, o.name])), [options]);
   const selectedIds = useMemo(
@@ -162,6 +179,8 @@ export function SpecialtyComboboxField({ options, aliases, initial }: Props) {
               }
             }
           }}
+          aria-required={required || undefined}
+          aria-invalid={missing || undefined}
           placeholder="Type to search — or enter your own term"
           className="h-10 w-full rounded-md border bg-card px-3 text-sm outline-none ring-ring/30 focus-visible:ring-2"
         />

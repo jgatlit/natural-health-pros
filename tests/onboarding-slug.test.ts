@@ -89,12 +89,14 @@ vi.mock('@/lib/prisma', () => {
 });
 
 import { submitOnboarding } from '@/app/practitioners/[slug]/edit/actions';
+import { draftProfile } from '@/lib/onboarding-draft';
 
 function form(name: string) {
   const fd = new FormData();
   fd.set('displayName', name);
   fd.set('termsAccepted', 'on');
   fd.set('openToOutsideWork', 'no');
+  fd.set('specialtiesJson', JSON.stringify([{ specialtyId: 's1', rawLabel: 'Gut Health' }]));
   return fd;
 }
 
@@ -197,4 +199,41 @@ it("an admin completing someone else's onboarding never renames their slug", asy
   const out = await submit('Jordan Lee');
   expect(m.updates[0]).toMatchObject({ slug: 'kbbunny81' });
   expect(out.url).toBe('/practitioners/kbbunny81?onboarded=1');
+});
+
+describe('at least one specialty is required (tsk_eb9ee4d9 item 1)', () => {
+  it.each([
+    ['no specialties field', undefined],
+    ['an empty list', '[]'],
+    ['only blank labels', JSON.stringify([{ specialtyId: null, rawLabel: '   ' }])],
+    ['unparseable JSON', '{not json'],
+  ])('%s is refused before any write or draft call', async (_label, json) => {
+    vi.mocked(draftProfile).mockClear();
+    const fd = form('Jordan Lee');
+    if (json === undefined) fd.delete('specialtiesJson');
+    else fd.set('specialtiesJson', json);
+    const out = await submitOnboarding(m.ownSlug, fd).then(
+      () => ({}) as { url?: string },
+      (e) => e as { url?: string },
+    );
+    expect(out.url).toBe('/practitioners/kbbunny81/edit?error=specialty-required');
+    expect(m.updates).toEqual([]);
+    expect(draftProfile).not.toHaveBeenCalled();
+  });
+
+  it('an admin completing onboarding for someone is held to it too', async () => {
+    m.session = { user: { id: 'admin', role: 'ADMIN' } };
+    const fd = form('Jordan Lee');
+    fd.set('specialtiesJson', '[]');
+    const out = await submitOnboarding(m.ownSlug, fd).catch((e) => e as { url?: string });
+    expect((out as { url?: string }).url).toBe('/practitioners/kbbunny81/edit?error=specialty-required');
+    expect(m.updates).toEqual([]);
+  });
+
+  it('one specialty in the practitioner own words is enough, and is written', async () => {
+    const fd = form('Jordan Lee');
+    await submitOnboarding(m.ownSlug, fd).catch(() => undefined);
+    const written = m.updates[0] as { specialties: { create: { rawLabel: string }[] } };
+    expect(written.specialties.create.map((c) => c.rawLabel)).toEqual(['Gut Health']);
+  });
 });

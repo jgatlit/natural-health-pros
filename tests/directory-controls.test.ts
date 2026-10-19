@@ -181,19 +181,27 @@ describe('indexPractitionerVerified — Typesense not configured', () => {
 describe('the controls are reachable from the admin UI', () => {
   // Same defect class as tests/server-action-reachability.test.ts: an exported, correct,
   // callerless server action passes tsc, lint, the suite and the build.
-  const page = readFileSync(
-    join(__dirname, '..', 'src', 'app', 'admin', 'invites', 'page.tsx'),
-    'utf8',
-  );
+  const read = (...p: string[]) => readFileSync(join(__dirname, '..', 'src', 'app', ...p), 'utf8');
+  const page = read('admin', 'invites', 'page.tsx');
+  const controls = read('admin', 'invites', 'DirectoryControls.tsx');
 
   for (const action of ['setDelisted', 'setArchived']) {
-    it(`${action} is submitted by a form on the invites page`, () => {
-      expect(page).toContain(action);
-      expect(page, `${action} is imported but never used as a form action`).toMatch(
+    it(`${action} is submitted by a form in the shared directory controls`, () => {
+      expect(controls, `${action} is imported but never used as a form action`).toMatch(
         new RegExp(`action=\\{${action}\\}`),
       );
     });
   }
+
+  // tsk_303ec99f (c): a cohort sign-up is not on /admin/invites, so /admin/signups needs them too.
+  it.each([
+    ['invites', '/admin/invites'],
+    ['signups', '/admin/signups'],
+  ])('the %s page renders the controls and comes back to itself', (dir, back) => {
+    const src = read('admin', dir, 'page.tsx');
+    expect(src).toMatch(/<DirectoryControls\b/);
+    expect(src).toContain(`returnTo="${back}"`);
+  });
 
   it('resolves the practitioner by email, not only by acceptedByUser', () => {
     // Twelve of eighteen invitations were never accepted, and their practitioners are exactly

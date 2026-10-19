@@ -1,6 +1,6 @@
 import { redirect } from 'next/navigation';
 import Link from 'next/link';
-import { Mail, Send, Ban, Check, Clock, RotateCcw, Eye, EyeOff, Archive, ArchiveRestore, AlertTriangle } from 'lucide-react';
+import { Mail, Send, Ban, Check, Clock, RotateCcw, AlertTriangle } from 'lucide-react';
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
 import { Card } from '@/components/ui/card';
@@ -13,12 +13,10 @@ import {
   resendInvitation,
   resetTrial,
   deleteInvitation,
-  setDelisted,
-  setArchived,
   updateInvitationEmail,
 } from './actions';
 import { DeleteInviteButton } from './DeleteInviteButton';
-import { ConfirmActionButton } from './ConfirmActionButton';
+import { DirectoryControls } from './DirectoryControls';
 import { EditEmailControl } from './EditEmailControl';
 import { matchesOutsideWorkFilter, parseOutsideWorkFilter, type OutsideWorkFilter } from '@/lib/outside-work';
 import { assignScheduleToPractitioner } from '@/app/admin/commercial-settings/actions';
@@ -158,7 +156,7 @@ export default async function AdminInvitesPage({
 
   return (
     <main className="min-h-screen bg-muted/30 px-4 py-10 sm:py-14">
-      <div className="mx-auto max-w-2xl space-y-6">
+      <div className="mx-auto max-w-4xl space-y-6">
         <header className="space-y-1">
           <h1 className="text-2xl font-semibold tracking-tight">Practitioner invitations</h1>
           <p className="text-sm text-muted-foreground">
@@ -391,214 +389,177 @@ export default async function AdminInvitesPage({
                     ? `${trialDaysLeft}d left`
                     : 'trial expired';
                 return (
-                  <li key={inv.id} className="flex items-center gap-3 px-5 py-3">
-                    <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted">
-                      <Mail className="h-4 w-4 text-muted-foreground" aria-hidden />
-                    </span>
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-medium">{inv.email}</p>
-                      <p className="truncate text-xs text-muted-foreground">
-                        Sent {inv.createdAt.toLocaleDateString()} ·{' '}
-                        {inv.invitedBy?.name ?? inv.invitedBy?.email ?? 'system'}
-                      </p>
+                  <li key={inv.id} className="space-y-2 px-5 py-3">
+                    {/* Identity on its own line, controls wrapping underneath: one flex row held
+                        the email, five badges and up to seven buttons, so at laptop width the
+                        email truncated to nothing and the controls ran off the card. */}
+                    <div className="flex items-start gap-3">
+                      <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md bg-muted">
+                        <Mail className="h-4 w-4 text-muted-foreground" aria-hidden />
+                      </span>
+                      <div className="min-w-0 flex-1">
+                        <p className="break-words text-sm font-medium">
+                          {practitioner ? (
+                            <>
+                              {practitioner.displayName || (
+                                <span className="text-muted-foreground">No name yet</span>
+                              )}{' '}
+                              <Link
+                                href={`/practitioners/${practitioner.slug}`}
+                                className="text-xs font-normal text-muted-foreground underline-offset-2 hover:underline"
+                              >
+                                /{practitioner.slug}
+                              </Link>
+                            </>
+                          ) : (
+                            <span className="text-muted-foreground">No profile yet</span>
+                          )}
+                        </p>
+                        <p className="break-all text-xs">{inv.email}</p>
+                        <p className="text-xs text-muted-foreground">
+                          Sent {inv.createdAt.toLocaleDateString()} ·{' '}
+                          {inv.invitedBy?.name ?? inv.invitedBy?.email ?? 'system'}
+                        </p>
+                      </div>
                     </div>
-                    {status === 'accepted' && (
-                      <Badge variant="secondary" className="gap-1 text-[10px]">
-                        <Check className="h-3 w-3" />
-                        Accepted
-                      </Badge>
-                    )}
-                    {status === 'accepted' && practitioner && (
-                      <span className="whitespace-nowrap text-[10px] text-muted-foreground">
-                        {trialLabel}
-                      </span>
-                    )}
-                    {practitioner && (
-                      <Badge
-                        variant={practitioner.openToOutsideWork ? 'default' : 'outline'}
-                        className="whitespace-nowrap text-[10px]"
-                        title="Open to outside work and collaboration"
-                      >
-                        {practitioner.openToOutsideWork ? 'Open' : 'Not open'}
-                      </Badge>
-                    )}
-                    {status === 'accepted' && practitioner && (
-                      <span
-                        className="whitespace-nowrap text-[10px] text-muted-foreground"
-                        title="Rate schedule — change it from Commercial settings"
-                      >
-                        Rates: {practitioner.rateSchedule?.label ?? 'NONE — checkout refuses'}
-                      </span>
-                    )}
-                    {status === 'accepted' && practitioner && !practitioner.rateSchedule && (
-                      <form action={assignScheduleToPractitioner} className="flex items-center gap-1">
-                        <input type="hidden" name="practitionerId" value={practitioner.id} />
-                        <input
-                          name="reason"
-                          required
-                          minLength={3}
-                          placeholder="reason"
-                          aria-label={`Reason for assigning the current rate schedule to ${practitioner.displayName}`}
-                          className="w-28 rounded border border-slate-300 px-1.5 py-1 text-[11px]"
-                        />
-                        <button
-                          type="submit"
-                          className="whitespace-nowrap rounded border border-red-300 px-1.5 py-1 text-[11px] text-red-800 hover:bg-red-50"
-                          title="Assign the current rate schedule (admin only, audited)"
-                        >
-                          Assign current schedule
-                        </button>
-                      </form>
-                    )}
-                    {status === 'pending' && (
-                      <Badge variant="default" className="gap-1 text-[10px]">
-                        <Clock className="h-3 w-3" />
-                        Pending
-                      </Badge>
-                    )}
-                    {status === 'expired' && (
-                      <Badge variant="outline" className="text-[10px]">
-                        Expired
-                      </Badge>
-                    )}
-                    {(status === 'pending' || status === 'expired') && (
-                      <form action={resendInvitation}>
-                        <input type="hidden" name="id" value={inv.id} />
-                        <button
-                          type="submit"
-                          aria-label={
-                            expired
-                              ? `Resend and reactivate invitation to ${inv.email}`
-                              : `Resend invitation to ${inv.email}`
-                          }
-                          title={
-                            expired ? 'Resend — reactivates this expired invite' : 'Resend invite'
-                          }
-                          className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
-                        >
-                          <Send className="h-3.5 w-3.5" />
-                        </button>
-                      </form>
-                    )}
-                    {status === 'accepted' && practitioner && (
-                      <form action={resetTrial}>
-                        <input type="hidden" name="id" value={inv.id} />
-                        <button
-                          type="submit"
-                          aria-label={`Reset trial for ${inv.email}`}
-                          title="Reset trial — 90 days from today"
-                          className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
-                        >
-                          <RotateCcw className="h-3.5 w-3.5" />
-                        </button>
-                      </form>
-                    )}
-                    {/* Revoke kills the live link but keeps the row; delete clears it from the
-                        list. Both are offered on pending rows because they are different
-                        intents — "this link should stop working" vs "this was a mistake".
-                        Accepted rows get neither: revoke is meaningless once they are in, and
-                        deleting would sever the acceptedByUserId relation resetTrial walks. */}
-                    {status === 'pending' && (
-                      <form action={revokeInvitation}>
-                        <input type="hidden" name="id" value={inv.id} />
-                        <button
-                          type="submit"
-                          aria-label={`Revoke invitation to ${inv.email}`}
-                          title="Revoke — kills the link, keeps the row"
-                          className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
-                        >
-                          <Ban className="h-3.5 w-3.5" />
-                        </button>
-                      </form>
-                    )}
-                    {/*
-                      Correcting the address in place is what prevents a duplicate profile:
-                      re-inviting a corrected email creates a NEW User, which has no
-                      practitioner, so onboarding takes its create branch and the same person
-                      ends up with a second row. That is how the duplicate sarah-schindler row
-                      happened.
-                    */}
-                    <EditEmailControl id={inv.id} email={inv.email} action={updateInvitationEmail} />
-                    {/*
-                      Directory controls. Rendered whenever a PROFILE exists — not only on
-                      accepted rows — because the twelve seeded pilots have profiles and no
-                      accepted invitation, and they are the ones most likely to need hiding.
-
-                      Delist and archive are deliberately separate controls rather than one
-                      three-state widget: delisting hides a WORKING practice from search while
-                      her own booking link keeps taking clients, and archiving closes the
-                      practice. Collapsing them would make the safe action and the destructive
-                      one adjacent positions of the same switch.
-                    */}
-                    {practitioner && !archived && (
-                      <>
-                        <Badge
-                          variant={delisted ? 'outline' : 'secondary'}
-                          className="whitespace-nowrap text-[10px]"
-                        >
-                          {delisted ? 'Hidden' : 'Listed'}
+                    <div className="flex flex-wrap items-center gap-2 pl-11">
+                      {status === 'accepted' && (
+                        <Badge variant="secondary" className="gap-1 text-[10px]">
+                          <Check className="h-3 w-3" />
+                          Accepted
                         </Badge>
-                        <form action={setDelisted}>
+                      )}
+                      {status === 'accepted' && practitioner && (
+                        <span className="whitespace-nowrap text-[10px] text-muted-foreground">
+                          {trialLabel}
+                        </span>
+                      )}
+                      {practitioner && (
+                        <Badge
+                          variant={practitioner.openToOutsideWork ? 'default' : 'outline'}
+                          className="whitespace-nowrap text-[10px]"
+                          title="Open to outside work and collaboration"
+                        >
+                          {practitioner.openToOutsideWork ? 'Open' : 'Not open'}
+                        </Badge>
+                      )}
+                      {status === 'accepted' && practitioner && (
+                        <span
+                          className="whitespace-nowrap text-[10px] text-muted-foreground"
+                          title="Rate schedule — change it from Commercial settings"
+                        >
+                          Rates: {practitioner.rateSchedule?.label ?? 'NONE — checkout refuses'}
+                        </span>
+                      )}
+                      {status === 'accepted' && practitioner && !practitioner.rateSchedule && (
+                        <form action={assignScheduleToPractitioner} className="flex items-center gap-1">
+                          <input type="hidden" name="practitionerId" value={practitioner.id} />
+                          <input
+                            name="reason"
+                            required
+                            minLength={3}
+                            placeholder="reason"
+                            aria-label={`Reason for assigning the current rate schedule to ${practitioner.displayName}`}
+                            className="w-28 rounded border border-slate-300 px-1.5 py-1 text-[11px]"
+                          />
+                          <button
+                            type="submit"
+                            className="whitespace-nowrap rounded border border-red-300 px-1.5 py-1 text-[11px] text-red-800 hover:bg-red-50"
+                            title="Assign the current rate schedule (admin only, audited)"
+                          >
+                            Assign current schedule
+                          </button>
+                        </form>
+                      )}
+                      {status === 'pending' && (
+                        <Badge variant="default" className="gap-1 text-[10px]">
+                          <Clock className="h-3 w-3" />
+                          Pending
+                        </Badge>
+                      )}
+                      {status === 'expired' && (
+                        <Badge variant="outline" className="text-[10px]">
+                          Expired
+                        </Badge>
+                      )}
+                      {(status === 'pending' || status === 'expired') && (
+                        <form action={resendInvitation}>
                           <input type="hidden" name="id" value={inv.id} />
-                          <input type="hidden" name="on" value={delisted ? '0' : '1'} />
                           <button
                             type="submit"
                             aria-label={
-                              delisted
-                                ? `List ${practitioner.displayName} in the directory again`
-                                : `Hide ${practitioner.displayName} from the directory`
+                              expired
+                                ? `Resend and reactivate invitation to ${inv.email}`
+                                : `Resend invitation to ${inv.email}`
                             }
                             title={
-                              delisted
-                                ? 'Show in directory again'
-                                : 'Hide from directory — profile URL and booking keep working'
+                              expired ? 'Resend — reactivates this expired invite' : 'Resend invite'
                             }
                             className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
                           >
-                            {delisted ? (
-                              <Eye className="h-3.5 w-3.5" />
-                            ) : (
-                              <EyeOff className="h-3.5 w-3.5" />
-                            )}
+                            <Send className="h-3.5 w-3.5" />
                           </button>
                         </form>
-                        <ConfirmActionButton
-                          action={setArchived}
-                          fields={{ id: inv.id, on: '1' }}
-                          icon={<Archive className="h-3.5 w-3.5" />}
-                          idleLabel={`Archive ${practitioner.displayName}'s profile`}
-                          idleTitle="Archive — removes from directory and stops booking. Reversible."
-                          confirmText="Archive"
-                          confirmLabel={`Confirm archiving ${practitioner.displayName}'s profile`}
-                        />
-                      </>
-                    )}
-                    {practitioner && archived && (
-                      <>
-                        <Badge variant="outline" className="whitespace-nowrap text-[10px]">
-                          Archived
-                        </Badge>
-                        <form action={setArchived}>
+                      )}
+                      {status === 'accepted' && practitioner && (
+                        <form action={resetTrial}>
                           <input type="hidden" name="id" value={inv.id} />
-                          <input type="hidden" name="on" value="0" />
                           <button
                             type="submit"
-                            aria-label={`Restore ${practitioner.displayName}'s profile`}
-                            title="Restore — returns to the directory and to booking"
+                            aria-label={`Reset trial for ${inv.email}`}
+                            title="Reset trial — 90 days from today"
                             className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-primary/10 hover:text-primary"
                           >
-                            <ArchiveRestore className="h-3.5 w-3.5" />
+                            <RotateCcw className="h-3.5 w-3.5" />
                           </button>
                         </form>
-                      </>
-                    )}
-                    {status !== 'accepted' && (
-                      <DeleteInviteButton
-                        id={inv.id}
-                        email={inv.email}
-                        action={deleteInvitation}
-                      />
-                    )}
+                      )}
+                      {/* Revoke kills the live link but keeps the row; delete clears it from the
+                          list. Both are offered on pending rows because they are different
+                          intents — "this link should stop working" vs "this was a mistake".
+                          Accepted rows get neither: revoke is meaningless once they are in, and
+                          deleting would sever the acceptedByUserId relation resetTrial walks. */}
+                      {status === 'pending' && (
+                        <form action={revokeInvitation}>
+                          <input type="hidden" name="id" value={inv.id} />
+                          <button
+                            type="submit"
+                            aria-label={`Revoke invitation to ${inv.email}`}
+                            title="Revoke — kills the link, keeps the row"
+                            className="rounded-md p-1.5 text-muted-foreground transition-colors hover:bg-destructive/10 hover:text-destructive"
+                          >
+                            <Ban className="h-3.5 w-3.5" />
+                          </button>
+                        </form>
+                      )}
+                      {/*
+                        Correcting the address in place is what prevents a duplicate profile:
+                        re-inviting a corrected email creates a NEW User, which has no
+                        practitioner, so onboarding takes its create branch and the same person
+                        ends up with a second row. That is how the duplicate sarah-schindler row
+                        happened.
+                      */}
+                      <EditEmailControl id={inv.id} email={inv.email} action={updateInvitationEmail} />
+                      {/* Rendered whenever a PROFILE exists — not only on accepted rows — because
+                          the twelve seeded pilots have profiles and no accepted invitation, and
+                          they are the ones most likely to need hiding. */}
+                      {practitioner && (
+                        <DirectoryControls
+                          invitationId={inv.id}
+                          displayName={practitioner.displayName}
+                          delisted={delisted}
+                          archived={archived}
+                          returnTo="/admin/invites"
+                        />
+                      )}
+                      {status !== 'accepted' && (
+                        <DeleteInviteButton
+                          id={inv.id}
+                          email={inv.email}
+                          action={deleteInvitation}
+                        />
+                      )}
+                    </div>
                   </li>
                 );
               })}

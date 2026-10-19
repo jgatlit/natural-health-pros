@@ -158,6 +158,9 @@ export default async function OnboardingPage({ searchParams }: Props) {
         displayName,
         acceptedAt: new Date(),
         trialEndsAt,
+        // Operator ruling 2026-10-15: a sign-up (cohort link, /join approval, any invitation) is
+        // not HHE-verified, so it never starts with the badge. An admin grants it by hand.
+        hheCertified: false,
         recruiterToken: newRecruiterToken(),
         ...recruitedFields(recruiterId, new Date()),
         ...schedule,

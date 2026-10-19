@@ -778,6 +778,14 @@ export async function submitOnboarding(slug: string, formData: FormData): Promis
   } catch {
     rawSelections = [];
   }
+  // At least one specialty, for everyone (an admin completing onboarding too): a profile with
+  // none is never listed (isProfileComplete), which is how a practitioner finished onboarding on
+  // 2026-10-19 and silently stayed out of search. Checked before the draft call, so a refused
+  // submit costs no LLM request. Every non-blank label resolves (resolveSelection), so a
+  // non-empty list here always writes at least one specialty.
+  if (rawSelections.length === 0) {
+    redirect(`/practitioners/${slug}/edit?error=specialty-required`);
+  }
 
   const coords = resolvedCity?.coords ?? null;
 

@@ -9,6 +9,9 @@ import type { PlanCardView } from '@/components/practitioners/PlanChoice';
 import { OUTSIDE_WORK_FIELD, OUTSIDE_WORK_HELPER, OUTSIDE_WORK_QUESTION } from '@/lib/outside-work';
 import type { ReferralTermsView } from '@/lib/pricing-plans';
 
+const SPECIALTY_REQUIRED_HINT =
+  'Add at least one specialty, in your own words, so clients can find you in search.';
+
 type Props = {
   action: (formData: FormData) => void | Promise<void>;
   isPrefilled: boolean;
@@ -60,7 +63,7 @@ export function OnboardingForm({
           </h1>
           <p className="text-sm text-muted-foreground">
             Tell us about your practice in your own words — we’ll turn it into a polished landing
-            page you can fine-tune afterward. Your page stays private until it’s complete.
+            page you can fine-tune afterward. Your page appears in the directory as soon as it’s complete.
           </p>
         </div>
 
@@ -78,6 +81,18 @@ export function OnboardingForm({
               />
             </Field>
 
+            {/* Required: a practitioner with no specialty is not listed (isProfileComplete), and
+                nothing on the page said so. Enforced again in submitOnboarding. */}
+            <Field label="Specialties" required hint={SPECIALTY_REQUIRED_HINT}>
+              <SpecialtyComboboxField
+                options={specialties}
+                aliases={aliases}
+                initial={initialSpecialties}
+                required
+                requiredMessage={SPECIALTY_REQUIRED_HINT}
+              />
+            </Field>
+
             <Field
               label="Describe your practice"
               hint="Who you help, your approach, your background and training. Write naturally — the more you share, the better your generated page. You can edit every word afterward."
@@ -88,17 +103,6 @@ export function OnboardingForm({
                 defaultValue={values.describe}
                 placeholder="e.g. Who you work with, what you help them with, where you trained, and the methods you use."
                 className="w-full rounded-md border bg-card px-3 py-2 text-sm outline-none ring-ring/30 focus-visible:ring-2"
-              />
-            </Field>
-
-            <Field
-              label="Specialties"
-              hint="Search the curated list or type your own — we keep your wording on your profile and match it to the right category."
-            >
-              <SpecialtyComboboxField
-                options={specialties}
-                aliases={aliases}
-                initial={initialSpecialties}
               />
             </Field>
 
