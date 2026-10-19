@@ -78,6 +78,11 @@ function slugify(s: string): string {
 
 type RawSelection = { specialtyId: string | null; rawLabel: string };
 
+/** A label with something a reader can see: trim() leaves zero-width characters in place. */
+function visibleLabel(raw: string): boolean {
+  return raw.replace(/[\u200B-\u200D\u2060\uFEFF]/g, '').trim().length > 0;
+}
+
 /**
  * Resolve one combobox selection → a specialtyId + the practitioner's rawLabel.
  * - An explicit pick of an existing specialty → use it.
@@ -773,7 +778,7 @@ export async function submitOnboarding(slug: string, formData: FormData): Promis
           specialtyId: typeof p.specialtyId === 'string' ? p.specialtyId : null,
           rawLabel: typeof p.rawLabel === 'string' ? p.rawLabel : '',
         }))
-        .filter((p) => p.rawLabel.trim());
+        .filter((p) => visibleLabel(p.rawLabel));
     }
   } catch {
     rawSelections = [];

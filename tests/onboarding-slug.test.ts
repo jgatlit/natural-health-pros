@@ -206,6 +206,7 @@ describe('at least one specialty is required (tsk_eb9ee4d9 item 1)', () => {
     ['no specialties field', undefined],
     ['an empty list', '[]'],
     ['only blank labels', JSON.stringify([{ specialtyId: null, rawLabel: '   ' }])],
+    ['only invisible characters', JSON.stringify([{ specialtyId: null, rawLabel: '\u200b\ufeff ' }])],
     ['unparseable JSON', '{not json'],
   ])('%s is refused before any write or draft call', async (_label, json) => {
     vi.mocked(draftProfile).mockClear();
