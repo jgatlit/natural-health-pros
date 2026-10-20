@@ -271,7 +271,7 @@ describe('saveDisplaySettingAction (admin server action)', () => {
   it('the Change history on Commercial settings lists every PlatformSettingChange with who, when, old → new', () => {
     const page = readFileSync(join(__dirname, '..', 'src/app/admin/commercial-settings/page.tsx'), 'utf8');
     expect(page).toMatch(/platformSettingChange\.findMany/);
-    expect(page).toMatch(/c\.changedAt[\s\S]*c\.key[\s\S]*c\.oldValue \?\? '\(unset\)'[\s\S]*c\.newValue[\s\S]*c\.changedByUserId/);
+    expect(page).toMatch(/c\.changedAt[\s\S]*c\.key[\s\S]*c\.oldValue \?\? '\(unset\)'[\s\S]*c\.newValue \|\| '\(empty\)'[\s\S]*c\.changedByUserId/);
     expect(page).toMatch(/<DisplaySettingsCard/);
   });
 });
@@ -301,6 +301,7 @@ describe('show_plan_rates OFF: no plan $ or % on any plan surface', () => {
     const withoutButtons = t.replace('Pay monthly · $29/mo', '').replace('Pay annually · $299/yr', '');
     expect(withoutButtons).not.toMatch(FIGURE);
     expect(withoutButtons).not.toMatch(/save/i);
+    expect(withoutButtons).not.toMatch(/below/);
   });
 
   it('billing card states before billing and when active carry no price', () => {

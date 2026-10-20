@@ -211,7 +211,7 @@ export default async function CommercialSettingsPage() {
             {changes.map((c) => (
               <li key={c.id} className="font-mono text-xs">
                 {c.changedAt.toISOString().slice(0, 16).replace('T', ' ')} · {c.key} ·{' '}
-                {c.oldValue ?? '(unset)'} → {c.newValue} · {c.changedByUserId ?? 'unknown admin'}
+                {c.oldValue ?? '(unset)'} → {c.newValue || '(empty)'} · {c.changedByUserId ?? 'unknown admin'}
                 {c.reason ? ` · reason: ${c.reason}` : ''}
               </li>
             ))}

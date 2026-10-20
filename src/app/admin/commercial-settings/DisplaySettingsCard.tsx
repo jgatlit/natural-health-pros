@@ -63,7 +63,9 @@ function NoteForm({ label, help, note, maxLength }: { label: string; help: strin
   const [state, action] = useFormState<SettingFormState, FormData>(saveDisplaySettingAction, null);
   return (
     <div className="border-t border-slate-100 pt-4">
-      <form action={action}>
+      {/* Keyed on the stored note: React 18 does not reset a form after an action, so without the
+          key a cleared note would stay in the box and look published. */}
+      <form action={action} key={note ?? ''}>
         <input type="hidden" name="name" value="pricingNote" />
         <label htmlFor="display-pricing-note" className="block text-sm font-semibold text-slate-900">
           {label}

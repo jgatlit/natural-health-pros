@@ -239,7 +239,7 @@ export function ClientsAndReferralsSection({
       {/* A — the list itself (§5.2A) */}
       {rows.length === 0 ? (
         <p className="text-xs text-muted-foreground">
-          No clients yet. Add the ones you already see — it is what keeps their sessions at 0%.
+          No clients yet. Add the ones you already see — it is what keeps their sessions fee-free.
         </p>
       ) : (
         <ul className="space-y-2">

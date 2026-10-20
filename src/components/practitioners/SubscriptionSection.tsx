@@ -176,7 +176,9 @@ export function SubscriptionSection({
       </Badge>
     );
     description = foundingRate
-      ? 'Choose monthly or annual billing for your Plan A listing. Your founding rate is below.'
+      ? showPlanRates
+        ? 'Choose monthly or annual billing for your Plan A listing. Your founding rate is below.'
+        : 'Choose monthly or annual billing for your Plan A listing, at your founding rate.'
       : "Your Plan A subscription isn't active. Subscribe to be listed in directory search. Your profile and everything you've built are safe: nothing is ever deleted.";
     cta = 'choose';
     if (notice === 'success') {
