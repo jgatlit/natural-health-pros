@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { RECRUITER_TOKEN_RE } from './recruiter-cookie';
 import { bookableWhere } from './practitioner-indexer';
+import { formatBpsAsPercent } from './pricing-plans';
 
 /** 16 random bytes as 32 hex chars: URL-safe, unguessable, and the same shape the migration's
  *  backfill (`replace(gen_random_uuid()::text,'-','')`) produces. Never derived from the id. */
@@ -50,9 +51,28 @@ export function joinLinkFor(siteUrl: string, cohortSlug: string, recruiterToken:
   return `${siteUrl}/join/${cohortSlug}?nhpa=${recruiterToken}`;
 }
 
-/** Spec §5 disclosure. Shown only when a recruiter was actually captured. */
-export const RECRUITER_DISCLOSURE =
-  '3% of your clients’ payments through Natural Health Pros goes to the person who brought you in. It comes out of our fee when we take one; when we don’t, it comes out of your payment.';
+/** How many practitioners were recruited by a colleague — the commission-terms disclosure point. */
+export async function countRecruitedPractitioners(db: {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  practitioner: { count(args: any): Promise<number> };
+}): Promise<number> {
+  return db.practitioner.count({ where: { recruitedById: { not: null } } });
+}
+
+/**
+ * Spec §5 disclosure. Shown only when a recruiter was actually captured.
+ *
+ * The share is the `affiliateBps` of the schedule the new practitioner is priced under, passed in by
+ * the caller, never typed here. Null means commission terms are not published
+ * (`show_commission_terms` off), and the notice says only who invited them.
+ */
+export function recruiterDisclosure(affiliateBps: number | null): string {
+  if (affiliateBps === null) return 'You were invited by a colleague on Natural Health Pros.';
+  return (
+    `${formatBpsAsPercent(affiliateBps)} of your clients’ payments through Natural Health Pros goes to the ` +
+    'person who brought you in. It comes out of our fee when we take one; when we don’t, it comes out of your payment.'
+  );
+}
 
 /**
  * THE RECRUITER SEAM FOR THE FEE PATH (spec v1.5 §5) — the ONE place the checkout mint learns who

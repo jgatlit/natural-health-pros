@@ -67,6 +67,7 @@ import { ClientsAndReferralsSection } from '@/components/practitioners/ClientsAn
 import { loadClientList } from '@/lib/client-list';
 import { referralUrl } from '@/lib/referrals';
 import { getPlanAListSchedule, getScheduleForCopy } from '@/lib/rate-schedules';
+import { loadDisplaySettings } from '@/lib/platform-settings';
 import { bookableWhere } from '@/lib/practitioner-indexer';
 import { paymentsLive } from '@/lib/booking-flow';
 import { BookingLinksField } from '@/components/practitioners/BookingLinksField';
@@ -302,7 +303,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
   // Loaded after the block above rather than inside it because `loadClientList` issues its own
   // four scoped reads and the term setting is a fifth; folding them in would make the existing
   // tuple destructuring harder to read for no saving.
-  const [clientRows, referable, copySchedule, billingState, listSchedule] = await Promise.all([
+  const [clientRows, referable, copySchedule, billingState, listSchedule, display] = await Promise.all([
     loadClientList(prisma, practitioner.id),
     // Who this practitioner may refer TO. `bookableWhere()` rather than `listedWhere()`: an
     // unlisted practitioner is absent from directory search but still bookable, so referring to
@@ -320,6 +321,8 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
     ownerBillingState(prisma, practitioner),
     // Words only: the regular Plan A price, struck through beside a lower one.
     getPlanAListSchedule(prisma),
+    // Which figures the admin publishes. Words only; every switch is off until an admin turns it on.
+    loadDisplaySettings(prisma),
   ]);
 
   // A freshly minted referral link, echoed back through the redirect so it can be copied. The
@@ -506,6 +509,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
           referable={referable}
           newReferralLink={newReferralLink}
           referral={comparison.referral}
+          showCommissionTerms={display.showCommissionTerms}
           addAction={addClients.bind(null, params.slug)}
           inviteAction={inviteClients.bind(null, params.slug)}
           referByEmailAction={referClientByEmail.bind(null, params.slug)}
@@ -999,6 +1003,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
           breakEven={comparison.breakEven}
           breakEvenMonthlyLabel={comparison.breakEvenMonthlyLabel}
           referral={comparison.referral}
+          display={display}
           chooseAction={choosePlanAction}
         />
 
@@ -1023,6 +1028,8 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
           annualPriceLabel={annualPlanALabel(copySchedule)}
           annualSavingsLabel={annualPlanASavingsLabel(copySchedule)}
           discount={planADiscount(copySchedule, listSchedule)}
+          showPlanRates={display.showPlanRates}
+          pricingNote={display.pricingNote}
         />
         </div>
         </div>
@@ -1222,7 +1229,11 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
 
         {/* The page's practitioner id only (already authorised above), and only for the profile's own
             owner. Renders nothing unless this practitioner has brought somebody in. */}
-        <RecruitedPractitionersSection practitionerId={practitioner.id} isOwner={isOwner} />
+        <RecruitedPractitionersSection
+          practitionerId={practitioner.id}
+          isOwner={isOwner}
+          showCommissionTerms={display.showCommissionTerms}
+        />
 
         <AccountEmailSection
           // The OWNER's address, deliberately — not session.user.email, which is the VIEWER's

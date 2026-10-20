@@ -457,8 +457,21 @@ describe('referral notices (spec v1.4 §5.5 / R10, operator ruling 7 / R15)', ()
     };
   }
 
+  it('with commission terms unpublished (no row), the referral-booked email states no rate and no term', async () => {
+    mocks.touchFindMany.mockResolvedValue([touch()]);
+
+    await GET(req());
+
+    const text = (mocks.sendEmail.mock.calls[0]?.[0] as { text: string; html: string }).text;
+    const html = (mocks.sendEmail.mock.calls[0]?.[0] as { text: string; html: string }).html;
+    expect(text).toContain('Someone you referred has booked with Dr Y.');
+    expect(text).toContain('terms are being finalised');
+    for (const body of [text, html]) expect(body).not.toMatch(/\d+%|\$\d|\d+ months?/);
+  });
+
   it('tells the referrer their referral booked, and marks the DURABLE column', async () => {
     mocks.touchFindMany.mockResolvedValue([touch()]);
+    mocks.settingFindMany.mockResolvedValue([{ key: 'show_commission_terms', value: 'true' }]);
 
     const res = await GET(req());
     const body = (await res.json()) as { referrals: { sent: number } };

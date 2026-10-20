@@ -4,13 +4,21 @@ import { ArrowLeft } from 'lucide-react';
 
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
-import { loadSettings, SETTING_DEFS } from '@/lib/platform-settings';
+import {
+  DISPLAY_SETTING_DEFS,
+  displayWarnings,
+  loadDisplaySettings,
+  loadSettings,
+  SETTING_DEFS,
+} from '@/lib/platform-settings';
 import { planComparison } from '@/lib/pricing-plans';
 import { getCurrentSchedule } from '@/lib/rate-schedules';
+import { countRecruitedPractitioners } from '@/lib/recruiter';
 import { scheduleNumbers } from '@/lib/rate-schedule';
 
 import { AssignUnassignedForm, MigrateCohortForm, RateScheduleForm } from './RateScheduleForm';
 import { SettingForm } from './SettingForm';
+import { DisplaySettingsCard } from './DisplaySettingsCard';
 import { AffiliateLedgerSection } from './AffiliateLedgerSection';
 import { TransfersNeedingAttention } from './TransfersNeedingAttention';
 
@@ -31,6 +39,15 @@ export default async function CommercialSettingsPage() {
 
   const settings = await loadSettings(prisma);
   const current = await getCurrentSchedule(prisma);
+
+  // The disclosure points for the two display switches: the first booking that carried a fee, and
+  // the first practitioner recruited by a colleague.
+  const [display, feeBearingBookings, recruitedPractitioners] = await Promise.all([
+    loadDisplaySettings(prisma),
+    prisma.bookingFeeSnapshot.count({ where: { applicationFeeUsdCents: { gt: 0 } } }),
+    countRecruitedPractitioners(prisma),
+  ]);
+  const warnings = displayWarnings({ display, feeBearingBookings, recruitedPractitioners });
 
   // Members per schedule: every stored schedule, with how many practitioners are on it.
   const [allSchedules, memberGroups, noSchedule] = await Promise.all([
@@ -108,6 +125,14 @@ export default async function CommercialSettingsPage() {
       )}
 
       <div className="mt-6 space-y-4">
+        <DisplaySettingsCard
+          showPlanRates={display.showPlanRates}
+          showCommissionTerms={display.showCommissionTerms}
+          pricingNote={display.pricingNote}
+          defs={DISPLAY_SETTING_DEFS}
+          warnings={warnings}
+        />
+
         {current && (
           <RateScheduleForm initial={scheduleNumbers(current)} currentLabel={current.label ?? current.id} />
         )}

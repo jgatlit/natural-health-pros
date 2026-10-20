@@ -27,6 +27,7 @@ export const SETTING_KEYS = {
 export type SettingKey = (typeof SETTING_KEYS)[keyof typeof SETTING_KEYS];
 
 type SettingDef = {
+  kind: 'int';
   key: SettingKey;
   /** Admin-facing label — the words in the spec, so the UI and the spec agree. */
   label: string;
@@ -42,6 +43,7 @@ type SettingDef = {
 
 export const SETTING_DEFS: Record<keyof typeof SETTING_KEYS, SettingDef> = {
   referralHoldDays: {
+    kind: 'int',
     key: SETTING_KEYS.referralHoldDays,
     label: 'Referral Hold Period',
     help:
@@ -55,6 +57,95 @@ export const SETTING_DEFS: Record<keyof typeof SETTING_KEYS, SettingDef> = {
     unit: 'days',
   },
 };
+
+/**
+ * WHAT PRACTITIONERS SEE (operator, 2026-10-19). Two switches and a note that decide whether the
+ * plan and commission figures are PUBLISHED on practitioner-facing screens. They change words only:
+ * no fee, rate or term is read from here, and the checkout buttons always show the price.
+ *
+ * ⚠️ BOTH SWITCHES RESOLVE TO OFF WHEN NO ROW EXISTS (operator ruling: off at go-live). There is no
+ * env var and no seeded row on purpose, so "nobody has turned it on" and "off" are the same state.
+ */
+export const DISPLAY_SETTING_KEYS = {
+  showPlanRates: 'show_plan_rates',
+  showCommissionTerms: 'show_commission_terms',
+  pricingNote: 'pricing_note',
+} as const;
+
+export type DisplaySettingName = keyof typeof DISPLAY_SETTING_KEYS;
+
+type BoolSettingDef = {
+  kind: 'bool';
+  key: (typeof DISPLAY_SETTING_KEYS)[DisplaySettingName];
+  label: string;
+  help: string;
+};
+
+type TextSettingDef = {
+  kind: 'text';
+  key: (typeof DISPLAY_SETTING_KEYS)[DisplaySettingName];
+  label: string;
+  help: string;
+  maxLength: number;
+};
+
+export const PRICING_NOTE_MAX_LENGTH = 140;
+
+export const DISPLAY_SETTING_DEFS: {
+  showPlanRates: BoolSettingDef;
+  showCommissionTerms: BoolSettingDef;
+  pricingNote: TextSettingDef;
+} = {
+  showPlanRates: {
+    kind: 'bool',
+    key: DISPLAY_SETTING_KEYS.showPlanRates,
+    label: 'Show plan rates',
+    help:
+      'Off: plan cards describe what is included, with no prices or percentages. On: the prices and ' +
+      'shares from each practitioner’s rate schedule are shown. Checkout buttons always show the price.',
+  },
+  showCommissionTerms: {
+    kind: 'bool',
+    key: DISPLAY_SETTING_KEYS.showCommissionTerms,
+    label: 'Show commission terms',
+    help:
+      'Off: referral and invite tools stay, without percentages, amounts or months, and say terms are ' +
+      'being finalised. On: the referral split and recruiter share from the rate schedule are shown.',
+  },
+  pricingNote: {
+    kind: 'text',
+    key: DISPLAY_SETTING_KEYS.pricingNote,
+    label: 'Pricing note',
+    help:
+      'Optional. When set, plan cards and prices carry an asterisk and this note beneath them, on ' +
+      'onboarding, the edit page and the billing card. Leave empty to show nothing.',
+    maxLength: PRICING_NOTE_MAX_LENGTH,
+  },
+};
+
+export type DisplaySettings = {
+  showPlanRates: boolean;
+  showCommissionTerms: boolean;
+  /** Null when unset or empty: nothing (no asterisk, no note) is rendered. */
+  pricingNote: string | null;
+};
+
+/** Every switch OFF and no note — the state of a database nobody has configured. */
+export const DISPLAY_DEFAULTS: DisplaySettings = {
+  showPlanRates: false,
+  showCommissionTerms: false,
+  pricingNote: null,
+};
+
+/** Only the exact stored string 'true' is on. Anything else, including a malformed row, is off. */
+function parseBool(raw: string | undefined | null): boolean {
+  return raw === 'true';
+}
+
+function normaliseNote(raw: string | undefined | null): string | null {
+  const t = (raw ?? '').replace(/\s+/g, ' ').trim();
+  return t ? t.slice(0, PRICING_NOTE_MAX_LENGTH) : null;
+}
 
 /** STRUCTURAL, not the generated delegate — see the note in attributed-clients.ts. */
 type SettingsDb = {
@@ -166,4 +257,94 @@ export async function saveSetting(
       reason,
     },
   });
+}
+
+/** Resolve the display switches and note. No row means OFF / no note; never an env read. */
+export async function loadDisplaySettings(db: Pick<SettingsDb, 'platformSetting'>): Promise<DisplaySettings> {
+  const rows = await db.platformSetting.findMany({
+    where: { key: { in: Object.values(DISPLAY_SETTING_KEYS) } },
+    select: { key: true, value: true },
+  });
+  const byKey = new Map(rows.map((r) => [r.key, r.value]));
+  return {
+    showPlanRates: parseBool(byKey.get(DISPLAY_SETTING_KEYS.showPlanRates)),
+    showCommissionTerms: parseBool(byKey.get(DISPLAY_SETTING_KEYS.showCommissionTerms)),
+    pricingNote: normaliseNote(byKey.get(DISPLAY_SETTING_KEYS.pricingNote)),
+  };
+}
+
+/**
+ * Write one display setting and log it with the admin, the time and old → new, exactly as
+ * `saveSetting` does. A save that does not change the stored value writes nothing and logs
+ * nothing, so the change history only ever lists real changes. Returns whether a change was made.
+ */
+export async function saveDisplaySetting(
+  db: SettingsDb,
+  input:
+    | { name: 'showPlanRates' | 'showCommissionTerms'; value: boolean; updatedByUserId?: string | null }
+    | { name: 'pricingNote'; value: string; updatedByUserId?: string | null },
+): Promise<{ changed: boolean }> {
+  const def = DISPLAY_SETTING_DEFS[input.name];
+  let value: string;
+  if (def.kind === 'bool') {
+    if (typeof input.value !== 'boolean') throw new Error(`${def.label} must be on or off`);
+    value = input.value ? 'true' : 'false';
+  } else {
+    if (typeof input.value !== 'string') throw new Error(`${def.label} must be text`);
+    value = input.value.replace(/\s+/g, ' ').trim();
+    if (value.length > def.maxLength) {
+      throw new Error(`${def.label} must be ${def.maxLength} characters or fewer (got ${value.length})`);
+    }
+  }
+
+  const previous = await db.platformSetting.findUnique({
+    where: { key: def.key },
+    select: { value: true },
+  });
+  if (previous?.value === value) return { changed: false };
+  // Clearing a note that was never set is not a change either.
+  if (!previous && def.kind === 'text' && value === '') return { changed: false };
+
+  await db.platformSetting.upsert({
+    where: { key: def.key },
+    create: { key: def.key, value, updatedByUserId: input.updatedByUserId ?? null },
+    update: { value, updatedByUserId: input.updatedByUserId ?? null },
+  });
+  await db.platformSettingChange.create({
+    data: {
+      key: def.key,
+      oldValue: previous?.value ?? null,
+      newValue: value,
+      changedByUserId: input.updatedByUserId ?? null,
+      reason: null,
+    },
+  });
+  return { changed: true };
+}
+
+/**
+ * THE DISCLOSURE SAFEGUARD. A switch that is OFF is fine while nothing it hides has happened yet;
+ * the first fee-bearing booking (plan rates) or the first recruited practitioner (commission terms)
+ * is the point at which a practitioner is owed the figures. Returns one message per switch that
+ * should be turned on now.
+ */
+export function displayWarnings(input: {
+  display: Pick<DisplaySettings, 'showPlanRates' | 'showCommissionTerms'>;
+  feeBearingBookings: number;
+  recruitedPractitioners: number;
+}): string[] {
+  const out: string[] = [];
+  if (!input.display.showPlanRates && input.feeBearingBookings > 0) {
+    out.push(
+      `Plan rates are hidden, but ${input.feeBearingBookings} booking${input.feeBearingBookings === 1 ? ' has' : 's have'} ` +
+        'carried a fee. Turn on “Show plan rates” so practitioners can see what they are charged.',
+    );
+  }
+  if (!input.display.showCommissionTerms && input.recruitedPractitioners > 0) {
+    out.push(
+      `Commission terms are hidden, but ${input.recruitedPractitioners} practitioner${input.recruitedPractitioners === 1 ? ' was' : 's were'} ` +
+        'recruited by a colleague. Turn on “Show commission terms” so the recruiter share is disclosed.',
+    );
+  }
+  return out;
 }

@@ -6,6 +6,7 @@ import { CityField } from '@/components/practitioners/CityField';
 import { TermsAcknowledgment } from '@/components/practitioners/TermsAcknowledgment';
 import { PlanTermsSummary } from '@/components/practitioners/PlanTermsSummary';
 import type { PlanCardView } from '@/components/practitioners/PlanChoice';
+import type { DisplaySettings } from '@/lib/platform-settings';
 import { OUTSIDE_WORK_FIELD, OUTSIDE_WORK_HELPER, OUTSIDE_WORK_QUESTION } from '@/lib/outside-work';
 import type { ReferralTermsView } from '@/lib/pricing-plans';
 
@@ -31,7 +32,7 @@ type Props = {
   aliases: { label: string; specialtyId: string }[];
   initialSpecialties: { specialtyId: string; rawLabel: string }[];
   termsAcceptedAt: Date | null;
-  planTerms: { plans: PlanCardView[]; referral: ReferralTermsView };
+  planTerms: { plans: PlanCardView[]; referral: ReferralTermsView; display: DisplaySettings };
   /** Spec §5: shown before plan choice, only when a recruiter was captured. */
   recruiterDisclosure?: string | null;
 };
@@ -190,7 +191,7 @@ export function OnboardingForm({
 
             <PlanTermsSummary {...planTerms} />
 
-            <TermsAcknowledgment acceptedAt={termsAcceptedAt} />
+            <TermsAcknowledgment acceptedAt={termsAcceptedAt} showPlanRates={planTerms.display.showPlanRates} />
 
             <div className="flex flex-col gap-3">
               <OnboardingSubmitButton isPrefilled={isPrefilled} />

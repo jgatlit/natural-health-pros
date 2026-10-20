@@ -58,17 +58,24 @@ export function referralsNeedingClaimNotice<T extends { state: string; notifiedA
  */
 export function referralBookedCopy(input: {
   referredName: string;
-  /** Pre-formatted, so no template renders a percentage a second way. */
-  rateLabel: string;
+  /**
+   * Pre-formatted, so no template renders a percentage a second way. Null when commission terms
+   * are not published (`show_commission_terms` off): the email then states no rate and no term.
+   */
+  rateLabel: string | null;
   termMonths: number;
 }): { subject: string; text: string; html: string } {
   const who = input.referredName;
+  const terms =
+    input.rateLabel === null
+      ? null
+      : `You earn ${input.rateLabel} of what they book with ${who} for ${input.termMonths} months from their first payment.`;
+  const pending = 'Referrals between members are recognised; terms are being finalised.';
   const subject = `Your referral booked with ${who}`;
   const lines = [
     `Someone you referred has booked with ${who}.`,
     '',
-    `You earn ${input.rateLabel} of what they book with ${who} for ${input.termMonths} months from` +
-      ' their first payment.',
+    terms ?? pending,
     '',
     // Says where the money comes from, because it does NOT arrive from us directly — the same
     // question the paid-practitioner notice already had to answer.
@@ -79,9 +86,7 @@ export function referralBookedCopy(input: {
     text: lines.join('\n'),
     html: `<div style="font-family: -apple-system, system-ui, sans-serif; font-size: 15px; line-height: 1.6; color: #1a1a1a;">
 <p>Someone you referred has booked with ${escapeHtml(who)}.</p>
-<p>You earn ${escapeHtml(input.rateLabel)} of what they book with ${escapeHtml(who)} for ${
-      input.termMonths
-    } months from their first payment.</p>
+<p>${escapeHtml(terms ?? pending)}</p>
 <p>Payments reach you through your connected Whop account.</p>
 </div>`,
   };

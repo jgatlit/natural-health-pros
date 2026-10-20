@@ -5,7 +5,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { summarizeAdjustments, summarizeEntries } from '@/lib/affiliate-earnings';
-import { RECRUITER_DISCLOSURE } from '@/lib/recruiter';
+import { recruiterDisclosure } from '@/lib/recruiter';
 
 /* eslint-disable @typescript-eslint/no-explicit-any */
 
@@ -135,11 +135,25 @@ afterEach(() => {
   else process.env[ENV] = savedEnv;
 });
 
-async function section(practitionerId: string, isOwner: boolean) {
+async function section(practitionerId: string, isOwner: boolean, showCommissionTerms = true) {
   const { RecruitedPractitionersSection } = await import('@/components/practitioners/RecruitedPractitionersSection');
-  const el = await RecruitedPractitionersSection({ practitionerId, isOwner, db: state.db });
+  const el = await RecruitedPractitionersSection({ practitionerId, isOwner, showCommissionTerms, db: state.db });
   return el === null ? null : renderToStaticMarkup(el);
 }
+
+describe('"Practitioners you brought in" with commission terms unpublished', () => {
+  it('still lists who joined through the link, and shows no amount, share or rate', async () => {
+    LEDGER = [
+      row({ state: 'ACCRUED', shareUsdCents: 300 }),
+      row({ state: 'SETTLED', shareUsdCents: 1234, transferUsdCents: 1234, grossShareUsdCents: 1234, netPaidUsdCents: 1234 }),
+    ];
+    const html = (await section(R, true, false))!;
+    expect(html).toContain('Practitioners you brought in');
+    expect(html).toContain('Yara Young');
+    expect(html).toContain('Recruiting terms are being finalised');
+    expect(html).not.toMatch(/\$\d|\d+%|affiliate-accrued|affiliate-settled|affiliate-paid/);
+  });
+});
 
 describe('"Practitioners you brought in" — the recruiter’s card', () => {
   it('lists who joined through the link, with join date and whether the profile is published', async () => {
@@ -331,7 +345,7 @@ describe('the RECRUITED practitioner’s dashboard exposes no affiliate amounts 
   it('the edit page reads no ledger itself and no "generated" side: the card is the only route', () => {
     const page = readFileSync(join(__dirname, '..', 'src/app/practitioners/[slug]/edit/page.tsx'), 'utf8');
     expect(page).not.toMatch(/affiliateLedgerEntry|affiliateEntriesGenerated|affiliateEntriesEarned|recruitedPractitionerId/);
-    expect(page).toMatch(/<RecruitedPractitionersSection practitionerId=\{practitioner\.id\} isOwner=\{isOwner\} \/>/);
+    expect(page).toMatch(/<RecruitedPractitionersSection\s+practitionerId=\{practitioner\.id\}\s+isOwner=\{isOwner\}\s+showCommissionTerms=\{display\.showCommissionTerms\}\s+\/>/);
     // and the page never tells a practitioner who recruited them
     expect(page).not.toMatch(/recruitedBy\b|recruitedById/);
   });
@@ -475,7 +489,7 @@ describe('e13: the recruiter disclosure comes before the plan terms and the plan
     };
     let withIt: string | null = null;
     try {
-      withIt = renderToStaticMarkup(h(OnboardingForm, { ...props, recruiterDisclosure: RECRUITER_DISCLOSURE }));
+      withIt = renderToStaticMarkup(h(OnboardingForm, { ...props, recruiterDisclosure: recruiterDisclosure(300) }));
     } catch {
       // The form pulls in client-only widgets that may not server-render in this harness; the
       // source-order test above is then the proof, and the page-level prop test below covers wiring.
@@ -490,8 +504,8 @@ describe('e13: the recruiter disclosure comes before the plan terms and the plan
   });
 
   it('the disclosure names the 3% and who funds it', () => {
-    expect(RECRUITER_DISCLOSURE).toMatch(/3%/);
-    expect(RECRUITER_DISCLOSURE).toMatch(/our fee when we take one/);
-    expect(RECRUITER_DISCLOSURE).toMatch(/comes out of your payment/);
+    expect(recruiterDisclosure(300)).toMatch(/3%/);
+    expect(recruiterDisclosure(300)).toMatch(/our fee when we take one/);
+    expect(recruiterDisclosure(300)).toMatch(/comes out of your payment/);
   });
 });

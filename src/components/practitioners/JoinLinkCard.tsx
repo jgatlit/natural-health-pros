@@ -22,7 +22,7 @@ export function JoinLinkCard({ url }: { url: string }) {
     <Card id="share-signup" className="scroll-mt-24 space-y-2 p-4 sm:p-5">
       <h2 className="text-sm font-semibold">Invite another practitioner</h2>
       <p className="text-xs text-muted-foreground">
-        Share this link with colleagues who want to join Natural Health Pros.
+        Bring the natural health and wellness practitioners you trust onto Natural Health Pros.
       </p>
       <div className="flex items-center gap-2">
         <input

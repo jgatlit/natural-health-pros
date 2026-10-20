@@ -260,3 +260,34 @@ export function effectivePlan(stored: unknown): PlanKey {
   const fallback = process.env.PLAN_DEFAULT;
   return isPlanKey(fallback) ? fallback : 'PLAN_B';
 }
+
+/**
+ * WHAT EACH PLAN INCLUDES, for when plan rates are not published (`show_plan_rates` off). Operator-
+ * approved wording, 2026-10-19. No figure belongs here: the cards switch to these words precisely
+ * so that nothing on them is a price or a share.
+ */
+export const PLAN_VALUE: Record<PlanKey, { kicker: string; points: readonly string[] }> = {
+  PLAN_A: {
+    kicker: 'Listing subscription',
+    points: [
+      'Your profile and directory listing',
+      'Booking on your own calendar, paid through Whop',
+      'Your own and invited clients always fee-free',
+      'A smaller share on clients we send, for a limited time',
+      'Founding-member pricing',
+    ],
+  },
+  PLAN_B: {
+    kicker: 'No subscription',
+    points: [
+      'The same listing and booking tools',
+      'Pay nothing until we send you a client',
+      'A share only on clients we send, for a limited time',
+      'Your own and invited clients always fee-free',
+    ],
+  },
+};
+
+/** Commission terms not published (`show_commission_terms` off): the one line that stands in for them. */
+export const REFERRAL_TERMS_PENDING =
+  'Referrals between members are recognised; terms are being finalised.';

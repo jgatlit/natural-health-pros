@@ -7,7 +7,8 @@ import { isLlmConfigured } from '@/lib/onboarding-draft';
 import { SPECIALTY_ORDER } from '@/lib/practitioner-ordering';
 import { submitOnboarding } from '@/app/practitioners/[slug]/edit/actions';
 import { OnboardingForm } from '@/components/practitioners/OnboardingForm';
-import { newRecruiterToken, recruitedFields, resolveRecruiterId, RECRUITER_DISCLOSURE } from '@/lib/recruiter';
+import { newRecruiterToken, recruitedFields, resolveRecruiterId, recruiterDisclosure } from '@/lib/recruiter';
+import { loadDisplaySettings } from '@/lib/platform-settings';
 import { RECRUITER_COOKIE, verifyRecruiterCookie } from '@/lib/recruiter-cookie';
 import { cohortRedemptionOpen } from '@/lib/join-cohort';
 import { planComparison } from '@/lib/pricing-plans';
@@ -213,9 +214,10 @@ export default async function OnboardingPage({ searchParams }: Props) {
   const action = submitOnboarding.bind(null, practitioner.slug);
   // Words only: the plan cards quote the practitioner's own schedule, or the current one for a
   // practitioner who has none yet. Never used to price anything.
-  const [copySchedule, listSchedule] = await Promise.all([
+  const [copySchedule, listSchedule, display] = await Promise.all([
     getScheduleForCopy(prisma, practitioner.rateScheduleId),
     getPlanAListSchedule(prisma),
+    loadDisplaySettings(prisma),
   ]);
   const comparison = planComparison(copySchedule, listSchedule);
 
@@ -246,8 +248,12 @@ export default async function OnboardingPage({ searchParams }: Props) {
       aliases={approvedAliases}
       initialSpecialties={initialSpecialties}
       termsAcceptedAt={practitioner.user.termsAcceptedAt}
-      recruiterDisclosure={practitioner.recruitedById ? RECRUITER_DISCLOSURE : null}
-      planTerms={{ plans: comparison.cards, referral: comparison.referral }}
+      recruiterDisclosure={
+        practitioner.recruitedById
+          ? recruiterDisclosure(display.showCommissionTerms ? copySchedule.affiliateBps : null)
+          : null
+      }
+      planTerms={{ plans: comparison.cards, referral: comparison.referral, display }}
     />
   );
 }
