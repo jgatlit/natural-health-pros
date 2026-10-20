@@ -17,6 +17,8 @@ type Props = {
   referral: ReferralTermsView;
   /** `show_commission_terms`. Off: the tools stay, and no percentage, amount or month is shown. */
   showCommissionTerms: boolean;
+  /** `show_plan_rates`. Off: an NHP-sourced row says who sourced it, never when the term ends — the date gives away the term length. */
+  showPlanRates: boolean;
   addAction: (formData: FormData) => void | Promise<void>;
   inviteAction: (formData: FormData) => void | Promise<void>;
   referByEmailAction: (formData: FormData) => void | Promise<void>;
@@ -49,6 +51,7 @@ export function ClientsAndReferralsSection({
   newReferralLink,
   referral,
   showCommissionTerms,
+  showPlanRates,
   addAction,
   inviteAction,
   referByEmailAction,
@@ -268,7 +271,9 @@ export function ClientsAndReferralsSection({
                 {row.sourcedBy === 'PRACTITIONER' && <Badge variant="outline">Your client · 0%</Badge>}
                 {row.sourcedBy === 'NHP' && row.termEndsAt && (
                   <Badge variant="outline">
-                    Ours until {row.termEndsAt.toISOString().slice(0, 10)}
+                    {showPlanRates
+                      ? `Ours until ${row.termEndsAt.toISOString().slice(0, 10)}`
+                      : 'Client we sent you'}
                   </Badge>
                 )}
               </div>

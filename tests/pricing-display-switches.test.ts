@@ -60,6 +60,7 @@ import { SubscriptionSection } from '@/components/practitioners/SubscriptionSect
 import { ClientsAndReferralsSection } from '@/components/practitioners/ClientsAndReferralsSection';
 import { TermsAcknowledgment } from '@/components/practitioners/TermsAcknowledgment';
 import type { RateSchedule } from '@/lib/rate-schedule';
+import type { ClientListRow } from '@/lib/client-list';
 import { V1, V1_NUMBERS } from './helpers/rate-schedule';
 
 const FOUNDING: RateSchedule = { id: 'rs_founding', label: 'Founding 2026-10', ...V1_NUMBERS, planAMonthlyCents: 2900, annualDiscountBps: 1408 };
@@ -155,15 +156,20 @@ const billing = (
     }),
   );
 
-const clients = (showCommissionTerms: boolean, newReferralLink: string | null = 'https://x.test/r/abc') =>
+const clients = (
+  showCommissionTerms: boolean,
+  newReferralLink: string | null = 'https://x.test/r/abc',
+  opts: { showPlanRates?: boolean; rows?: ClientListRow[] } = {},
+) =>
   renderToStaticMarkup(
     h(ClientsAndReferralsSection, {
       slug: 'me',
-      rows: [],
+      rows: opts.rows ?? [],
       referable: [{ slug: 'col', displayName: 'A Colleague' }],
       newReferralLink,
       referral: planComparison(V1).referral,
       showCommissionTerms,
+      showPlanRates: opts.showPlanRates ?? false,
       addAction: async () => {},
       inviteAction: async () => {},
       referByEmailAction: async () => {},
@@ -465,5 +471,51 @@ describe('no hardcoded recruiter 3% left in practitioner-facing copy', () => {
     // Comments may name the rule; code may not state it.
     const code = out.split('\n').filter((l) => l && !/^\s*(\/\/|\*|\/\*)/.test(l.split(':').slice(2).join(':')));
     expect(code).toEqual([]);
+  });
+});
+
+describe('Clients & referrals: the NHP-sourced badge never dates the lead term while plan rates are hidden', () => {
+  const TERM_END = new Date('2027-06-10T00:00:00.000Z');
+  const rows: ClientListRow[] = [
+    {
+      email: 'sent@x.test',
+      name: 'Sent Client',
+      addedAt: new Date('2026-10-01T00:00:00.000Z'),
+      source: 'booking',
+      status: 'BOOKED',
+      sourcedBy: 'NHP',
+      termEndsAt: TERM_END,
+      referrals: [],
+    },
+    {
+      email: 'own@x.test',
+      name: 'Own Client',
+      addedAt: new Date('2026-09-01T00:00:00.000Z'),
+      source: 'manual',
+      status: 'BOOKED',
+      sourcedBy: 'PRACTITIONER',
+      termEndsAt: null,
+      referrals: [],
+    },
+  ];
+
+  it('plan rates OFF: "Client we sent you", and the term end appears nowhere in the markup', () => {
+    for (const showCommissionTerms of [false, true]) {
+      const html = clients(showCommissionTerms, null, { showPlanRates: false, rows });
+      expect(text(html)).toContain('Client we sent you');
+      expect(html).not.toContain('Ours until');
+      // Any rendering of the date — ISO, its year-month, or a locale string — would give the term away.
+      expect(html).not.toContain('2027-06-10');
+      expect(html).not.toContain('2027-06');
+      expect(html).not.toMatch(/2027/);
+      expect(text(html)).toContain('Your client · 0%');
+    }
+  });
+
+  it('plan rates ON: unchanged, "Ours until YYYY-MM-DD"', () => {
+    const html = clients(false, null, { showPlanRates: true, rows });
+    expect(text(html)).toContain('Ours until 2027-06-10');
+    expect(html).not.toContain('Client we sent you');
+    expect(text(html)).toContain('Your client · 0%');
   });
 });

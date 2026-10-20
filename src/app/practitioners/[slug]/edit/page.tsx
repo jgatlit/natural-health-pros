@@ -510,6 +510,7 @@ export default async function EditPractitionerPage({ params, searchParams }: Pro
           newReferralLink={newReferralLink}
           referral={comparison.referral}
           showCommissionTerms={display.showCommissionTerms}
+          showPlanRates={display.showPlanRates}
           addAction={addClients.bind(null, params.slug)}
           inviteAction={inviteClients.bind(null, params.slug)}
           referByEmailAction={referClientByEmail.bind(null, params.slug)}
