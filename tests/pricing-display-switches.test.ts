@@ -271,7 +271,7 @@ describe('saveDisplaySettingAction (admin server action)', () => {
   it('the Change history on Commercial settings lists every PlatformSettingChange with who, when, old → new', () => {
     const page = readFileSync(join(__dirname, '..', 'src/app/admin/commercial-settings/page.tsx'), 'utf8');
     expect(page).toMatch(/platformSettingChange\.findMany/);
-    expect(page).toMatch(/c\.changedAt[\s\S]*c\.key[\s\S]*c\.oldValue \?\? '\(unset\)'[\s\S]*c\.newValue \|\| '\(empty\)'[\s\S]*c\.changedByUserId/);
+    expect(page).toMatch(/c\.changedAt[\s\S]*c\.key[\s\S]*c\.oldValue === null \? '\(unset\)' : c\.oldValue \|\| '\(empty\)'[\s\S]*c\.newValue \|\| '\(empty\)'[\s\S]*c\.changedByUserId/);
     expect(page).toMatch(/<DisplaySettingsCard/);
   });
 });
