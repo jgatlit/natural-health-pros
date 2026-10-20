@@ -4,6 +4,7 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { PendingButton } from './PendingButton';
 import { StrikePrice } from './StrikePrice';
+import { NoteMark, PricingNoteLine } from './PricingNote';
 import type { PlanADiscountView } from '@/lib/pricing-plans';
 
 type Props = {
@@ -57,6 +58,13 @@ type Props = {
    * choices are hidden so the payer is not invited to buy twice. `error`: checkout could not open.
    */
   notice?: 'success' | 'error' | null;
+  /**
+   * `show_plan_rates`. Off: the card's descriptions and price rows carry no figures. The checkout
+   * BUTTONS keep their price either way: a practitioner always sees what they pay where they pay it.
+   */
+  showPlanRates: boolean;
+  /** `pricing_note`: an asterisk on the plan title and the note beneath, or nothing when null. */
+  pricingNote: string | null;
 };
 
 /**
@@ -88,6 +96,8 @@ export function SubscriptionSection({
   annualSavingsLabel,
   discount = null,
   notice = null,
+  showPlanRates,
+  pricingNote,
 }: Props) {
   let title = plan === 'PLAN_A' ? 'Plan A · Listing' : 'Plan B · No monthly fee';
   let badge: React.ReactNode;
@@ -117,9 +127,10 @@ export function SubscriptionSection({
         Active
       </Badge>
     );
+    const subscription = showPlanRates ? `${activeLabel} listing subscription` : `${interval === 'annual' ? 'annual' : 'monthly'} listing subscription`;
     description = visible
-      ? `Your ${activeLabel} listing subscription is active — you appear in directory search.`
-      : `Your ${activeLabel} listing subscription is active. Complete your profile above to appear in directory search.`;
+      ? `Your ${subscription} is active — you appear in directory search.`
+      : `Your ${subscription} is active. Complete your profile above to appear in directory search.`;
   } else if (status === 'PAST_DUE') {
     title = activeTitle;
     badge = (
@@ -150,7 +161,9 @@ export function SubscriptionSection({
     // "Billing hasn't started" is the one question every practitioner asks first, and Sarah
     // Schindler flagged having to explain it aloud each time. It states the fact and the promise;
     // how the start date is arrived at is managed on the backend and is not authored here.
-    description = `Billing hasn't started for Plan A (${priceLabel}). You'll be told before it does.`;
+    description = showPlanRates
+      ? `Billing hasn't started for Plan A (${priceLabel}). You'll be told before it does.`
+      : "Billing hasn't started for Plan A. You'll be told before it does.";
   } else {
     badge = foundingRate ? (
       <Badge variant="secondary" className="gap-1 text-[10px] uppercase tracking-wider">
@@ -163,7 +176,9 @@ export function SubscriptionSection({
       </Badge>
     );
     description = foundingRate
-      ? 'Choose monthly or annual billing for your Plan A listing. Your founding rate is below.'
+      ? showPlanRates
+        ? 'Choose monthly or annual billing for your Plan A listing. Your founding rate is below.'
+        : 'Choose monthly or annual billing for your Plan A listing, at your founding rate.'
       : "Your Plan A subscription isn't active. Subscribe to be listed in directory search. Your profile and everything you've built are safe: nothing is ever deleted.";
     cta = 'choose';
     if (notice === 'success') {
@@ -217,7 +232,10 @@ export function SubscriptionSection({
         </span>
         <div className="flex-1">
           <div className="flex items-center justify-between gap-2">
-            <h2 className="text-sm font-semibold">{title}</h2>
+            <h2 className="text-sm font-semibold">
+              {title}
+              <NoteMark note={pricingNote} />
+            </h2>
             {badge}
           </div>
           <p className="mt-0.5 text-xs text-muted-foreground">{description}</p>
@@ -236,21 +254,29 @@ export function SubscriptionSection({
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="space-y-2 rounded-md border p-4">
               <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Monthly</p>
-              <p className="text-lg font-semibold">
-                <StrikePrice listLabel={discount?.monthlyListLabel} priceLabel={priceLabel} />
-              </p>
-              {discount && <p className="text-xs font-medium text-muted-foreground">{discount.monthlySavingsLabel}</p>}
+              {showPlanRates && (
+                <>
+                  <p className="text-lg font-semibold">
+                    <StrikePrice listLabel={discount?.monthlyListLabel} priceLabel={priceLabel} />
+                  </p>
+                  {discount && <p className="text-xs font-medium text-muted-foreground">{discount.monthlySavingsLabel}</p>}
+                </>
+              )}
               {checkoutButton(monthlyAction, `Pay monthly · ${priceLabel}`, 'monthly')}
             </div>
             <div className="space-y-2 rounded-md border p-4">
               <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">Annual</p>
-              <p className="text-lg font-semibold">
-                <StrikePrice listLabel={discount?.annualListLabel} priceLabel={annualPriceLabel} />
-              </p>
-              {(discount?.annualSavingsLabel || annualSavingsLabel) && (
-                <p className="text-xs font-medium text-muted-foreground">
-                  {[discount?.annualSavingsLabel, annualSavingsLabel].filter(Boolean).join(' · ')}
-                </p>
+              {showPlanRates && (
+                <>
+                  <p className="text-lg font-semibold">
+                    <StrikePrice listLabel={discount?.annualListLabel} priceLabel={annualPriceLabel} />
+                  </p>
+                  {(discount?.annualSavingsLabel || annualSavingsLabel) && (
+                    <p className="text-xs font-medium text-muted-foreground">
+                      {[discount?.annualSavingsLabel, annualSavingsLabel].filter(Boolean).join(' · ')}
+                    </p>
+                  )}
+                </>
               )}
               {checkoutButton(annualAction, `Pay annually · ${annualPriceLabel}`, 'annual')}
             </div>
@@ -264,6 +290,8 @@ export function SubscriptionSection({
           {checkoutButton(interval === 'annual' ? annualAction : monthlyAction, 'Update payment', 'update')}
         </>
       )}
+
+      <PricingNoteLine note={pricingNote} />
     </Card>
   );
 }

@@ -54,6 +54,8 @@ describe('SubscriptionSection is plan-aware', () => {
     priceLabel: '$X/mo',
     annualPriceLabel: '$Y/yr',
     annualSavingsLabel: 'Save $Z vs monthly',
+    showPlanRates: true,
+    pricingNote: null,
   } as const;
 
   it('never asks a Plan B practitioner to subscribe, whether or not billing is open', () => {

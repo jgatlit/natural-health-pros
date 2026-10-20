@@ -5,7 +5,13 @@ import { redirect } from 'next/navigation';
 
 import { auth } from '@/auth';
 import { prisma } from '@/lib/prisma';
-import { saveSetting, SETTING_DEFS } from '@/lib/platform-settings';
+import {
+  DISPLAY_SETTING_DEFS,
+  saveDisplaySetting,
+  saveSetting,
+  SETTING_DEFS,
+  type DisplaySettingName,
+} from '@/lib/platform-settings';
 import {
   parseScheduleForm,
   RateScheduleInvariantError,
@@ -77,6 +83,48 @@ export async function saveCommercialSetting(
     ok: true,
     message: `${def.label} is now ${value} ${def.unit}. This applies to new ledger rows only — existing ones keep the hold they were created under.`,
   };
+}
+
+const DISPLAY_SAVEABLE: readonly DisplaySettingName[] = ['showPlanRates', 'showCommissionTerms', 'pricingNote'];
+
+/**
+ * "WHAT PRACTITIONERS SEE" — turn a display switch on or off, or set or clear the pricing note.
+ * Admin-only, and every real change is logged (who, when, old → new) by `saveDisplaySetting`.
+ * Words only: no rate, fee or term moves, so it needs no reason and applies on the next page load.
+ */
+export async function saveDisplaySettingAction(
+  _prev: SettingFormState,
+  formData: FormData,
+): Promise<SettingFormState> {
+  const session = await authorizeAdmin();
+
+  const name = String(formData.get('name') ?? '');
+  if (!(DISPLAY_SAVEABLE as readonly string[]).includes(name)) {
+    return { ok: false, message: 'Unknown setting.' };
+  }
+  const settingName = name as DisplaySettingName;
+  const def = DISPLAY_SETTING_DEFS[settingName];
+  const raw = String(formData.get('value') ?? '');
+  const updatedByUserId = session.user.id ?? null;
+
+  let result: { changed: boolean };
+  try {
+    if (settingName === 'pricingNote') {
+      result = await saveDisplaySetting(prisma, { name: settingName, value: raw, updatedByUserId });
+    } else {
+      if (raw !== 'on' && raw !== 'off') return { ok: false, message: `${def.label} must be on or off.` };
+      result = await saveDisplaySetting(prisma, { name: settingName, value: raw === 'on', updatedByUserId });
+    }
+  } catch (err) {
+    return { ok: false, message: err instanceof Error ? err.message : 'Could not save.' };
+  }
+
+  revalidatePath('/admin/commercial-settings');
+  if (!result.changed) return { ok: true, message: `${def.label} is unchanged.` };
+  if (settingName === 'pricingNote') {
+    return { ok: true, message: raw.trim() ? 'Pricing note saved. It shows on every plan surface now.' : 'Pricing note cleared.' };
+  }
+  return { ok: true, message: `${def.label} is now ${raw}.` };
 }
 
 /**

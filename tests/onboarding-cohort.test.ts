@@ -21,6 +21,7 @@ const m = vi.hoisted(() => ({
   recruiterRows: {} as Record<string, { id: string; userId: string; archivedAt: Date | null }>,
   /** The schedule `current_rate_schedule_id` points at; null = none configured. */
   currentScheduleId: 'rs_go_forward_2026_10' as string | null,
+  displayRows: [] as Array<{ key: string; value: string }>,
   enabledCohort: { slug: 'hhe' } as { slug: string } | null,
   create: vi.fn(),
   findFirst: vi.fn(),
@@ -36,7 +37,8 @@ vi.mock('next/headers', () => ({ cookies: () => ({ get: () => (m.cookie ? { valu
 vi.mock('@/auth', () => ({ auth: async () => m.session }));
 vi.mock('@/lib/practitioner-indexer', () => ({ indexPractitioner: async () => undefined }));
 vi.mock('@/lib/onboarding-draft', () => ({ isLlmConfigured: () => false }));
-vi.mock('@/lib/pricing-plans', () => ({
+vi.mock('@/lib/pricing-plans', async (orig) => ({
+  ...(await orig<typeof import('@/lib/pricing-plans')>()),
   planComparison: () => ({ cards: [], referral: {} }),
 }));
 vi.mock('@/app/practitioners/[slug]/edit/actions', () => ({ submitOnboarding: () => undefined }));
@@ -76,6 +78,7 @@ vi.mock('@/lib/prisma', () => ({
     // The REAL rate-schedules lib runs against these (spec v1.5 §2): current id, then the row.
     platformSetting: {
       findUnique: async () => (m.currentScheduleId ? { value: m.currentScheduleId } : null),
+      findMany: async () => m.displayRows,
     },
     rateSchedule: {
       findUnique: async (a: { where: { id: string } }) =>
@@ -116,6 +119,7 @@ beforeEach(() => {
   m.findFirst.mockReset();
   m.cookie = undefined;
   m.currentScheduleId = V1.id;
+  m.displayRows = [];
   m.existingPractitioner = null;
   m.enabledCohort = { slug: 'hhe' };
   m.session = { user: { id: 'victim-user', email: 'victim@x.com', name: 'Victim' } };
@@ -174,7 +178,7 @@ describe('recruiter comes from the redeemer browser, not the requester', () => {
     const el = (await render()) as unknown as { props: { recruiterDisclosure: string | null } };
     expect(m.create).not.toHaveBeenCalled();
     expect(m.findFirst).not.toHaveBeenCalled(); // the second token is not even looked up
-    expect(el.props.recruiterDisclosure).toMatch(/brought you in/); // still the first recruiter's practitioner
+    expect(el.props.recruiterDisclosure).toMatch(/invited by a colleague/); // still the first recruiter's practitioner
   });
 
   it('a practitioner who signed up with NO recruiter cannot be recruited afterwards by a later link', async () => {
@@ -185,7 +189,14 @@ describe('recruiter comes from the redeemer browser, not the requester', () => {
     expect(el.props.recruiterDisclosure).toBeNull();
   });
 
+  it('commission terms unpublished (no row): a recruited sign-up is told a colleague invited them, with no figure', async () => {
+    m.cookie = await signRecruiterCookie(REAL, Date.now(), SECRET);
+    const recruited = (await render()) as unknown as { props: { recruiterDisclosure: string | null } };
+    expect(recruited.props.recruiterDisclosure).toBe('You were invited by a colleague on Natural Health Pros.');
+  });
+
   it('e13: a recruited sign-up is handed the 3% disclosure for the form; an unrecruited one is not', async () => {
+    m.displayRows = [{ key: 'show_commission_terms', value: 'true' }];
     m.cookie = await signRecruiterCookie(REAL, Date.now(), SECRET);
     const recruited = (await render()) as unknown as { props: { recruiterDisclosure: string | null } };
     expect(recruited.props.recruiterDisclosure).toMatch(/3%/);

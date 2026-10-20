@@ -14,7 +14,14 @@ import { CheckCircle2, FileText } from 'lucide-react';
  * confirmation line instead of the checkbox, so revisiting /onboarding before finishing their
  * profile does not force re-reading the whole document to save progress.
  */
-export function TermsAcknowledgment({ acceptedAt }: { acceptedAt: Date | null }) {
+export function TermsAcknowledgment({
+  acceptedAt,
+  showPlanRates,
+}: {
+  acceptedAt: Date | null;
+  /** `show_plan_rates`. Off: §7 says the rates are confirmed before any share applies. */
+  showPlanRates: boolean;
+}) {
   if (acceptedAt) {
     return (
       <div className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2 text-xs text-muted-foreground">
@@ -42,7 +49,7 @@ export function TermsAcknowledgment({ acceptedAt }: { acceptedAt: Date | null })
       </div>
 
       <div className="max-h-64 overflow-y-auto rounded-md border bg-card p-4 text-xs leading-relaxed text-muted-foreground">
-        <TermsBody />
+        <TermsBody showPlanRates={showPlanRates} />
       </div>
 
       <label className="flex items-start gap-2 text-xs">
@@ -64,7 +71,7 @@ export function TermsAcknowledgment({ acceptedAt }: { acceptedAt: Date | null })
  * Verbatim from the approved draft — do not paraphrase or summarize. Section numbers and
  * bracketed gaps are part of the source document; keep them exactly as written there.
  */
-function TermsBody() {
+function TermsBody({ showPlanRates }: { showPlanRates: boolean }) {
   return (
     <div className="space-y-3">
       <Section n={1} title="Acceptance">
@@ -125,9 +132,11 @@ function TermsBody() {
 
       <Section n={7} title="Fees and subscription">
         Each practitioner chooses Plan A (a monthly fee and a smaller share of sessions with clients
-        Natural Health Pros sends you) or Plan B (no monthly fee and a larger share). The current
-        rates, and how long the share applies from each client&apos;s first payment, are shown in
-        the summary above and again when you choose a plan; you can switch plans later. Sessions
+        Natural Health Pros sends you) or Plan B (no monthly fee and a larger share).{' '}
+        {showPlanRates
+          ? 'The current rates, and how long the share applies from each client’s first payment, are shown in the summary above and again when you choose a plan; you can switch plans later.'
+          : 'The current rates, and how long the share applies from each client’s first payment, are confirmed to you before any share applies; you can switch plans later.'}{' '}
+        Sessions
         with clients on your own list, or whom you invite, carry no share on either plan.
         Subscriptions may be canceled at any time; your profile is never deleted, only unlisted or
         archived.

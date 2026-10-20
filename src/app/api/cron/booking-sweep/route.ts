@@ -5,6 +5,7 @@ import { sendEmail } from '@/lib/email';
 import { SITE_URL } from '@/lib/site';
 import { paymentsLive } from '@/lib/booking-flow';
 import { referralTermsView } from '@/lib/pricing-plans';
+import { loadDisplaySettings } from '@/lib/platform-settings';
 import { getScheduleForCopy } from '@/lib/rate-schedules';
 import {
   referralBookedCopy,
@@ -458,11 +459,12 @@ export async function GET(request: Request): Promise<NextResponse> {
         const referral = referralTermsView(
           await getScheduleForCopy(prisma, touch.referral?.referred?.rateScheduleId),
         );
+        const { showCommissionTerms } = await loadDisplaySettings(prisma);
         await sendEmail({
           to,
           ...referralBookedCopy({
             referredName,
-            rateLabel: referral.referrerRateLabel,
+            rateLabel: showCommissionTerms ? referral.referrerRateLabel : null,
             termMonths: referral.referrerTermMonths,
           }),
           idempotencyKey: `referral-booked/${touch.id}`,

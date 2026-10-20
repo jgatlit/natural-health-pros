@@ -35,10 +35,17 @@ const joined = (d: Date | null) =>
 export async function RecruitedPractitionersSection({
   practitionerId,
   isOwner,
+  showCommissionTerms,
   db = prisma as unknown as EarningsDb,
 }: {
   practitionerId: string;
   isOwner: boolean;
+  /**
+   * `show_commission_terms`. Off: the colleagues they brought in are listed, with no amounts. The
+   * admin is warned on Commercial settings once the first recruit exists, so this is not expected
+   * to hide money that is actually owed for long.
+   */
+  showCommissionTerms: boolean;
   db?: EarningsDb;
 }) {
   if (!isOwner) return null;
@@ -52,6 +59,12 @@ export async function RecruitedPractitionersSection({
   return (
     <Card id="brought-in" className="scroll-mt-24 space-y-3 p-4 sm:p-5">
       <h2 className="text-sm font-semibold">Practitioners you brought in</h2>
+      {!showCommissionTerms ? (
+        <p className="text-xs text-muted-foreground">
+          Colleagues who joined Natural Health Pros with your link. Recruiting terms are being finalised.
+        </p>
+      ) : (
+      <>
       <p className="text-xs text-muted-foreground">
         You earn an affiliate share of the client payments that go through Natural Health Pros for each
         practitioner who joined with your link.
@@ -131,6 +144,8 @@ export async function RecruitedPractitionersSection({
             </dd>
           </div>
         </dl>
+      )}
+      </>
       )}
 
       {earnings.recruits.length > 0 && (

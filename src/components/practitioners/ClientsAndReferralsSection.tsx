@@ -3,7 +3,7 @@ import { Card } from '@/components/ui/card';
 import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import type { ClientListRow } from '@/lib/client-list';
-import type { ReferralTermsView } from '@/lib/pricing-plans';
+import { REFERRAL_TERMS_PENDING, type ReferralTermsView } from '@/lib/pricing-plans';
 
 export type ReferablePractitioner = { slug: string; displayName: string };
 
@@ -15,6 +15,8 @@ type Props = {
   newReferralLink: string | null;
   /** Pre-rendered copy for the disclosure, so no component formats a percentage a second way. */
   referral: ReferralTermsView;
+  /** `show_commission_terms`. Off: the tools stay, and no percentage, amount or month is shown. */
+  showCommissionTerms: boolean;
   addAction: (formData: FormData) => void | Promise<void>;
   inviteAction: (formData: FormData) => void | Promise<void>;
   referByEmailAction: (formData: FormData) => void | Promise<void>;
@@ -46,6 +48,7 @@ export function ClientsAndReferralsSection({
   referable,
   newReferralLink,
   referral,
+  showCommissionTerms,
   addAction,
   inviteAction,
   referByEmailAction,
@@ -117,10 +120,17 @@ export function ClientsAndReferralsSection({
       <div className="space-y-3">
         <div className="space-y-1">
           <h3 className="text-xs font-semibold">Refer a client to another practitioner</h3>
-          <p className="text-xs text-muted-foreground">
-            Earn {referral.referrerRateLabel} of what they book with that practitioner for{' '}
-            {referral.referrerTermMonths} months from that client&rsquo;s first payment. Your share is credited to your Whop balance as each client payment clears; withdrawing from your Whop balance is subject to Whop&apos;s own terms.
-          </p>
+          {showCommissionTerms ? (
+            <p className="text-xs text-muted-foreground">
+              Earn {referral.referrerRateLabel} of what they book with that practitioner for{' '}
+              {referral.referrerTermMonths} months from that client&rsquo;s first payment. Your share is credited to your Whop balance as each client payment clears; withdrawing from your Whop balance is subject to Whop&apos;s own terms.
+            </p>
+          ) : (
+            <p className="text-xs text-muted-foreground">
+              Refer a client to a colleague — when someone would be better served by another
+              practitioner here, send them over in a couple of clicks. {REFERRAL_TERMS_PENDING}
+            </p>
+          )}
         </div>
 
         {referable.length === 0 ? (
@@ -205,7 +215,7 @@ export function ClientsAndReferralsSection({
               className="w-full rounded border bg-background px-2 py-1 font-mono text-xs"
             />
             <p className="text-xs text-muted-foreground">
-              Valid for {referral.termMonths} months. Anyone who opens it and books counts as your referral.
+              {showCommissionTerms && `Valid for ${referral.termMonths} months. `}Anyone who opens it and books counts as your referral.
             </p>
           </div>
         )}
@@ -213,13 +223,15 @@ export function ClientsAndReferralsSection({
         {/* REQUIRED DISCLOSURE (spec §8.1). Stated on the screen where referrals are MADE, because
             a practitioner referring someone should know what it costs the practitioner receiving
             them — it is the same arrangement seen from the other side. */}
-        <p className="text-xs text-muted-foreground">
-          When another practitioner refers a client to you, {referral.referralTotalLabel} of those
-          sessions is taken for the first {referral.referrerTermMonths} months from that
-          client&rsquo;s first payment, on either plan: {referral.referrerRateLabel} goes to them and{' '}
-          {referral.nhpReferralRateLabel} to Natural Health Pros. After that your plan&rsquo;s rate
-          applies until month {referral.termMonths}.
-        </p>
+        {showCommissionTerms && (
+          <p className="text-xs text-muted-foreground">
+            When another practitioner refers a client to you, {referral.referralTotalLabel} of those
+            sessions is taken for the first {referral.referrerTermMonths} months from that
+            client&rsquo;s first payment, on either plan: {referral.referrerRateLabel} goes to them and{' '}
+            {referral.nhpReferralRateLabel} to Natural Health Pros. After that your plan&rsquo;s rate
+            applies until month {referral.termMonths}.
+          </p>
+        )}
       </div>
 
       <Separator />
@@ -227,7 +239,7 @@ export function ClientsAndReferralsSection({
       {/* A — the list itself (§5.2A) */}
       {rows.length === 0 ? (
         <p className="text-xs text-muted-foreground">
-          No clients yet. Add the ones you already see — it is what keeps their sessions at 0%.
+          No clients yet. Add the ones you already see — it is what keeps their sessions fee-free.
         </p>
       ) : (
         <ul className="space-y-2">

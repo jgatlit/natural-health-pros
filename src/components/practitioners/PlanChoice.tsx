@@ -3,7 +3,9 @@ import { Badge } from '@/components/ui/badge';
 import { CheckCircle2 } from 'lucide-react';
 import { PendingButton } from './PendingButton';
 import { StrikePrice } from './StrikePrice';
-import type { ReferralTermsView } from '@/lib/pricing-plans';
+import { NoteMark, PricingNoteLine } from './PricingNote';
+import { PLAN_VALUE, REFERRAL_TERMS_PENDING, type ReferralTermsView } from '@/lib/pricing-plans';
+import type { DisplaySettings } from '@/lib/platform-settings';
 
 export type PlanCardView = {
   key: 'PLAN_A' | 'PLAN_B';
@@ -29,6 +31,8 @@ type Props = {
   breakEvenMonthlyLabel: string;
   /** The terms and referral split, generated from the practitioner's rate schedule (§8.1). */
   referral: ReferralTermsView;
+  /** What the admin has chosen to publish (/admin/commercial-settings → "What practitioners see"). */
+  display: DisplaySettings;
   chooseAction: (formData: FormData) => void | Promise<void>;
 };
 
@@ -46,6 +50,10 @@ type Props = {
  *
  * Every number comes from src/lib/pricing-plans.ts. No price is ever written into this file: the
  * figures are still Amy's decision and are expected to change before launch.
+ *
+ * With plan rates unpublished (`display.showPlanRates` false) the cards describe what each plan
+ * includes, and the cost table and break-even line are not rendered at all. With commission terms
+ * unpublished the referral disclosure states that terms are being finalised instead of the split.
  */
 export function PlanChoice({
   chosen,
@@ -53,9 +61,11 @@ export function PlanChoice({
   breakEven,
   breakEvenMonthlyLabel,
   referral,
+  display,
   chooseAction,
 }: Props) {
   const { termMonths } = referral;
+  const { showPlanRates, showCommissionTerms, pricingNote } = display;
   return (
     <div className="space-y-3">
       <div className="flex items-center justify-between gap-2">
@@ -70,8 +80,8 @@ export function PlanChoice({
       </div>
 
       <p className="text-xs text-muted-foreground">
-        Clients on your own list, and anyone you invite, are <strong>always 0%</strong> on either
-        plan.
+        Clients on your own list, and anyone you invite, are{' '}
+        <strong>{showPlanRates ? 'always 0%' : 'always fee-free'}</strong> on either plan.
       </p>
 
       <div className="grid gap-3 sm:grid-cols-2">
@@ -83,12 +93,20 @@ export function PlanChoice({
               className={`flex flex-col gap-3 p-4 ${isChosen ? 'border-primary' : ''}`}
             >
               <div className="flex items-center justify-between gap-2">
-                <span className="text-sm font-semibold">{plan.label}</span>
+                <span className="text-sm font-semibold">
+                  {plan.label}
+                  <NoteMark note={pricingNote} />
+                  {!showPlanRates && (
+                    <span className="font-normal text-muted-foreground"> · {PLAN_VALUE[plan.key].kicker}</span>
+                  )}
+                </span>
                 {isChosen && (
                   <CheckCircle2 className="h-4 w-4 text-primary" aria-label="Current plan" />
                 )}
               </div>
 
+              {showPlanRates ? (
+              <>
               <dl className="space-y-1 text-xs">
                 <div className="flex justify-between gap-2">
                   <dt className="text-muted-foreground">Monthly</dt>
@@ -130,6 +148,14 @@ export function PlanChoice({
               <p className="text-[11px] text-muted-foreground">
                 The {termMonths} months run from each client&rsquo;s first payment to you.
               </p>
+              </>
+              ) : (
+                <ul className="list-disc space-y-1 pl-4 text-xs" data-testid="plan-value-points">
+                  {PLAN_VALUE[plan.key].points.map((point) => (
+                    <li key={point}>{point}</li>
+                  ))}
+                </ul>
+              )}
 
               <p className="text-xs text-muted-foreground">{plan.suits}</p>
 
@@ -155,6 +181,8 @@ export function PlanChoice({
           and it belongs where the decision is made rather than in a sales email. Rendered as a
           table of real volumes instead of a slider: it needs no client JavaScript, it prints, and
           it cannot disagree with the cards above because every figure comes from the same config. */}
+      {showPlanRates && (
+      <>
       <Card className="p-4">
         <p className="text-xs font-medium">What each plan would cost you</p>
         <p className="mt-0.5 text-[11px] text-muted-foreground">
@@ -189,10 +217,15 @@ export function PlanChoice({
         {plans[0]?.label} is the better deal once clients we send you bring in more than about{' '}
         <strong>{breakEvenMonthlyLabel} a month</strong>.
       </p>
+      </>
+      )}
+
+      <PricingNoteLine note={pricingNote} />
 
       {/* REQUIRED DISCLOSURE (§8.1). It sits with the plan choice because it is the one cost that
           does NOT depend on which plan you pick — a practitioner comparing the two cards above
           would otherwise reasonably conclude referred clients are cheaper on one of them. */}
+      {showCommissionTerms ? (
       <p className="text-[11px] text-muted-foreground">
         When another practitioner refers a client to you, {referral.referralTotalLabel} of those
         sessions is taken for the first {referral.referrerTermMonths} months from that
@@ -201,6 +234,12 @@ export function PlanChoice({
         applies until month {termMonths}. The same {referral.referrerRateLabel} is what you earn
         when you refer a client out.
       </p>
+      ) : (
+        <p className="text-[11px] text-muted-foreground">
+          Members refer clients to each other. {REFERRAL_TERMS_PENDING} What applies is confirmed to
+          you before any share is taken.
+        </p>
+      )}
 
       <p className="text-[11px] text-muted-foreground">
         You can switch plans later from this page. Both plans need a connected Whop account —

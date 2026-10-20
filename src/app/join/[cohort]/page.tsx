@@ -11,7 +11,9 @@ import {
   RECRUITER_TOKEN_RE,
   verifyRecruiterCookie,
 } from '@/lib/recruiter-cookie';
-import { RECRUITER_DISCLOSURE } from '@/lib/recruiter';
+import { recruiterDisclosure } from '@/lib/recruiter';
+import { loadDisplaySettings } from '@/lib/platform-settings';
+import { getCurrentSchedule } from '@/lib/rate-schedules';
 import { issueFormStamp, turnstileSiteKey } from '@/lib/bot-guard';
 import { BotGuardFields } from '@/components/auth/BotGuardFields';
 import { requestJoin } from './actions';
@@ -70,6 +72,16 @@ export default async function JoinPage({ params, searchParams }: Props) {
       })
     : null;
 
+  // The share a new sign-up is priced under is the CURRENT schedule's (they are assigned it at
+  // sign-up). Words only. With commission terms unpublished, or no schedule to quote, the notice
+  // says only that a colleague invited them.
+  let disclosure: string | null = null;
+  if (recruiter) {
+    const display = await loadDisplaySettings(prisma);
+    const schedule = display.showCommissionTerms ? await getCurrentSchedule(prisma) : null;
+    disclosure = recruiterDisclosure(schedule ? schedule.affiliateBps : null);
+  }
+
   const error = searchParams.error ? ERRORS[searchParams.error] : undefined;
   const sent = searchParams.sent === '1';
 
@@ -84,9 +96,9 @@ export default async function JoinPage({ params, searchParams }: Props) {
             </p>
           </div>
 
-          {recruiter && (
+          {disclosure && (
             <div className="rounded-md border border-primary/40 bg-primary/10 px-3 py-2 text-xs">
-              {RECRUITER_DISCLOSURE}
+              {disclosure}
             </div>
           )}
 

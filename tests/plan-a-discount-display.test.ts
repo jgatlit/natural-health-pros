@@ -112,6 +112,8 @@ const billingProps = (schedule: RateSchedule, list: RateSchedule | null) => ({
   annualPriceLabel: annualPlanALabel(schedule),
   annualSavingsLabel: annualPlanASavingsLabel(schedule),
   discount: planADiscount(schedule, list),
+  showPlanRates: true,
+  pricingNote: null,
 });
 
 const text = (html: string) => html.replace(/<[^>]+>/g, '');
@@ -149,13 +151,14 @@ describe('plan cards (edit page) and plan summary (onboarding)', () => {
         breakEven: c.breakEven,
         breakEvenMonthlyLabel: c.breakEvenMonthlyLabel,
         referral: c.referral,
+        display: { showPlanRates: true, showCommissionTerms: true, pricingNote: null },
         chooseAction: async () => {},
       }),
     );
   };
   const summary = (list: RateSchedule | null) => {
     const c = planComparison(FOUNDING, list);
-    return renderToStaticMarkup(h(PlanTermsSummary, { plans: c.cards, referral: c.referral }));
+    return renderToStaticMarkup(h(PlanTermsSummary, { plans: c.cards, referral: c.referral, display: { showPlanRates: true, showCommissionTerms: true, pricingNote: null } }));
   };
 
   it('struck-through $39 next to $29/mo · Founding rate', () => {

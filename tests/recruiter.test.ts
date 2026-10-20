@@ -15,7 +15,7 @@ import {
   resolveRecruiterId,
   recruitedFields,
   joinLinkFor,
-  RECRUITER_DISCLOSURE,
+  recruiterDisclosure,
 } from '@/lib/recruiter';
 import { ensureCohortInvitation, COHORT_SLUG_RE } from '@/lib/join-cohort';
 import { signupProgress } from '@/lib/signup-progress';
@@ -207,8 +207,10 @@ describe('join page and action source invariants', () => {
 
   it('disclosure appears only for a resolved recruiter', () => {
     const src = read('src/app/join/[cohort]/page.tsx');
-    expect(src).toMatch(/\{recruiter && \(/);
-    expect(RECRUITER_DISCLOSURE).toMatch(/3%/);
+    expect(src).toMatch(/if \(recruiter\) \{/);
+    expect(src).toMatch(/\{disclosure && \(/);
+    expect(recruiterDisclosure(300)).toMatch(/3%/);
+    expect(recruiterDisclosure(null)).not.toMatch(/\d/);
   });
 
   it('no loading.tsx under /join (it would turn notFound() into a 200)', () => {

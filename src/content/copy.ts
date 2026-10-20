@@ -117,11 +117,11 @@ export const getListed = {
       body: 'It applies only to clients we send you, for a fixed term from their first payment. After that, 0%.',
     },
     {
-      title: 'Refer a colleague, earn a share',
-      body: 'Send a client to another practitioner and earn a share of their sessions for the same term.',
+      title: 'A network that refers to each other',
+      body: 'Send clients to colleagues whose work fits, and invite the practitioners you trust to join you.',
     },
   ],
-  ratesNote: 'Exact rates are shown before you choose a plan.',
+  ratesNote: 'You’ll see exactly what applies before anything is charged.',
   cta: 'Get listed',
   secondary: 'Already listed? Sign in',
 } as const;
